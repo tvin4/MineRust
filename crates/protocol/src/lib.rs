@@ -12,6 +12,7 @@
 
 mod codec;
 mod frame;
+mod nbt;
 mod packets;
 mod status;
 
@@ -22,5 +23,6 @@ pub use codec::{
 pub use frame::{
     check_frame_len, decode_frame, decode_frame_len, encode_frame, split_frame, MAX_FRAME_LEN,
 };
+pub use nbt::{NbtError, NbtTag, MAX_NBT_DEPTH};
 pub use packets::{Handshake, NextState, PingRequest, PongResponse, StatusRequest, StatusResponse};
 pub use status::StatusInfo;
