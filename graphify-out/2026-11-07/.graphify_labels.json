@@ -7,6 +7,10 @@
   "5": "CodecError",
   "6": "PacketWriter",
   "7": "handshake.rs",
-  "8": ".new",
-  "9": ".to_json"
+  "8": "config.rs",
+  "9": ".to_json",
+  "10": "status.rs",
+  "11": "MineRust",
+  "12": "main.rs",
+  "13": "PROGRESS.md — прогресс проекта"
 }

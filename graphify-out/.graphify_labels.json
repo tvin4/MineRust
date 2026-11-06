@@ -7,5 +7,8 @@
   "5": "CodecError",
   "6": "PacketWriter",
   "7": "handshake.rs",
-  "9": ".to_json"
+  "8": "config.rs",
+  "9": ".to_json",
+  "10": "status.rs",
+  "12": "main.rs"
 }
