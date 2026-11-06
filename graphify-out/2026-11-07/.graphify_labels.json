@@ -3,5 +3,7 @@
   "1": "AGENTS.md — правила для ИИ-агента (opencode)",
   "2": "PROGRESS.md — прогресс проекта",
   "3": "MineRust",
-  "4": "lib.rs"
+  "4": "lib.rs",
+  "5": "CodecError",
+  "6": "PacketWriter"
 }

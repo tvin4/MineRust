@@ -1,0 +1,13 @@
+//! Tokio networking layer: accepts TCP connections and drives the
+//! handshake → status state machine used by the server list ping.
+//!
+//! The crate is transport-only: the contents of the status response are
+//! decided by the caller (see the `server` crate).
+
+mod connection;
+mod error;
+mod frame;
+
+pub use connection::serve;
+pub use error::ConnectionError;
+pub use frame::{read_frame, write_frame};

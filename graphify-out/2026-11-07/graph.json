@@ -4,6 +4,589 @@
   "graph": {},
   "nodes": [
     {
+      "label": "codec.rs",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L1",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec",
+      "community": 3,
+      "community_name": "MineRust",
+      "norm_label": "codec.rs"
+    },
+    {
+      "label": "CodecError",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L17",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_codecerror",
+      "community": 5,
+      "community_name": "CodecError",
+      "norm_label": "codecerror"
+    },
+    {
+      "label": "Utf8Error",
+      "file_type": "code",
+      "source_file": "",
+      "source_location": "",
+      "_origin": "ast",
+      "id": "utf8error",
+      "community": 5,
+      "community_name": "CodecError",
+      "norm_label": "utf8error"
+    },
+    {
+      "label": "encode_varint()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L77",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_encode_varint",
+      "community": 6,
+      "community_name": "PacketWriter",
+      "norm_label": "encode_varint()"
+    },
+    {
+      "label": "Vec",
+      "file_type": "code",
+      "source_file": "",
+      "source_location": "",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_rs_vec",
+      "community": 6,
+      "community_name": "PacketWriter",
+      "norm_label": "vec"
+    },
+    {
+      "label": "decode_varint()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L96",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_decode_varint",
+      "community": 3,
+      "community_name": "MineRust",
+      "norm_label": "decode_varint()"
+    },
+    {
+      "label": "Result",
+      "file_type": "code",
+      "source_file": "",
+      "source_location": "",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_rs_result",
+      "community": 5,
+      "community_name": "CodecError",
+      "norm_label": "result"
+    },
+    {
+      "label": "PacketReader",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L113",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_packetreader",
+      "community": 4,
+      "community_name": "lib.rs",
+      "norm_label": "packetreader"
+    },
+    {
+      "label": "PacketReader<'a>",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L118",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_packetreader_a",
+      "community": 5,
+      "community_name": "CodecError",
+      "norm_label": "packetreader<'a>"
+    },
+    {
+      "label": ".new()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L120",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_packetreader_a_new",
+      "community": 3,
+      "community_name": "MineRust",
+      "norm_label": ".new()"
+    },
+    {
+      "label": "Self",
+      "file_type": "code",
+      "source_file": "",
+      "source_location": "",
+      "_origin": "ast",
+      "id": "self",
+      "community": 3,
+      "community_name": "MineRust",
+      "norm_label": "self"
+    },
+    {
+      "label": ".remaining()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L125",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_packetreader_a_remaining",
+      "community": 5,
+      "community_name": "CodecError",
+      "norm_label": ".remaining()"
+    },
+    {
+      "label": ".is_empty()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L130",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_packetreader_a_is_empty",
+      "community": 5,
+      "community_name": "CodecError",
+      "norm_label": ".is_empty()"
+    },
+    {
+      "label": ".ensure_empty()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L135",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_packetreader_a_ensure_empty",
+      "community": 5,
+      "community_name": "CodecError",
+      "norm_label": ".ensure_empty()"
+    },
+    {
+      "label": ".read_varint()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L146",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_packetreader_a_read_varint",
+      "community": 5,
+      "community_name": "CodecError",
+      "norm_label": ".read_varint()"
+    },
+    {
+      "label": ".read_string()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L153",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_packetreader_a_read_string",
+      "community": 5,
+      "community_name": "CodecError",
+      "norm_label": ".read_string()"
+    },
+    {
+      "label": "String",
+      "file_type": "code",
+      "source_file": "",
+      "source_location": "",
+      "_origin": "ast",
+      "id": "string",
+      "community": 5,
+      "community_name": "CodecError",
+      "norm_label": "string"
+    },
+    {
+      "label": ".read_u16()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L178",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_packetreader_a_read_u16",
+      "community": 5,
+      "community_name": "CodecError",
+      "norm_label": ".read_u16()"
+    },
+    {
+      "label": ".read_i64()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L184",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_packetreader_a_read_i64",
+      "community": 5,
+      "community_name": "CodecError",
+      "norm_label": ".read_i64()"
+    },
+    {
+      "label": ".read_array()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L190",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_packetreader_a_read_array",
+      "community": 5,
+      "community_name": "CodecError",
+      "norm_label": ".read_array()"
+    },
+    {
+      "label": "PacketWriter",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L208",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_packetwriter",
+      "community": 6,
+      "community_name": "PacketWriter",
+      "norm_label": "packetwriter"
+    },
+    {
+      "label": ".new()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L214",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_packetwriter_new",
+      "community": 3,
+      "community_name": "MineRust",
+      "norm_label": ".new()"
+    },
+    {
+      "label": ".write_varint()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L219",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_packetwriter_write_varint",
+      "community": 6,
+      "community_name": "PacketWriter",
+      "norm_label": ".write_varint()"
+    },
+    {
+      "label": ".write_string()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L228",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_packetwriter_write_string",
+      "community": 6,
+      "community_name": "PacketWriter",
+      "norm_label": ".write_string()"
+    },
+    {
+      "label": ".write_u16()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L242",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_packetwriter_write_u16",
+      "community": 6,
+      "community_name": "PacketWriter",
+      "norm_label": ".write_u16()"
+    },
+    {
+      "label": ".write_i64()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L247",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_packetwriter_write_i64",
+      "community": 6,
+      "community_name": "PacketWriter",
+      "norm_label": ".write_i64()"
+    },
+    {
+      "label": ".as_bytes()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L252",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_packetwriter_as_bytes",
+      "community": 6,
+      "community_name": "PacketWriter",
+      "norm_label": ".as_bytes()"
+    },
+    {
+      "label": ".into_bytes()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L257",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_packetwriter_into_bytes",
+      "community": 6,
+      "community_name": "PacketWriter",
+      "norm_label": ".into_bytes()"
+    },
+    {
+      "label": "varint_matches_documented_encodings()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L282",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_varint_matches_documented_encodings",
+      "community": 3,
+      "community_name": "MineRust",
+      "norm_label": "varint_matches_documented_encodings()"
+    },
+    {
+      "label": "varint_roundtrips_across_the_range()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L295",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_varint_roundtrips_across_the_range",
+      "community": 3,
+      "community_name": "MineRust",
+      "norm_label": "varint_roundtrips_across_the_range()"
+    },
+    {
+      "label": "varint_rejects_truncated_input()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L321",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_varint_rejects_truncated_input",
+      "community": 3,
+      "community_name": "MineRust",
+      "norm_label": "varint_rejects_truncated_input()"
+    },
+    {
+      "label": "varint_rejects_overlong_input()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L327",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_varint_rejects_overlong_input",
+      "community": 3,
+      "community_name": "MineRust",
+      "norm_label": "varint_rejects_overlong_input()"
+    },
+    {
+      "label": "varint_accepts_non_canonical_encoding()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L333",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_varint_accepts_non_canonical_encoding",
+      "community": 3,
+      "community_name": "MineRust",
+      "norm_label": "varint_accepts_non_canonical_encoding()"
+    },
+    {
+      "label": "string_roundtrips_unicode()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L341",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_string_roundtrips_unicode",
+      "community": 6,
+      "community_name": "PacketWriter",
+      "norm_label": "string_roundtrips_unicode()"
+    },
+    {
+      "label": "string_length_counts_utf16_code_units()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L355",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_string_length_counts_utf16_code_units",
+      "community": 3,
+      "community_name": "MineRust",
+      "norm_label": "string_length_counts_utf16_code_units()"
+    },
+    {
+      "label": "string_rejects_invalid_utf8()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L369",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_string_rejects_invalid_utf8",
+      "community": 3,
+      "community_name": "MineRust",
+      "norm_label": "string_rejects_invalid_utf8()"
+    },
+    {
+      "label": "reader_rejects_negative_length_prefix()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L378",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_reader_rejects_negative_length_prefix",
+      "community": 3,
+      "community_name": "MineRust",
+      "norm_label": "reader_rejects_negative_length_prefix()"
+    },
+    {
+      "label": "fixed_width_integers_are_big_endian()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L387",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_fixed_width_integers_are_big_endian",
+      "community": 6,
+      "community_name": "PacketWriter",
+      "norm_label": "fixed_width_integers_are_big_endian()"
+    },
+    {
+      "label": "reader_reports_trailing_bytes()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L403",
+      "_origin": "ast",
+      "id": "crates_protocol_src_codec_reader_reports_trailing_bytes",
+      "community": 3,
+      "community_name": "MineRust",
+      "norm_label": "reader_reports_trailing_bytes()"
+    },
+    {
+      "label": "frame.rs",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L1",
+      "_origin": "ast",
+      "id": "crates_protocol_src_frame",
+      "community": 4,
+      "community_name": "lib.rs",
+      "norm_label": "frame.rs"
+    },
+    {
+      "label": "encode_frame()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L18",
+      "_origin": "ast",
+      "id": "crates_protocol_src_frame_encode_frame",
+      "community": 4,
+      "community_name": "lib.rs",
+      "norm_label": "encode_frame()"
+    },
+    {
+      "label": "Result",
+      "file_type": "code",
+      "source_file": "",
+      "source_location": "",
+      "_origin": "ast",
+      "id": "crates_protocol_src_frame_rs_result",
+      "community": 4,
+      "community_name": "lib.rs",
+      "norm_label": "result"
+    },
+    {
+      "label": "Vec",
+      "file_type": "code",
+      "source_file": "",
+      "source_location": "",
+      "_origin": "ast",
+      "id": "crates_protocol_src_frame_rs_vec",
+      "community": 4,
+      "community_name": "lib.rs",
+      "norm_label": "vec"
+    },
+    {
+      "label": "decode_frame()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L47",
+      "_origin": "ast",
+      "id": "crates_protocol_src_frame_decode_frame",
+      "community": 4,
+      "community_name": "lib.rs",
+      "norm_label": "decode_frame()"
+    },
+    {
+      "label": "check_frame_len()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L58",
+      "_origin": "ast",
+      "id": "crates_protocol_src_frame_check_frame_len",
+      "community": 4,
+      "community_name": "lib.rs",
+      "norm_label": "check_frame_len()"
+    },
+    {
+      "label": "decode_frame_len()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L70",
+      "_origin": "ast",
+      "id": "crates_protocol_src_frame_decode_frame_len",
+      "community": 4,
+      "community_name": "lib.rs",
+      "norm_label": "decode_frame_len()"
+    },
+    {
+      "label": "frame_roundtrip()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L80",
+      "_origin": "ast",
+      "id": "crates_protocol_src_frame_frame_roundtrip",
+      "community": 4,
+      "community_name": "lib.rs",
+      "norm_label": "frame_roundtrip()"
+    },
+    {
+      "label": "empty_payload_frame()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L94",
+      "_origin": "ast",
+      "id": "crates_protocol_src_frame_empty_payload_frame",
+      "community": 4,
+      "community_name": "lib.rs",
+      "norm_label": "empty_payload_frame()"
+    },
+    {
+      "label": "oversized_frame_is_rejected()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L103",
+      "_origin": "ast",
+      "id": "crates_protocol_src_frame_oversized_frame_is_rejected",
+      "community": 4,
+      "community_name": "lib.rs",
+      "norm_label": "oversized_frame_is_rejected()"
+    },
+    {
+      "label": "length_field_over_three_bytes_is_rejected()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L116",
+      "_origin": "ast",
+      "id": "crates_protocol_src_frame_length_field_over_three_bytes_is_rejected",
+      "community": 4,
+      "community_name": "lib.rs",
+      "norm_label": "length_field_over_three_bytes_is_rejected()"
+    },
+    {
+      "label": "negative_frame_length_is_rejected()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L122",
+      "_origin": "ast",
+      "id": "crates_protocol_src_frame_negative_frame_length_is_rejected",
+      "community": 4,
+      "community_name": "lib.rs",
+      "norm_label": "negative_frame_length_is_rejected()"
+    },
+    {
+      "label": "maximum_frame_length_is_accepted()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L128",
+      "_origin": "ast",
+      "id": "crates_protocol_src_frame_maximum_frame_length_is_accepted",
+      "community": 4,
+      "community_name": "lib.rs",
+      "norm_label": "maximum_frame_length_is_accepted()"
+    },
+    {
+      "label": "negative_packet_id_is_rejected()",
+      "file_type": "code",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L134",
+      "_origin": "ast",
+      "id": "crates_protocol_src_frame_negative_packet_id_is_rejected",
+      "community": 4,
+      "community_name": "lib.rs",
+      "norm_label": "negative_packet_id_is_rejected()"
+    },
+    {
       "label": "lib.rs",
       "file_type": "code",
       "source_file": "crates/protocol/src/lib.rs",
@@ -20,10 +603,10 @@
       "source_file": "AGENTS.md",
       "source_location": "L1",
       "_origin": "ast",
-      "id": "agents",
       "community": 1,
       "community_name": "AGENTS.md \u2014 \u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0434\u043b\u044f \u0418\u0418-\u0430\u0433\u0435\u043d\u0442\u0430 (opencode)",
-      "norm_label": "agents.md"
+      "norm_label": "agents.md",
+      "id": "agents"
     },
     {
       "label": "AGENTS.md \u2014 \u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0434\u043b\u044f \u0418\u0418-\u0430\u0433\u0435\u043d\u0442\u0430 (opencode)",
@@ -31,10 +614,10 @@
       "source_file": "AGENTS.md",
       "source_location": "L1",
       "_origin": "ast",
-      "id": "agents_agents_md_\u043f\u0440\u0430\u0432\u0438\u043b\u0430_\u0434\u043b\u044f_\u0438\u0438_\u0430\u0433\u0435\u043d\u0442\u0430_opencode",
       "community": 1,
       "community_name": "AGENTS.md \u2014 \u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0434\u043b\u044f \u0418\u0418-\u0430\u0433\u0435\u043d\u0442\u0430 (opencode)",
-      "norm_label": "agents.md \u2014 \u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0434\u043b\u044f \u0438\u0438-\u0430\u0433\u0435\u043d\u0442\u0430 (opencode)"
+      "norm_label": "agents.md \u2014 \u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0434\u043b\u044f \u0438\u0438-\u0430\u0433\u0435\u043d\u0442\u0430 (opencode)",
+      "id": "agents_agents_md_\u043f\u0440\u0430\u0432\u0438\u043b\u0430_\u0434\u043b\u044f_\u0438\u0438_\u0430\u0433\u0435\u043d\u0442\u0430_opencode"
     },
     {
       "label": "\u0413\u043b\u0430\u0432\u043d\u044b\u0435 \u043f\u0440\u0430\u0432\u0438\u043b\u0430",
@@ -42,10 +625,10 @@
       "source_file": "AGENTS.md",
       "source_location": "L6",
       "_origin": "ast",
-      "id": "agents_\u0433\u043b\u0430\u0432\u043d\u044b\u0435_\u043f\u0440\u0430\u0432\u0438\u043b\u0430",
       "community": 1,
       "community_name": "AGENTS.md \u2014 \u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0434\u043b\u044f \u0418\u0418-\u0430\u0433\u0435\u043d\u0442\u0430 (opencode)",
-      "norm_label": "\u0433\u043b\u0430\u0432\u043d\u044b\u0435 \u043f\u0440\u0430\u0432\u0438\u043b\u0430"
+      "norm_label": "\u0433\u043b\u0430\u0432\u043d\u044b\u0435 \u043f\u0440\u0430\u0432\u0438\u043b\u0430",
+      "id": "agents_\u0433\u043b\u0430\u0432\u043d\u044b\u0435_\u043f\u0440\u0430\u0432\u0438\u043b\u0430"
     },
     {
       "label": "\u042e\u0440\u0438\u0434\u0438\u0447\u0435\u0441\u043a\u0438\u0435 \u0433\u0440\u0430\u043d\u0438\u0446\u044b (\u0441\u0442\u0440\u043e\u0433\u043e)",
@@ -53,10 +636,10 @@
       "source_file": "AGENTS.md",
       "source_location": "L14",
       "_origin": "ast",
-      "id": "agents_\u044e\u0440\u0438\u0434\u0438\u0447\u0435\u0441\u043a\u0438\u0435_\u0433\u0440\u0430\u043d\u0438\u0446\u044b_\u0441\u0442\u0440\u043e\u0433\u043e",
       "community": 1,
       "community_name": "AGENTS.md \u2014 \u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0434\u043b\u044f \u0418\u0418-\u0430\u0433\u0435\u043d\u0442\u0430 (opencode)",
-      "norm_label": "\u044e\u0440\u0438\u0434\u0438\u0447\u0435\u0441\u043a\u0438\u0435 \u0433\u0440\u0430\u043d\u0438\u0446\u044b (\u0441\u0442\u0440\u043e\u0433\u043e)"
+      "norm_label": "\u044e\u0440\u0438\u0434\u0438\u0447\u0435\u0441\u043a\u0438\u0435 \u0433\u0440\u0430\u043d\u0438\u0446\u044b (\u0441\u0442\u0440\u043e\u0433\u043e)",
+      "id": "agents_\u044e\u0440\u0438\u0434\u0438\u0447\u0435\u0441\u043a\u0438\u0435_\u0433\u0440\u0430\u043d\u0438\u0446\u044b_\u0441\u0442\u0440\u043e\u0433\u043e"
     },
     {
       "label": "\u0421\u0442\u0438\u043b\u044c \u043a\u043e\u0434\u0430",
@@ -64,10 +647,10 @@
       "source_file": "AGENTS.md",
       "source_location": "L20",
       "_origin": "ast",
-      "id": "agents_\u0441\u0442\u0438\u043b\u044c_\u043a\u043e\u0434\u0430",
       "community": 1,
       "community_name": "AGENTS.md \u2014 \u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0434\u043b\u044f \u0418\u0418-\u0430\u0433\u0435\u043d\u0442\u0430 (opencode)",
-      "norm_label": "\u0441\u0442\u0438\u043b\u044c \u043a\u043e\u0434\u0430"
+      "norm_label": "\u0441\u0442\u0438\u043b\u044c \u043a\u043e\u0434\u0430",
+      "id": "agents_\u0441\u0442\u0438\u043b\u044c_\u043a\u043e\u0434\u0430"
     },
     {
       "label": "\u041a\u0430\u043a \u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c\u0441\u044f \u0432 \u043f\u0440\u043e\u0435\u043a\u0442\u0435 (graphify)",
@@ -75,10 +658,10 @@
       "source_file": "AGENTS.md",
       "source_location": "L29",
       "_origin": "ast",
-      "id": "agents_\u043a\u0430\u043a_\u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c\u0441\u044f_\u0432_\u043f\u0440\u043e\u0435\u043a\u0442\u0435_graphify",
       "community": 1,
       "community_name": "AGENTS.md \u2014 \u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0434\u043b\u044f \u0418\u0418-\u0430\u0433\u0435\u043d\u0442\u0430 (opencode)",
-      "norm_label": "\u043a\u0430\u043a \u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c\u0441\u044f \u0432 \u043f\u0440\u043e\u0435\u043a\u0442\u0435 (graphify)"
+      "norm_label": "\u043a\u0430\u043a \u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c\u0441\u044f \u0432 \u043f\u0440\u043e\u0435\u043a\u0442\u0435 (graphify)",
+      "id": "agents_\u043a\u0430\u043a_\u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c\u0441\u044f_\u0432_\u043f\u0440\u043e\u0435\u043a\u0442\u0435_graphify"
     },
     {
       "label": "\u0422\u0435\u0441\u0442\u044b",
@@ -86,10 +669,10 @@
       "source_file": "AGENTS.md",
       "source_location": "L34",
       "_origin": "ast",
-      "id": "agents_\u0442\u0435\u0441\u0442\u044b",
       "community": 1,
       "community_name": "AGENTS.md \u2014 \u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0434\u043b\u044f \u0418\u0418-\u0430\u0433\u0435\u043d\u0442\u0430 (opencode)",
-      "norm_label": "\u0442\u0435\u0441\u0442\u044b"
+      "norm_label": "\u0442\u0435\u0441\u0442\u044b",
+      "id": "agents_\u0442\u0435\u0441\u0442\u044b"
     },
     {
       "label": "\u0415\u0441\u043b\u0438 \u0437\u0430\u0441\u0442\u0440\u044f\u043b",
@@ -97,10 +680,10 @@
       "source_file": "AGENTS.md",
       "source_location": "L40",
       "_origin": "ast",
-      "id": "agents_\u0435\u0441\u043b\u0438_\u0437\u0430\u0441\u0442\u0440\u044f\u043b",
       "community": 1,
       "community_name": "AGENTS.md \u2014 \u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0434\u043b\u044f \u0418\u0418-\u0430\u0433\u0435\u043d\u0442\u0430 (opencode)",
-      "norm_label": "\u0435\u0441\u043b\u0438 \u0437\u0430\u0441\u0442\u0440\u044f\u043b"
+      "norm_label": "\u0435\u0441\u043b\u0438 \u0437\u0430\u0441\u0442\u0440\u044f\u043b",
+      "id": "agents_\u0435\u0441\u043b\u0438_\u0437\u0430\u0441\u0442\u0440\u044f\u043b"
     },
     {
       "label": "ARCHITECTURE.md",
@@ -108,10 +691,10 @@
       "source_file": "ARCHITECTURE.md",
       "source_location": "L1",
       "_origin": "ast",
-      "id": "architecture",
       "community": 2,
       "community_name": "PROGRESS.md \u2014 \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u043f\u0440\u043e\u0435\u043a\u0442\u0430",
-      "norm_label": "architecture.md"
+      "norm_label": "architecture.md",
+      "id": "architecture"
     },
     {
       "label": "ARCHITECTURE.md \u2014 \u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439 Minecraft \u043d\u0430 Rust",
@@ -119,10 +702,10 @@
       "source_file": "ARCHITECTURE.md",
       "source_location": "L1",
       "_origin": "ast",
-      "id": "architecture_architecture_md_\u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439_minecraft_\u043d\u0430_rust",
       "community": 0,
       "community_name": "ARCHITECTURE.md \u2014 \u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439 Minecraft \u043d\u0430 Rust",
-      "norm_label": "architecture.md \u2014 \u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0438 minecraft \u043d\u0430 rust"
+      "norm_label": "architecture.md \u2014 \u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0438 minecraft \u043d\u0430 rust",
+      "id": "architecture_architecture_md_\u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439_minecraft_\u043d\u0430_rust"
     },
     {
       "label": "1. \u0426\u0435\u043b\u044c",
@@ -130,10 +713,10 @@
       "source_file": "ARCHITECTURE.md",
       "source_location": "L3",
       "_origin": "ast",
-      "id": "architecture_1_\u0446\u0435\u043b\u044c",
       "community": 0,
       "community_name": "ARCHITECTURE.md \u2014 \u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439 Minecraft \u043d\u0430 Rust",
-      "norm_label": "1. \u0446\u0435\u043b\u044c"
+      "norm_label": "1. \u0446\u0435\u043b\u044c",
+      "id": "architecture_1_\u0446\u0435\u043b\u044c"
     },
     {
       "label": "2. \u041f\u0440\u0438\u043d\u0446\u0438\u043f\u044b",
@@ -141,10 +724,10 @@
       "source_file": "ARCHITECTURE.md",
       "source_location": "L13",
       "_origin": "ast",
-      "id": "architecture_2_\u043f\u0440\u0438\u043d\u0446\u0438\u043f\u044b",
       "community": 0,
       "community_name": "ARCHITECTURE.md \u2014 \u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439 Minecraft \u043d\u0430 Rust",
-      "norm_label": "2. \u043f\u0440\u0438\u043d\u0446\u0438\u043f\u044b"
+      "norm_label": "2. \u043f\u0440\u0438\u043d\u0446\u0438\u043f\u044b",
+      "id": "architecture_2_\u043f\u0440\u0438\u043d\u0446\u0438\u043f\u044b"
     },
     {
       "label": "3. \u0421\u0442\u0440\u0443\u043a\u0442\u0443\u0440\u0430 workspace",
@@ -152,10 +735,10 @@
       "source_file": "ARCHITECTURE.md",
       "source_location": "L20",
       "_origin": "ast",
-      "id": "architecture_3_\u0441\u0442\u0440\u0443\u043a\u0442\u0443\u0440\u0430_workspace",
       "community": 0,
       "community_name": "ARCHITECTURE.md \u2014 \u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439 Minecraft \u043d\u0430 Rust",
-      "norm_label": "3. \u0441\u0442\u0440\u0443\u043a\u0442\u0443\u0440\u0430 workspace"
+      "norm_label": "3. \u0441\u0442\u0440\u0443\u043a\u0442\u0443\u0440\u0430 workspace",
+      "id": "architecture_3_\u0441\u0442\u0440\u0443\u043a\u0442\u0443\u0440\u0430_workspace"
     },
     {
       "label": "4. \u041c\u043e\u0434\u0435\u043b\u044c \u043f\u043e\u0442\u043e\u043a\u043e\u0432 (\u044f\u0434\u0440\u043e \u043f\u0440\u043e\u0435\u043a\u0442\u0430)",
@@ -163,10 +746,10 @@
       "source_file": "ARCHITECTURE.md",
       "source_location": "L38",
       "_origin": "ast",
-      "id": "architecture_4_\u043c\u043e\u0434\u0435\u043b\u044c_\u043f\u043e\u0442\u043e\u043a\u043e\u0432_\u044f\u0434\u0440\u043e_\u043f\u0440\u043e\u0435\u043a\u0442\u0430",
       "community": 0,
       "community_name": "ARCHITECTURE.md \u2014 \u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439 Minecraft \u043d\u0430 Rust",
-      "norm_label": "4. \u043c\u043e\u0434\u0435\u043b\u044c \u043f\u043e\u0442\u043e\u043a\u043e\u0432 (\u044f\u0434\u0440\u043e \u043f\u0440\u043e\u0435\u043a\u0442\u0430)"
+      "norm_label": "4. \u043c\u043e\u0434\u0435\u043b\u044c \u043f\u043e\u0442\u043e\u043a\u043e\u0432 (\u044f\u0434\u0440\u043e \u043f\u0440\u043e\u0435\u043a\u0442\u0430)",
+      "id": "architecture_4_\u043c\u043e\u0434\u0435\u043b\u044c_\u043f\u043e\u0442\u043e\u043a\u043e\u0432_\u044f\u0434\u0440\u043e_\u043f\u0440\u043e\u0435\u043a\u0442\u0430"
     },
     {
       "label": "5. \u0414\u0430\u043d\u043d\u044b\u0435 \u0438 \u0441\u043e\u0432\u043c\u0435\u0441\u0442\u0438\u043c\u043e\u0441\u0442\u044c",
@@ -174,10 +757,10 @@
       "source_file": "ARCHITECTURE.md",
       "source_location": "L46",
       "_origin": "ast",
-      "id": "architecture_5_\u0434\u0430\u043d\u043d\u044b\u0435_\u0438_\u0441\u043e\u0432\u043c\u0435\u0441\u0442\u0438\u043c\u043e\u0441\u0442\u044c",
       "community": 0,
       "community_name": "ARCHITECTURE.md \u2014 \u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439 Minecraft \u043d\u0430 Rust",
-      "norm_label": "5. \u0434\u0430\u043d\u043d\u044b\u0435 \u0438 \u0441\u043e\u0432\u043c\u0435\u0441\u0442\u0438\u043c\u043e\u0441\u0442\u044c"
+      "norm_label": "5. \u0434\u0430\u043d\u043d\u044b\u0435 \u0438 \u0441\u043e\u0432\u043c\u0435\u0441\u0442\u0438\u043c\u043e\u0441\u0442\u044c",
+      "id": "architecture_5_\u0434\u0430\u043d\u043d\u044b\u0435_\u0438_\u0441\u043e\u0432\u043c\u0435\u0441\u0442\u0438\u043c\u043e\u0441\u0442\u044c"
     },
     {
       "label": "6. \u041a\u043b\u0438\u0435\u043d\u0442 (\u043f\u043e\u0441\u043b\u0435 \u0441\u0435\u0440\u0432\u0435\u0440\u0430)",
@@ -185,10 +768,10 @@
       "source_file": "ARCHITECTURE.md",
       "source_location": "L52",
       "_origin": "ast",
-      "id": "architecture_6_\u043a\u043b\u0438\u0435\u043d\u0442_\u043f\u043e\u0441\u043b\u0435_\u0441\u0435\u0440\u0432\u0435\u0440\u0430",
       "community": 0,
       "community_name": "ARCHITECTURE.md \u2014 \u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439 Minecraft \u043d\u0430 Rust",
-      "norm_label": "6. \u043a\u043b\u0438\u0435\u043d\u0442 (\u043f\u043e\u0441\u043b\u0435 \u0441\u0435\u0440\u0432\u0435\u0440\u0430)"
+      "norm_label": "6. \u043a\u043b\u0438\u0435\u043d\u0442 (\u043f\u043e\u0441\u043b\u0435 \u0441\u0435\u0440\u0432\u0435\u0440\u0430)",
+      "id": "architecture_6_\u043a\u043b\u0438\u0435\u043d\u0442_\u043f\u043e\u0441\u043b\u0435_\u0441\u0435\u0440\u0432\u0435\u0440\u0430"
     },
     {
       "label": "7. \u041b\u0430\u0443\u043d\u0447\u0435\u0440",
@@ -196,10 +779,10 @@
       "source_file": "ARCHITECTURE.md",
       "source_location": "L55",
       "_origin": "ast",
-      "id": "architecture_7_\u043b\u0430\u0443\u043d\u0447\u0435\u0440",
       "community": 0,
       "community_name": "ARCHITECTURE.md \u2014 \u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439 Minecraft \u043d\u0430 Rust",
-      "norm_label": "7. \u043b\u0430\u0443\u043d\u0447\u0435\u0440"
+      "norm_label": "7. \u043b\u0430\u0443\u043d\u0447\u0435\u0440",
+      "id": "architecture_7_\u043b\u0430\u0443\u043d\u0447\u0435\u0440"
     },
     {
       "label": "8. \u042d\u0442\u0430\u043f\u044b (milestones)",
@@ -207,10 +790,10 @@
       "source_file": "ARCHITECTURE.md",
       "source_location": "L62",
       "_origin": "ast",
-      "id": "architecture_8_\u044d\u0442\u0430\u043f\u044b_milestones",
       "community": 0,
       "community_name": "ARCHITECTURE.md \u2014 \u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439 Minecraft \u043d\u0430 Rust",
-      "norm_label": "8. \u044d\u0442\u0430\u043f\u044b (milestones)"
+      "norm_label": "8. \u044d\u0442\u0430\u043f\u044b (milestones)",
+      "id": "architecture_8_\u044d\u0442\u0430\u043f\u044b_milestones"
     },
     {
       "label": "9. \u0411\u0435\u043d\u0447\u043c\u0430\u0440\u043a\u0438 \u0432 CI",
@@ -218,10 +801,10 @@
       "source_file": "ARCHITECTURE.md",
       "source_location": "L81",
       "_origin": "ast",
-      "id": "architecture_9_\u0431\u0435\u043d\u0447\u043c\u0430\u0440\u043a\u0438_\u0432_ci",
       "community": 0,
       "community_name": "ARCHITECTURE.md \u2014 \u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439 Minecraft \u043d\u0430 Rust",
-      "norm_label": "9. \u0431\u0435\u043d\u0447\u043c\u0430\u0440\u043a\u0438 \u0432 ci"
+      "norm_label": "9. \u0431\u0435\u043d\u0447\u043c\u0430\u0440\u043a\u0438 \u0432 ci",
+      "id": "architecture_9_\u0431\u0435\u043d\u0447\u043c\u0430\u0440\u043a\u0438_\u0432_ci"
     },
     {
       "label": "10. \u0420\u0438\u0441\u043a\u0438",
@@ -229,10 +812,10 @@
       "source_file": "ARCHITECTURE.md",
       "source_location": "L84",
       "_origin": "ast",
-      "id": "architecture_10_\u0440\u0438\u0441\u043a\u0438",
       "community": 0,
       "community_name": "ARCHITECTURE.md \u2014 \u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439 Minecraft \u043d\u0430 Rust",
-      "norm_label": "10. \u0440\u0438\u0441\u043a\u0438"
+      "norm_label": "10. \u0440\u0438\u0441\u043a\u0438",
+      "id": "architecture_10_\u0440\u0438\u0441\u043a\u0438"
     },
     {
       "label": "README.md",
@@ -240,10 +823,10 @@
       "source_file": "README.md",
       "source_location": "L1",
       "_origin": "ast",
-      "id": "readme",
       "community": 2,
       "community_name": "PROGRESS.md \u2014 \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u043f\u0440\u043e\u0435\u043a\u0442\u0430",
-      "norm_label": "readme.md"
+      "norm_label": "readme.md",
+      "id": "readme"
     },
     {
       "label": "MineRust",
@@ -251,10 +834,10 @@
       "source_file": "README.md",
       "source_location": "L1",
       "_origin": "ast",
-      "id": "readme_minerust",
-      "community": 3,
-      "community_name": "MineRust",
-      "norm_label": "minerust"
+      "community": 2,
+      "community_name": "PROGRESS.md \u2014 \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u043f\u0440\u043e\u0435\u043a\u0442\u0430",
+      "norm_label": "minerust",
+      "id": "readme_minerust"
     },
     {
       "label": "Status",
@@ -262,10 +845,10 @@
       "source_file": "README.md",
       "source_location": "L11",
       "_origin": "ast",
-      "id": "readme_status",
-      "community": 3,
-      "community_name": "MineRust",
-      "norm_label": "status"
+      "community": 2,
+      "community_name": "PROGRESS.md \u2014 \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u043f\u0440\u043e\u0435\u043a\u0442\u0430",
+      "norm_label": "status",
+      "id": "readme_status"
     },
     {
       "label": "Goals",
@@ -273,10 +856,10 @@
       "source_file": "README.md",
       "source_location": "L17",
       "_origin": "ast",
-      "id": "readme_goals",
-      "community": 3,
-      "community_name": "MineRust",
-      "norm_label": "goals"
+      "community": 2,
+      "community_name": "PROGRESS.md \u2014 \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u043f\u0440\u043e\u0435\u043a\u0442\u0430",
+      "norm_label": "goals",
+      "id": "readme_goals"
     },
     {
       "label": "Layout",
@@ -284,10 +867,10 @@
       "source_file": "README.md",
       "source_location": "L23",
       "_origin": "ast",
-      "id": "readme_layout",
-      "community": 3,
-      "community_name": "MineRust",
-      "norm_label": "layout"
+      "community": 2,
+      "community_name": "PROGRESS.md \u2014 \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u043f\u0440\u043e\u0435\u043a\u0442\u0430",
+      "norm_label": "layout",
+      "id": "readme_layout"
     },
     {
       "label": "Building",
@@ -295,10 +878,10 @@
       "source_file": "README.md",
       "source_location": "L42",
       "_origin": "ast",
-      "id": "readme_building",
-      "community": 3,
-      "community_name": "MineRust",
-      "norm_label": "building"
+      "community": 2,
+      "community_name": "PROGRESS.md \u2014 \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u043f\u0440\u043e\u0435\u043a\u0442\u0430",
+      "norm_label": "building",
+      "id": "readme_building"
     },
     {
       "label": "Legal",
@@ -306,10 +889,10 @@
       "source_file": "README.md",
       "source_location": "L55",
       "_origin": "ast",
-      "id": "readme_legal",
-      "community": 3,
-      "community_name": "MineRust",
-      "norm_label": "legal"
+      "community": 2,
+      "community_name": "PROGRESS.md \u2014 \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u043f\u0440\u043e\u0435\u043a\u0442\u0430",
+      "norm_label": "legal",
+      "id": "readme_legal"
     },
     {
       "label": "License",
@@ -317,10 +900,10 @@
       "source_file": "README.md",
       "source_location": "L62",
       "_origin": "ast",
-      "id": "readme_license",
-      "community": 3,
-      "community_name": "MineRust",
-      "norm_label": "license"
+      "community": 2,
+      "community_name": "PROGRESS.md \u2014 \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u043f\u0440\u043e\u0435\u043a\u0442\u0430",
+      "norm_label": "license",
+      "id": "readme_license"
     },
     {
       "label": "PROGRESS.md",
@@ -328,10 +911,10 @@
       "source_file": "docs/PROGRESS.md",
       "source_location": "L1",
       "_origin": "ast",
-      "id": "docs_progress",
       "community": 2,
       "community_name": "PROGRESS.md \u2014 \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u043f\u0440\u043e\u0435\u043a\u0442\u0430",
-      "norm_label": "progress.md"
+      "norm_label": "progress.md",
+      "id": "docs_progress"
     },
     {
       "label": "PROGRESS.md \u2014 \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u043f\u0440\u043e\u0435\u043a\u0442\u0430",
@@ -339,10 +922,10 @@
       "source_file": "docs/PROGRESS.md",
       "source_location": "L1",
       "_origin": "ast",
-      "id": "docs_progress_progress_md_\u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441_\u043f\u0440\u043e\u0435\u043a\u0442\u0430",
       "community": 2,
       "community_name": "PROGRESS.md \u2014 \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u043f\u0440\u043e\u0435\u043a\u0442\u0430",
-      "norm_label": "progress.md \u2014 \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u043f\u0440\u043e\u0435\u043a\u0442\u0430"
+      "norm_label": "progress.md \u2014 \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u043f\u0440\u043e\u0435\u043a\u0442\u0430",
+      "id": "docs_progress_progress_md_\u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441_\u043f\u0440\u043e\u0435\u043a\u0442\u0430"
     },
     {
       "label": "\u0427\u0442\u043e \u0441\u0434\u0435\u043b\u0430\u043d\u043e",
@@ -350,10 +933,10 @@
       "source_file": "docs/PROGRESS.md",
       "source_location": "L8",
       "_origin": "ast",
-      "id": "docs_progress_\u0447\u0442\u043e_\u0441\u0434\u0435\u043b\u0430\u043d\u043e",
       "community": 2,
       "community_name": "PROGRESS.md \u2014 \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u043f\u0440\u043e\u0435\u043a\u0442\u0430",
-      "norm_label": "\u0447\u0442\u043e \u0441\u0434\u0435\u043b\u0430\u043d\u043e"
+      "norm_label": "\u0447\u0442\u043e \u0441\u0434\u0435\u043b\u0430\u043d\u043e",
+      "id": "docs_progress_\u0447\u0442\u043e_\u0441\u0434\u0435\u043b\u0430\u043d\u043e"
     },
     {
       "label": "M0 \u2014 \u041a\u0430\u0440\u043a\u0430\u0441",
@@ -361,10 +944,10 @@
       "source_file": "docs/PROGRESS.md",
       "source_location": "L10",
       "_origin": "ast",
-      "id": "docs_progress_m0_\u043a\u0430\u0440\u043a\u0430\u0441",
       "community": 2,
       "community_name": "PROGRESS.md \u2014 \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u043f\u0440\u043e\u0435\u043a\u0442\u0430",
-      "norm_label": "m0 \u2014 \u043a\u0430\u0440\u043a\u0430\u0441"
+      "norm_label": "m0 \u2014 \u043a\u0430\u0440\u043a\u0430\u0441",
+      "id": "docs_progress_m0_\u043a\u0430\u0440\u043a\u0430\u0441"
     },
     {
       "label": "\u0427\u0442\u043e \u0434\u0430\u043b\u044c\u0448\u0435",
@@ -372,10 +955,10 @@
       "source_file": "docs/PROGRESS.md",
       "source_location": "L27",
       "_origin": "ast",
-      "id": "docs_progress_\u0447\u0442\u043e_\u0434\u0430\u043b\u044c\u0448\u0435",
       "community": 2,
       "community_name": "PROGRESS.md \u2014 \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u043f\u0440\u043e\u0435\u043a\u0442\u0430",
-      "norm_label": "\u0447\u0442\u043e \u0434\u0430\u043b\u044c\u0448\u0435"
+      "norm_label": "\u0447\u0442\u043e \u0434\u0430\u043b\u044c\u0448\u0435",
+      "id": "docs_progress_\u0447\u0442\u043e_\u0434\u0430\u043b\u044c\u0448\u0435"
     },
     {
       "label": "\u0418\u0437\u0432\u0435\u0441\u0442\u043d\u044b\u0435 \u043f\u0440\u043e\u0431\u043b\u0435\u043c\u044b / \u0431\u043b\u043e\u043a\u0435\u0440\u044b",
@@ -383,13 +966,1482 @@
       "source_file": "docs/PROGRESS.md",
       "source_location": "L33",
       "_origin": "ast",
-      "id": "docs_progress_\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u044b\u0435_\u043f\u0440\u043e\u0431\u043b\u0435\u043c\u044b_\u0431\u043b\u043e\u043a\u0435\u0440\u044b",
       "community": 2,
       "community_name": "PROGRESS.md \u2014 \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u043f\u0440\u043e\u0435\u043a\u0442\u0430",
-      "norm_label": "\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u044b\u0435 \u043f\u0440\u043e\u0431\u043b\u0435\u043c\u044b / \u0431\u043b\u043e\u043a\u0435\u0440\u044b"
+      "norm_label": "\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u044b\u0435 \u043f\u0440\u043e\u0431\u043b\u0435\u043c\u044b / \u0431\u043b\u043e\u043a\u0435\u0440\u044b",
+      "id": "docs_progress_\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u044b\u0435_\u043f\u0440\u043e\u0431\u043b\u0435\u043c\u044b_\u0431\u043b\u043e\u043a\u0435\u0440\u044b"
     }
   ],
   "links": [
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L17",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec",
+      "target": "crates_protocol_src_codec_codecerror",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L96",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec",
+      "target": "crates_protocol_src_codec_decode_varint",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L77",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec",
+      "target": "crates_protocol_src_codec_encode_varint",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L387",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec",
+      "target": "crates_protocol_src_codec_fixed_width_integers_are_big_endian",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L113",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec",
+      "target": "crates_protocol_src_codec_packetreader",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L208",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec",
+      "target": "crates_protocol_src_codec_packetwriter",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L378",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec",
+      "target": "crates_protocol_src_codec_reader_rejects_negative_length_prefix",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L403",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec",
+      "target": "crates_protocol_src_codec_reader_reports_trailing_bytes",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L355",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec",
+      "target": "crates_protocol_src_codec_string_length_counts_utf16_code_units",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L369",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec",
+      "target": "crates_protocol_src_codec_string_rejects_invalid_utf8",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L341",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec",
+      "target": "crates_protocol_src_codec_string_roundtrips_unicode",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L333",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec",
+      "target": "crates_protocol_src_codec_varint_accepts_non_canonical_encoding",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L282",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec",
+      "target": "crates_protocol_src_codec_varint_matches_documented_encodings",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L327",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec",
+      "target": "crates_protocol_src_codec_varint_rejects_overlong_input",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L321",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec",
+      "target": "crates_protocol_src_codec_varint_rejects_truncated_input",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L295",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec",
+      "target": "crates_protocol_src_codec_varint_roundtrips_across_the_range",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "imports_from",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L6",
+      "weight": 1.0,
+      "context": "import",
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame",
+      "target": "crates_protocol_src_codec",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "imports_from",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/lib.rs",
+      "source_location": "L16",
+      "weight": 1.0,
+      "context": "import",
+      "_origin": "ast",
+      "source": "crates_protocol_src_lib",
+      "target": "crates_protocol_src_codec",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L38",
+      "weight": 1.0,
+      "context": "field",
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_codecerror",
+      "target": "utf8error",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L96",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_decode_varint",
+      "target": "crates_protocol_src_codec_codecerror",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L135",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a_ensure_empty",
+      "target": "crates_protocol_src_codec_codecerror",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L190",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a_read_array",
+      "target": "crates_protocol_src_codec_codecerror",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L184",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a_read_i64",
+      "target": "crates_protocol_src_codec_codecerror",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L153",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a_read_string",
+      "target": "crates_protocol_src_codec_codecerror",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L178",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a_read_u16",
+      "target": "crates_protocol_src_codec_codecerror",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L146",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a_read_varint",
+      "target": "crates_protocol_src_codec_codecerror",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L228",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetwriter_write_string",
+      "target": "crates_protocol_src_codec_codecerror",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L58",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame_check_frame_len",
+      "target": "crates_protocol_src_codec_codecerror",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L47",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame_decode_frame",
+      "target": "crates_protocol_src_codec_codecerror",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L70",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame_decode_frame_len",
+      "target": "crates_protocol_src_codec_codecerror",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L18",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame_encode_frame",
+      "target": "crates_protocol_src_codec_codecerror",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L77",
+      "weight": 1.0,
+      "context": "parameter_type",
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_encode_varint",
+      "target": "crates_protocol_src_codec_rs_vec",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L236",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetwriter_write_string",
+      "target": "crates_protocol_src_codec_encode_varint",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L220",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetwriter_write_varint",
+      "target": "crates_protocol_src_codec_encode_varint",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L285",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_varint_matches_documented_encodings",
+      "target": "crates_protocol_src_codec_encode_varint",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L313",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_varint_roundtrips_across_the_range",
+      "target": "crates_protocol_src_codec_encode_varint",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L22",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame_encode_frame",
+      "target": "crates_protocol_src_codec_encode_varint"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L209",
+      "weight": 1.0,
+      "context": "field",
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetwriter",
+      "target": "crates_protocol_src_codec_rs_vec",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L257",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetwriter_into_bytes",
+      "target": "crates_protocol_src_codec_rs_vec",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L96",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_decode_varint",
+      "target": "crates_protocol_src_codec_rs_result",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L147",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a_read_varint",
+      "target": "crates_protocol_src_codec_decode_varint",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L335",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_varint_accepts_non_canonical_encoding",
+      "target": "crates_protocol_src_codec_decode_varint",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L288",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_varint_matches_documented_encodings",
+      "target": "crates_protocol_src_codec_decode_varint",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L328",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_varint_rejects_overlong_input",
+      "target": "crates_protocol_src_codec_decode_varint",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L322",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_varint_rejects_truncated_input",
+      "target": "crates_protocol_src_codec_decode_varint",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L314",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_varint_roundtrips_across_the_range",
+      "target": "crates_protocol_src_codec_decode_varint",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L71",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame_decode_frame_len",
+      "target": "crates_protocol_src_codec_decode_varint"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L135",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a_ensure_empty",
+      "target": "crates_protocol_src_codec_rs_result",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L190",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a_read_array",
+      "target": "crates_protocol_src_codec_rs_result",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L184",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a_read_i64",
+      "target": "crates_protocol_src_codec_rs_result",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L153",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a_read_string",
+      "target": "crates_protocol_src_codec_rs_result",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L178",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a_read_u16",
+      "target": "crates_protocol_src_codec_rs_result",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L146",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a_read_varint",
+      "target": "crates_protocol_src_codec_rs_result",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L228",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetwriter_write_string",
+      "target": "crates_protocol_src_codec_rs_result",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L47",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame_decode_frame",
+      "target": "crates_protocol_src_codec_packetreader",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L135",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a",
+      "target": "crates_protocol_src_codec_packetreader_a_ensure_empty",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L130",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a",
+      "target": "crates_protocol_src_codec_packetreader_a_is_empty",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L120",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a",
+      "target": "crates_protocol_src_codec_packetreader_a_new",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L190",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a",
+      "target": "crates_protocol_src_codec_packetreader_a_read_array",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L184",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a",
+      "target": "crates_protocol_src_codec_packetreader_a_read_i64",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L153",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a",
+      "target": "crates_protocol_src_codec_packetreader_a_read_string",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L178",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a",
+      "target": "crates_protocol_src_codec_packetreader_a_read_u16",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L146",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a",
+      "target": "crates_protocol_src_codec_packetreader_a_read_varint",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L125",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a",
+      "target": "crates_protocol_src_codec_packetreader_a_remaining",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L120",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a_new",
+      "target": "self",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L214",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetwriter_new",
+      "target": "self",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L140",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a_ensure_empty",
+      "target": "crates_protocol_src_codec_packetreader_a_remaining",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L131",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a_is_empty",
+      "target": "crates_protocol_src_codec_packetreader_a_remaining",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L136",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a_ensure_empty",
+      "target": "crates_protocol_src_codec_packetreader_a_is_empty",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L399",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_fixed_width_integers_are_big_endian",
+      "target": "crates_protocol_src_codec_packetreader_a_ensure_empty",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L405",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_reader_reports_trailing_bytes",
+      "target": "crates_protocol_src_codec_packetreader_a_ensure_empty",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L350",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_string_roundtrips_unicode",
+      "target": "crates_protocol_src_codec_packetreader_a_ensure_empty",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L154",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a_read_string",
+      "target": "crates_protocol_src_codec_packetreader_a_read_varint",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L153",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetreader_a_read_string",
+      "target": "string",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L382",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_reader_rejects_negative_length_prefix",
+      "target": "crates_protocol_src_codec_packetreader_a_read_string",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L373",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_string_rejects_invalid_utf8",
+      "target": "crates_protocol_src_codec_packetreader_a_read_string",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L348",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_string_roundtrips_unicode",
+      "target": "crates_protocol_src_codec_packetreader_a_read_string",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L252",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetwriter",
+      "target": "crates_protocol_src_codec_packetwriter_as_bytes",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L257",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetwriter",
+      "target": "crates_protocol_src_codec_packetwriter_into_bytes",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L214",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetwriter",
+      "target": "crates_protocol_src_codec_packetwriter_new",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L247",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetwriter",
+      "target": "crates_protocol_src_codec_packetwriter_write_i64",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L228",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetwriter",
+      "target": "crates_protocol_src_codec_packetwriter_write_string",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L242",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetwriter",
+      "target": "crates_protocol_src_codec_packetwriter_write_u16",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L219",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetwriter",
+      "target": "crates_protocol_src_codec_packetwriter_write_varint",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L388",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_fixed_width_integers_are_big_endian",
+      "target": "crates_protocol_src_codec_packetwriter_new",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L381",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_reader_rejects_negative_length_prefix",
+      "target": "crates_protocol_src_codec_packetwriter_new",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L404",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_reader_reports_trailing_bytes",
+      "target": "crates_protocol_src_codec_packetwriter_new",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L357",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_string_length_counts_utf16_code_units",
+      "target": "crates_protocol_src_codec_packetwriter_new",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L372",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_string_rejects_invalid_utf8",
+      "target": "crates_protocol_src_codec_packetwriter_new",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L343",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_string_roundtrips_unicode",
+      "target": "crates_protocol_src_codec_packetwriter_new",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L284",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_varint_matches_documented_encodings",
+      "target": "crates_protocol_src_codec_packetwriter_new",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L312",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_varint_roundtrips_across_the_range",
+      "target": "crates_protocol_src_codec_packetwriter_new",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L237",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_packetwriter_write_string",
+      "target": "crates_protocol_src_codec_packetwriter_as_bytes",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L358",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_string_length_counts_utf16_code_units",
+      "target": "crates_protocol_src_codec_packetwriter_write_string",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L344",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_string_roundtrips_unicode",
+      "target": "crates_protocol_src_codec_packetwriter_write_string",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L389",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_fixed_width_integers_are_big_endian",
+      "target": "crates_protocol_src_codec_packetwriter_write_u16",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L390",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_fixed_width_integers_are_big_endian",
+      "target": "crates_protocol_src_codec_packetwriter_write_i64",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L396",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_fixed_width_integers_are_big_endian",
+      "target": "crates_protocol_src_codec_packetwriter_as_bytes",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/codec.rs",
+      "source_location": "L347",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_codec_string_roundtrips_unicode",
+      "target": "crates_protocol_src_codec_packetwriter_as_bytes",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L58",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame",
+      "target": "crates_protocol_src_frame_check_frame_len",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L47",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame",
+      "target": "crates_protocol_src_frame_decode_frame",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L70",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame",
+      "target": "crates_protocol_src_frame_decode_frame_len",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L94",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame",
+      "target": "crates_protocol_src_frame_empty_payload_frame",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L18",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame",
+      "target": "crates_protocol_src_frame_encode_frame",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L80",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame",
+      "target": "crates_protocol_src_frame_frame_roundtrip",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L116",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame",
+      "target": "crates_protocol_src_frame_length_field_over_three_bytes_is_rejected",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L128",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame",
+      "target": "crates_protocol_src_frame_maximum_frame_length_is_accepted",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L122",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame",
+      "target": "crates_protocol_src_frame_negative_frame_length_is_rejected",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L134",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame",
+      "target": "crates_protocol_src_frame_negative_packet_id_is_rejected",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L103",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame",
+      "target": "crates_protocol_src_frame_oversized_frame_is_rejected",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "imports_from",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/lib.rs",
+      "source_location": "L20",
+      "weight": 1.0,
+      "context": "import",
+      "_origin": "ast",
+      "source": "crates_protocol_src_lib",
+      "target": "crates_protocol_src_frame",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L95",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame_empty_payload_frame",
+      "target": "crates_protocol_src_frame_encode_frame",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L18",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame_encode_frame",
+      "target": "crates_protocol_src_frame_rs_result",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L18",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame_encode_frame",
+      "target": "crates_protocol_src_frame_rs_vec",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L81",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame_frame_roundtrip",
+      "target": "crates_protocol_src_frame_encode_frame",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L136",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame_negative_packet_id_is_rejected",
+      "target": "crates_protocol_src_frame_encode_frame",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L105",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame_oversized_frame_is_rejected",
+      "target": "crates_protocol_src_frame_encode_frame",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L58",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame_check_frame_len",
+      "target": "crates_protocol_src_frame_rs_result",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L47",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame_decode_frame",
+      "target": "crates_protocol_src_frame_rs_result",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L70",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame_decode_frame_len",
+      "target": "crates_protocol_src_frame_rs_result",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L97",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame_empty_payload_frame",
+      "target": "crates_protocol_src_frame_decode_frame",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L85",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame_frame_roundtrip",
+      "target": "crates_protocol_src_frame_decode_frame",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L72",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame_decode_frame_len",
+      "target": "crates_protocol_src_frame_check_frame_len",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L117",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame_length_field_over_three_bytes_is_rejected",
+      "target": "crates_protocol_src_frame_check_frame_len",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L129",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame_maximum_frame_length_is_accepted",
+      "target": "crates_protocol_src_frame_check_frame_len",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/protocol/src/frame.rs",
+      "source_location": "L123",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_protocol_src_frame_negative_frame_length_is_rejected",
+      "target": "crates_protocol_src_frame_check_frame_len",
+      "confidence_score": 1.0
+    },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
@@ -397,9 +2449,9 @@
       "source_location": "L1",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "agents",
-      "target": "agents_agents_md_\u043f\u0440\u0430\u0432\u0438\u043b\u0430_\u0434\u043b\u044f_\u0438\u0438_\u0430\u0433\u0435\u043d\u0442\u0430_opencode",
-      "confidence_score": 1.0
+      "target": "agents_agents_md_\u043f\u0440\u0430\u0432\u0438\u043b\u0430_\u0434\u043b\u044f_\u0438\u0438_\u0430\u0433\u0435\u043d\u0442\u0430_opencode"
     },
     {
       "relation": "contains",
@@ -408,9 +2460,9 @@
       "source_location": "L6",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "agents_agents_md_\u043f\u0440\u0430\u0432\u0438\u043b\u0430_\u0434\u043b\u044f_\u0438\u0438_\u0430\u0433\u0435\u043d\u0442\u0430_opencode",
-      "target": "agents_\u0433\u043b\u0430\u0432\u043d\u044b\u0435_\u043f\u0440\u0430\u0432\u0438\u043b\u0430",
-      "confidence_score": 1.0
+      "target": "agents_\u0433\u043b\u0430\u0432\u043d\u044b\u0435_\u043f\u0440\u0430\u0432\u0438\u043b\u0430"
     },
     {
       "relation": "contains",
@@ -419,9 +2471,9 @@
       "source_location": "L40",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "agents_agents_md_\u043f\u0440\u0430\u0432\u0438\u043b\u0430_\u0434\u043b\u044f_\u0438\u0438_\u0430\u0433\u0435\u043d\u0442\u0430_opencode",
-      "target": "agents_\u0435\u0441\u043b\u0438_\u0437\u0430\u0441\u0442\u0440\u044f\u043b",
-      "confidence_score": 1.0
+      "target": "agents_\u0435\u0441\u043b\u0438_\u0437\u0430\u0441\u0442\u0440\u044f\u043b"
     },
     {
       "relation": "contains",
@@ -430,9 +2482,9 @@
       "source_location": "L29",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "agents_agents_md_\u043f\u0440\u0430\u0432\u0438\u043b\u0430_\u0434\u043b\u044f_\u0438\u0438_\u0430\u0433\u0435\u043d\u0442\u0430_opencode",
-      "target": "agents_\u043a\u0430\u043a_\u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c\u0441\u044f_\u0432_\u043f\u0440\u043e\u0435\u043a\u0442\u0435_graphify",
-      "confidence_score": 1.0
+      "target": "agents_\u043a\u0430\u043a_\u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c\u0441\u044f_\u0432_\u043f\u0440\u043e\u0435\u043a\u0442\u0435_graphify"
     },
     {
       "relation": "contains",
@@ -441,9 +2493,9 @@
       "source_location": "L20",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "agents_agents_md_\u043f\u0440\u0430\u0432\u0438\u043b\u0430_\u0434\u043b\u044f_\u0438\u0438_\u0430\u0433\u0435\u043d\u0442\u0430_opencode",
-      "target": "agents_\u0441\u0442\u0438\u043b\u044c_\u043a\u043e\u0434\u0430",
-      "confidence_score": 1.0
+      "target": "agents_\u0441\u0442\u0438\u043b\u044c_\u043a\u043e\u0434\u0430"
     },
     {
       "relation": "contains",
@@ -452,9 +2504,9 @@
       "source_location": "L34",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "agents_agents_md_\u043f\u0440\u0430\u0432\u0438\u043b\u0430_\u0434\u043b\u044f_\u0438\u0438_\u0430\u0433\u0435\u043d\u0442\u0430_opencode",
-      "target": "agents_\u0442\u0435\u0441\u0442\u044b",
-      "confidence_score": 1.0
+      "target": "agents_\u0442\u0435\u0441\u0442\u044b"
     },
     {
       "relation": "contains",
@@ -463,9 +2515,9 @@
       "source_location": "L14",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "agents_agents_md_\u043f\u0440\u0430\u0432\u0438\u043b\u0430_\u0434\u043b\u044f_\u0438\u0438_\u0430\u0433\u0435\u043d\u0442\u0430_opencode",
-      "target": "agents_\u044e\u0440\u0438\u0434\u0438\u0447\u0435\u0441\u043a\u0438\u0435_\u0433\u0440\u0430\u043d\u0438\u0446\u044b_\u0441\u0442\u0440\u043e\u0433\u043e",
-      "confidence_score": 1.0
+      "target": "agents_\u044e\u0440\u0438\u0434\u0438\u0447\u0435\u0441\u043a\u0438\u0435_\u0433\u0440\u0430\u043d\u0438\u0446\u044b_\u0441\u0442\u0440\u043e\u0433\u043e"
     },
     {
       "relation": "contains",
@@ -474,9 +2526,9 @@
       "source_location": "L1",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "architecture",
-      "target": "architecture_architecture_md_\u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439_minecraft_\u043d\u0430_rust",
-      "confidence_score": 1.0
+      "target": "architecture_architecture_md_\u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439_minecraft_\u043d\u0430_rust"
     },
     {
       "relation": "references",
@@ -485,9 +2537,9 @@
       "source_location": "L15",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "readme",
-      "target": "architecture",
-      "confidence_score": 1.0
+      "target": "architecture"
     },
     {
       "relation": "contains",
@@ -496,9 +2548,9 @@
       "source_location": "L84",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "architecture_architecture_md_\u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439_minecraft_\u043d\u0430_rust",
-      "target": "architecture_10_\u0440\u0438\u0441\u043a\u0438",
-      "confidence_score": 1.0
+      "target": "architecture_10_\u0440\u0438\u0441\u043a\u0438"
     },
     {
       "relation": "contains",
@@ -507,9 +2559,9 @@
       "source_location": "L3",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "architecture_architecture_md_\u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439_minecraft_\u043d\u0430_rust",
-      "target": "architecture_1_\u0446\u0435\u043b\u044c",
-      "confidence_score": 1.0
+      "target": "architecture_1_\u0446\u0435\u043b\u044c"
     },
     {
       "relation": "contains",
@@ -518,9 +2570,9 @@
       "source_location": "L13",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "architecture_architecture_md_\u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439_minecraft_\u043d\u0430_rust",
-      "target": "architecture_2_\u043f\u0440\u0438\u043d\u0446\u0438\u043f\u044b",
-      "confidence_score": 1.0
+      "target": "architecture_2_\u043f\u0440\u0438\u043d\u0446\u0438\u043f\u044b"
     },
     {
       "relation": "contains",
@@ -529,9 +2581,9 @@
       "source_location": "L20",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "architecture_architecture_md_\u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439_minecraft_\u043d\u0430_rust",
-      "target": "architecture_3_\u0441\u0442\u0440\u0443\u043a\u0442\u0443\u0440\u0430_workspace",
-      "confidence_score": 1.0
+      "target": "architecture_3_\u0441\u0442\u0440\u0443\u043a\u0442\u0443\u0440\u0430_workspace"
     },
     {
       "relation": "contains",
@@ -540,9 +2592,9 @@
       "source_location": "L38",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "architecture_architecture_md_\u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439_minecraft_\u043d\u0430_rust",
-      "target": "architecture_4_\u043c\u043e\u0434\u0435\u043b\u044c_\u043f\u043e\u0442\u043e\u043a\u043e\u0432_\u044f\u0434\u0440\u043e_\u043f\u0440\u043e\u0435\u043a\u0442\u0430",
-      "confidence_score": 1.0
+      "target": "architecture_4_\u043c\u043e\u0434\u0435\u043b\u044c_\u043f\u043e\u0442\u043e\u043a\u043e\u0432_\u044f\u0434\u0440\u043e_\u043f\u0440\u043e\u0435\u043a\u0442\u0430"
     },
     {
       "relation": "contains",
@@ -551,9 +2603,9 @@
       "source_location": "L46",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "architecture_architecture_md_\u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439_minecraft_\u043d\u0430_rust",
-      "target": "architecture_5_\u0434\u0430\u043d\u043d\u044b\u0435_\u0438_\u0441\u043e\u0432\u043c\u0435\u0441\u0442\u0438\u043c\u043e\u0441\u0442\u044c",
-      "confidence_score": 1.0
+      "target": "architecture_5_\u0434\u0430\u043d\u043d\u044b\u0435_\u0438_\u0441\u043e\u0432\u043c\u0435\u0441\u0442\u0438\u043c\u043e\u0441\u0442\u044c"
     },
     {
       "relation": "contains",
@@ -562,9 +2614,9 @@
       "source_location": "L52",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "architecture_architecture_md_\u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439_minecraft_\u043d\u0430_rust",
-      "target": "architecture_6_\u043a\u043b\u0438\u0435\u043d\u0442_\u043f\u043e\u0441\u043b\u0435_\u0441\u0435\u0440\u0432\u0435\u0440\u0430",
-      "confidence_score": 1.0
+      "target": "architecture_6_\u043a\u043b\u0438\u0435\u043d\u0442_\u043f\u043e\u0441\u043b\u0435_\u0441\u0435\u0440\u0432\u0435\u0440\u0430"
     },
     {
       "relation": "contains",
@@ -573,9 +2625,9 @@
       "source_location": "L55",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "architecture_architecture_md_\u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439_minecraft_\u043d\u0430_rust",
-      "target": "architecture_7_\u043b\u0430\u0443\u043d\u0447\u0435\u0440",
-      "confidence_score": 1.0
+      "target": "architecture_7_\u043b\u0430\u0443\u043d\u0447\u0435\u0440"
     },
     {
       "relation": "contains",
@@ -584,9 +2636,9 @@
       "source_location": "L62",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "architecture_architecture_md_\u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439_minecraft_\u043d\u0430_rust",
-      "target": "architecture_8_\u044d\u0442\u0430\u043f\u044b_milestones",
-      "confidence_score": 1.0
+      "target": "architecture_8_\u044d\u0442\u0430\u043f\u044b_milestones"
     },
     {
       "relation": "contains",
@@ -595,9 +2647,9 @@
       "source_location": "L81",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "architecture_architecture_md_\u043c\u043d\u043e\u0433\u043e\u043f\u043e\u0442\u043e\u0447\u043d\u044b\u0439_minecraft_\u043d\u0430_rust",
-      "target": "architecture_9_\u0431\u0435\u043d\u0447\u043c\u0430\u0440\u043a\u0438_\u0432_ci",
-      "confidence_score": 1.0
+      "target": "architecture_9_\u0431\u0435\u043d\u0447\u043c\u0430\u0440\u043a\u0438_\u0432_ci"
     },
     {
       "relation": "references",
@@ -606,9 +2658,9 @@
       "source_location": "L14",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "readme",
-      "target": "docs_progress",
-      "confidence_score": 1.0
+      "target": "docs_progress"
     },
     {
       "relation": "contains",
@@ -617,9 +2669,9 @@
       "source_location": "L1",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "readme",
-      "target": "readme_minerust",
-      "confidence_score": 1.0
+      "target": "readme_minerust"
     },
     {
       "relation": "contains",
@@ -628,9 +2680,9 @@
       "source_location": "L42",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "readme_minerust",
-      "target": "readme_building",
-      "confidence_score": 1.0
+      "target": "readme_building"
     },
     {
       "relation": "contains",
@@ -639,9 +2691,9 @@
       "source_location": "L17",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "readme_minerust",
-      "target": "readme_goals",
-      "confidence_score": 1.0
+      "target": "readme_goals"
     },
     {
       "relation": "contains",
@@ -650,9 +2702,9 @@
       "source_location": "L23",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "readme_minerust",
-      "target": "readme_layout",
-      "confidence_score": 1.0
+      "target": "readme_layout"
     },
     {
       "relation": "contains",
@@ -661,9 +2713,9 @@
       "source_location": "L55",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "readme_minerust",
-      "target": "readme_legal",
-      "confidence_score": 1.0
+      "target": "readme_legal"
     },
     {
       "relation": "contains",
@@ -672,9 +2724,9 @@
       "source_location": "L62",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "readme_minerust",
-      "target": "readme_license",
-      "confidence_score": 1.0
+      "target": "readme_license"
     },
     {
       "relation": "contains",
@@ -683,9 +2735,9 @@
       "source_location": "L11",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "readme_minerust",
-      "target": "readme_status",
-      "confidence_score": 1.0
+      "target": "readme_status"
     },
     {
       "relation": "contains",
@@ -694,9 +2746,9 @@
       "source_location": "L1",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "docs_progress",
-      "target": "docs_progress_progress_md_\u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441_\u043f\u0440\u043e\u0435\u043a\u0442\u0430",
-      "confidence_score": 1.0
+      "target": "docs_progress_progress_md_\u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441_\u043f\u0440\u043e\u0435\u043a\u0442\u0430"
     },
     {
       "relation": "contains",
@@ -705,9 +2757,9 @@
       "source_location": "L33",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "docs_progress_progress_md_\u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441_\u043f\u0440\u043e\u0435\u043a\u0442\u0430",
-      "target": "docs_progress_\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u044b\u0435_\u043f\u0440\u043e\u0431\u043b\u0435\u043c\u044b_\u0431\u043b\u043e\u043a\u0435\u0440\u044b",
-      "confidence_score": 1.0
+      "target": "docs_progress_\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u044b\u0435_\u043f\u0440\u043e\u0431\u043b\u0435\u043c\u044b_\u0431\u043b\u043e\u043a\u0435\u0440\u044b"
     },
     {
       "relation": "contains",
@@ -716,9 +2768,9 @@
       "source_location": "L27",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "docs_progress_progress_md_\u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441_\u043f\u0440\u043e\u0435\u043a\u0442\u0430",
-      "target": "docs_progress_\u0447\u0442\u043e_\u0434\u0430\u043b\u044c\u0448\u0435",
-      "confidence_score": 1.0
+      "target": "docs_progress_\u0447\u0442\u043e_\u0434\u0430\u043b\u044c\u0448\u0435"
     },
     {
       "relation": "contains",
@@ -727,9 +2779,9 @@
       "source_location": "L8",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "docs_progress_progress_md_\u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441_\u043f\u0440\u043e\u0435\u043a\u0442\u0430",
-      "target": "docs_progress_\u0447\u0442\u043e_\u0441\u0434\u0435\u043b\u0430\u043d\u043e",
-      "confidence_score": 1.0
+      "target": "docs_progress_\u0447\u0442\u043e_\u0441\u0434\u0435\u043b\u0430\u043d\u043e"
     },
     {
       "relation": "contains",
@@ -738,11 +2790,11 @@
       "source_location": "L10",
       "weight": 1.0,
       "_origin": "ast",
+      "confidence_score": 1.0,
       "source": "docs_progress_\u0447\u0442\u043e_\u0441\u0434\u0435\u043b\u0430\u043d\u043e",
-      "target": "docs_progress_m0_\u043a\u0430\u0440\u043a\u0430\u0441",
-      "confidence_score": 1.0
+      "target": "docs_progress_m0_\u043a\u0430\u0440\u043a\u0430\u0441"
     }
   ],
   "hyperedges": [],
-  "built_at_commit": "19a149b8efdf4080baac59f07a2be4699f476ebc"
+  "built_at_commit": "574422e550768fe0c8625cc72c300a6c61cd5cbb"
 }
