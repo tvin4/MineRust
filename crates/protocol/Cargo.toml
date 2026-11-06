@@ -7,4 +7,5 @@ repository.workspace = true
 description = "Packet definitions and codecs for Minecraft: Java Edition 26.3"
 
 [dependencies]
+serde_json = { workspace = true }
 thiserror = { workspace = true }

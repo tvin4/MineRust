@@ -51,6 +51,25 @@ pub fn decode_frame(body: &[u8]) -> Result<(u32, PacketReader<'_>), CodecError> 
     Ok((id, reader))
 }
 
+/// Splits a complete encoded frame (length prefix included) into the packet id
+/// and a reader positioned at the packet payload.
+///
+/// The frame must contain exactly one packet.
+pub fn split_frame(frame: &[u8]) -> Result<(u32, PacketReader<'_>), CodecError> {
+    let (length, consumed) = decode_varint(frame)?;
+    let length = check_frame_len(length, consumed)?;
+    let end = consumed
+        .checked_add(length)
+        .ok_or(CodecError::UnexpectedEof)?;
+    let body = frame.get(consumed..end).ok_or(CodecError::UnexpectedEof)?;
+    if frame.len() > end {
+        return Err(CodecError::TrailingBytes {
+            remaining: frame.len() - end,
+        });
+    }
+    decode_frame(body)
+}
+
 /// Validates a frame length value read from the wire.
 ///
 /// The protocol requires the length field to fit into 3 bytes, which also caps
@@ -135,5 +154,22 @@ mod tests {
         // A packet id of -1 cannot be represented as a non-negative id.
         let err = encode_frame(u32::MAX, &[]).expect_err("invalid id");
         assert!(matches!(err, CodecError::InvalidPacketId(-1)));
+    }
+
+    #[test]
+    fn split_frame_consumes_length_prefix() {
+        let frame = encode_frame(0x02, &[0x2A]).expect("encodable");
+        let (id, mut payload) = split_frame(&frame).expect("splittable");
+        assert_eq!(id, 0x02);
+        assert_eq!(payload.read_varint().expect("payload"), 42);
+        payload.ensure_empty().expect("no trailing bytes");
+    }
+
+    #[test]
+    fn split_frame_rejects_trailing_bytes() {
+        let mut frame = encode_frame(0x00, &[]).expect("encodable");
+        frame.push(0x00);
+        let err = split_frame(&frame).expect_err("trailing");
+        assert!(matches!(err, CodecError::TrailingBytes { remaining: 1 }));
     }
 }
