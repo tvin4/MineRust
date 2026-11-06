@@ -3,7 +3,7 @@
 Полный план: `ARCHITECTURE.md` (раздел 8 — этапы M0–M10).
 Правила для агента: `AGENTS.md`.
 
-**Текущий этап: M0 — Каркас.**
+**Текущий этап: M0 — Каркас (выполнен). Следующий: M1 — Протокол.**
 
 ## Что сделано
 
@@ -20,7 +20,9 @@
 - [x] `.gitignore`, `.graphifyignore` (`target/` исключён).
 - [x] `docs/PROGRESS.md`.
 
-**Готово, когда (M0):** CI зелёный на GitHub — проверить после первого push.
+**Готово, когда (M0):** CI зелёный на GitHub — ✅ выполнено: run #1
+(https://github.com/tvin4/MineRust/actions/runs/42303431897), оба билда
+(ubuntu-latest, windows-latest) — success.
 
 ## Что дальше
 
