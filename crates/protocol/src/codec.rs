@@ -12,6 +12,9 @@ pub const MAX_VARINT_BYTES: usize = 5;
 /// units (context-specific limits are usually smaller).
 pub const MAX_STRING_CHARS: usize = 32767;
 
+/// A 128-bit UUID as it appears on the wire: 16 bytes, big-endian.
+pub type Uuid = [u8; 16];
+
 /// Errors produced while encoding or decoding protocol data.
 #[derive(Debug, thiserror::Error)]
 pub enum CodecError {
@@ -186,6 +189,16 @@ impl<'a> PacketReader<'a> {
         Ok(i64::from_be_bytes(bytes))
     }
 
+    /// Reads a boolean: one byte, non-zero means `true`.
+    pub fn read_bool(&mut self) -> Result<bool, CodecError> {
+        Ok(self.read_array::<1>()?[0] != 0)
+    }
+
+    /// Reads a 16-byte UUID.
+    pub fn read_uuid(&mut self) -> Result<Uuid, CodecError> {
+        self.read_array::<16>()
+    }
+
     /// Reads exactly `N` bytes.
     fn read_array<const N: usize>(&mut self) -> Result<[u8; N], CodecError> {
         let end = self
@@ -246,6 +259,16 @@ impl PacketWriter {
     /// Appends a big-endian `i64`.
     pub fn write_i64(&mut self, value: i64) {
         self.buffer.extend_from_slice(&value.to_be_bytes());
+    }
+
+    /// Appends a boolean as a single byte.
+    pub fn write_bool(&mut self, value: bool) {
+        self.buffer.push(u8::from(value));
+    }
+
+    /// Appends a 16-byte UUID.
+    pub fn write_uuid(&mut self, value: Uuid) {
+        self.buffer.extend_from_slice(&value);
     }
 
     /// Returns the written bytes without consuming the writer.

@@ -17,12 +17,16 @@ mod packets;
 mod status;
 
 pub use codec::{
-    decode_varint, encode_varint, CodecError, PacketReader, PacketWriter, MAX_STRING_CHARS,
+    decode_varint, encode_varint, CodecError, PacketReader, PacketWriter, Uuid, MAX_STRING_CHARS,
     MAX_VARINT_BYTES,
 };
 pub use frame::{
     check_frame_len, decode_frame, decode_frame_len, encode_frame, split_frame, MAX_FRAME_LEN,
 };
 pub use nbt::{NbtError, NbtTag, MAX_NBT_DEPTH};
-pub use packets::{Handshake, NextState, PingRequest, PongResponse, StatusRequest, StatusResponse};
+pub use packets::{
+    DisconnectLogin, GameProfile, Handshake, LoginAcknowledged, LoginStart, LoginSuccess,
+    NextState, PingRequest, PongResponse, ProfileProperty, SetCompression, StatusRequest,
+    StatusResponse,
+};
 pub use status::StatusInfo;
