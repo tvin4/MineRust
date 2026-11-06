@@ -1,0 +1,32 @@
+{
+  "crates/protocol/src/lib.rs": {
+    "mtime": 1794003307.1320508,
+    "ast_hash": "d5a1160496a60ba237fccc7d97df092b",
+    "semantic_hash": ""
+  },
+  ".github/workflows/ci.yml": {
+    "mtime": 1794003337.4461002,
+    "ast_hash": "3f898e9b74a6bacf4803978588bf51d7",
+    "semantic_hash": ""
+  },
+  "AGENTS.md": {
+    "mtime": 1794002394.1971924,
+    "ast_hash": "99890bd7f752f0fce8fb3ea7e8ed878f",
+    "semantic_hash": ""
+  },
+  "ARCHITECTURE.md": {
+    "mtime": 1794002399.859167,
+    "ast_hash": "f9bbae3f29caf1d12260be480b8d6f2e",
+    "semantic_hash": ""
+  },
+  "README.md": {
+    "mtime": 1794003337.4461002,
+    "ast_hash": "3c09101a816afc5db9fa0e289d94aff9",
+    "semantic_hash": ""
+  },
+  "docs/PROGRESS.md": {
+    "mtime": 1794003491.602067,
+    "ast_hash": "55c029a32d764d0b989091a586c7ede8",
+    "semantic_hash": ""
+  }
+}
