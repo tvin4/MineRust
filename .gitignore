@@ -8,6 +8,10 @@
 # `data` crate once it exists.
 # TODO(data): add the generated-data directory here.
 
+# Local server configuration: contains the protocol version and version name
+# of the user's own game installation (see server.example.toml).
+/server.toml
+
 # IDE / OS
 /.idea/
 /.vscode/

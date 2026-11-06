@@ -10,7 +10,7 @@ Rust client, and a launcher that verifies ownership of the game.
 
 ## Status
 
-Early development. Current milestone: **M0 (skeleton)** — see
+Early development. Current milestone: **M1 (handshake & status)** — see
 [docs/PROGRESS.md](docs/PROGRESS.md) for progress and
 [ARCHITECTURE.md](ARCHITECTURE.md) for the full plan (milestones M0–M10).
 
@@ -51,6 +51,35 @@ cargo test --workspace
 
 CI runs the same checks on every push and pull request
 (`.github/workflows/ci.yml`).
+
+## Running the server
+
+1. Copy `server.example.toml` to `server.toml` (it is gitignored) and fill in
+   the values from **your own copy of the game**: `protocol_version` and
+   `version_name` live in `version.json` inside the client jar. Do not commit
+   real values.
+
+   ```toml
+   listen = "0.0.0.0:25565"
+   motd = "A MineRust server"
+   max_players = 20
+   protocol_version = <from your game's version.json>
+   version_name = "<from your game's version.json>"
+   ```
+
+2. Start the server:
+
+   ```bash
+   cargo run -p server            # uses ./server.toml
+   cargo run -p server -- --config path/to/server.toml
+   ```
+
+3. Check it in game: launch Minecraft 26.3, open **Multiplayer → Add Server**,
+   enter `localhost:25565` — the server list should show the MOTD, the version
+   name and `0/20` players.
+
+Milestone M1 covers the handshake/status flow only: the server answers server
+list pings and closes the connection on login (M2).
 
 ## Legal
 

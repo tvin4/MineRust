@@ -58,5 +58,25 @@
     "mtime": 1794004915.1917257,
     "ast_hash": "45334fe6b7546a5647980e7ff9103a46",
     "semantic_hash": ""
+  },
+  "crates/net/src/connection.rs": {
+    "mtime": 1794005039.0984256,
+    "ast_hash": "c24c725e41b80905dac96ea672afe671",
+    "semantic_hash": ""
+  },
+  "crates/net/src/error.rs": {
+    "mtime": 1794005039.0964296,
+    "ast_hash": "1658ee3f69fdae92740b6c2f1c04a6b1",
+    "semantic_hash": ""
+  },
+  "crates/net/src/frame.rs": {
+    "mtime": 1794005148.2936769,
+    "ast_hash": "37102914956237badfa2f797864221cb",
+    "semantic_hash": ""
+  },
+  "crates/net/src/lib.rs": {
+    "mtime": 1794005039.0964296,
+    "ast_hash": "625114cdee63cec82248c379a5b1c5dd",
+    "semantic_hash": ""
   }
 }

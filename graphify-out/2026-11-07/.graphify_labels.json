@@ -5,5 +5,8 @@
   "3": "MineRust",
   "4": "lib.rs",
   "5": "CodecError",
-  "6": "PacketWriter"
+  "6": "PacketWriter",
+  "7": "handshake.rs",
+  "8": ".new",
+  "9": ".to_json"
 }

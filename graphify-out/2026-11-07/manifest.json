@@ -1,7 +1,7 @@
 {
   "crates/protocol/src/lib.rs": {
-    "mtime": 1794004675.3841355,
-    "ast_hash": "ec83f1635f1d095c961759fda0cd3bee",
+    "mtime": 1794004891.6001291,
+    "ast_hash": "c03cf59854d2e10c3f7cd0d72e47db98",
     "semantic_hash": ""
   },
   ".github/workflows/ci.yml": {
@@ -35,8 +35,28 @@
     "semantic_hash": ""
   },
   "crates/protocol/src/frame.rs": {
-    "mtime": 1794004731.9240062,
-    "ast_hash": "53664a7f5985e92b5c9e01be2b114a6b",
+    "mtime": 1794004905.9562647,
+    "ast_hash": "fd1ede6581cc3644bd290bd7ebc5a8bc",
+    "semantic_hash": ""
+  },
+  "crates/protocol/src/packets/handshake.rs": {
+    "mtime": 1794004915.1887271,
+    "ast_hash": "8b2efe37a97274bfcd9a11c1d0af4ac0",
+    "semantic_hash": ""
+  },
+  "crates/protocol/src/packets/mod.rs": {
+    "mtime": 1794004873.3517091,
+    "ast_hash": "fef6e86b93c0a05920cadb79a10deefd",
+    "semantic_hash": ""
+  },
+  "crates/protocol/src/packets/status.rs": {
+    "mtime": 1794004873.3527138,
+    "ast_hash": "47b05c8272661f6ec5585f94cbde03ba",
+    "semantic_hash": ""
+  },
+  "crates/protocol/src/status.rs": {
+    "mtime": 1794004915.1917257,
+    "ast_hash": "45334fe6b7546a5647980e7ff9103a46",
     "semantic_hash": ""
   }
 }
