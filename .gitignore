@@ -1,0 +1,15 @@
+# Rust build artifacts
+/target
+**/*.rs.bk
+*.pdb
+
+# Generated game data (registries exported from the user's own copy of the
+# game, see ARCHITECTURE.md section 5). The exact path is defined by the
+# `data` crate once it exists.
+# TODO(data): add the generated-data directory here.
+
+# IDE / OS
+/.idea/
+/.vscode/
+.DS_Store
+Thumbs.db

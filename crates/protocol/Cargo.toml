@@ -1,0 +1,9 @@
+[package]
+name = "protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Packet definitions and codecs for Minecraft: Java Edition 26.3"
+
+[dependencies]

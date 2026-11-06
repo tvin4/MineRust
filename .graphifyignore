@@ -1,0 +1,7 @@
+# Build artifacts are noise for the knowledge graph (gitignore syntax).
+/target/
+*.pdb
+
+# IDE / OS
+/.idea/
+/.vscode/
