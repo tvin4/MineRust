@@ -102,4 +102,28 @@ impl GameData {
     pub fn tags(&self) -> &BTreeMap<String, BTreeMap<String, Vec<i32>>> {
         &self.tags
     }
+
+    /// The Update Tags packet the server sends in the configuration state.
+    ///
+    /// Registries, tags and entries appear in the deterministic order of
+    /// the maps above; the parity tests build the packet through this
+    /// method so they exercise the exact bytes the server sends.
+    pub fn tags_packet(&self) -> protocol::UpdateTags {
+        protocol::UpdateTags {
+            registries: self
+                .tags
+                .iter()
+                .map(|(registry_id, tags)| protocol::TagRegistry {
+                    registry_id: registry_id.clone(),
+                    tags: tags
+                        .iter()
+                        .map(|(name, ids)| protocol::RegistryTag {
+                            name: name.clone(),
+                            entries: ids.clone(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
 }

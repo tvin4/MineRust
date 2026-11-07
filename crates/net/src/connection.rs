@@ -9,10 +9,10 @@ use protocol::{
     decode_frame, offline_uuid, ClientInformation, ConfirmTeleportation, FinishAck,
     FinishConfiguration, GameEvent, GameProfile, Handshake, KeepAlive, LoginAcknowledged,
     LoginPlay, LoginStart, LoginSuccess, NextState, PingRequest, PlayerInfoEntry, PlayerInfoUpdate,
-    PongResponse, Position, RegistryData, RegistryEntry, RegistryTag, SetCenterChunk,
-    SetDefaultSpawnPosition, StatusInfo, StatusRequest, StatusResponse, SynchronizePlayerPosition,
-    TagRegistry, UpdateTags, CONFIGURATION_PLUGIN_MESSAGE, MAX_STRING_CHARS, MOVE_PLAYER_POS,
-    MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT, MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
+    PongResponse, Position, RegistryData, RegistryEntry, SetCenterChunk, SetDefaultSpawnPosition,
+    StatusInfo, StatusRequest, StatusResponse, SynchronizePlayerPosition, UpdateTags,
+    CONFIGURATION_PLUGIN_MESSAGE, MAX_STRING_CHARS, MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT,
+    MOVE_PLAYER_ROT, MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
 };
 use tokio::io::{AsyncRead, AsyncWrite, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -286,22 +286,7 @@ where
         write_frame(writer, ids.id(RegistryData::KEY), &packet.encode_payload()?).await?;
     }
 
-    let tags = UpdateTags {
-        registries: game_data
-            .tags()
-            .iter()
-            .map(|(registry_id, tags)| TagRegistry {
-                registry_id: registry_id.clone(),
-                tags: tags
-                    .iter()
-                    .map(|(name, ids)| RegistryTag {
-                        name: name.clone(),
-                        entries: ids.clone(),
-                    })
-                    .collect(),
-            })
-            .collect(),
-    };
+    let tags = game_data.tags_packet();
     write_frame(writer, ids.id(UpdateTags::KEY), &tags.encode_payload()?).await?;
     write_frame(
         writer,
