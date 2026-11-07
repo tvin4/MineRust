@@ -101,20 +101,9 @@ fn print_tables(env: &ParityEnv, vanilla: &Trace) {
         .filter(|id| !ours.iter().any(|value| value == id.as_str()))
         .collect();
     println!("у ванили: {}, у нас: {}", vanilla_ids.len(), ours.len());
-    println!(
-        "first ids (debug): {:?}",
-        vanilla_ids.iter().take(3).collect::<Vec<_>>()
-    );
-    println!("наш список: {}", ours.join(", "));
-    println!(
-        "пробы: dialog={} block_transformer={}",
-        ours.iter().any(|value| value == "minecraft:dialog"),
-        ours.iter()
-            .any(|value| value == "minecraft:block_transformer")
-    );
     println!("отсутствуют у нас ({}):", missing.len());
-    for id in missing.iter().take(5) {
-        println!("  - {id:?}");
+    for id in missing {
+        println!("  - {id}");
     }
     println!();
 
@@ -128,7 +117,11 @@ fn print_tables(env: &ParityEnv, vanilla: &Trace) {
         .map(|tags| tag_counts(&tags.registries))
         .unwrap_or_default();
 
-    let game_data = data::load_from_jar(&env.config.client_jar).expect("game data from the jar");
+    let game_data = data::load_from_jar(
+        &env.config.client_jar,
+        env.config.registries_report.as_deref().map(Path::new),
+    )
+    .expect("game data from the jar");
     let ours_counts: BTreeMap<&str, (usize, usize)> = game_data
         .tags()
         .iter()
