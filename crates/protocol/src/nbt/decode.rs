@@ -116,9 +116,11 @@ impl<'a> Cursor<'a> {
             return Err(NbtError::LengthExceedsInput { length: len });
         }
         let bytes = self.take(len * 4)?;
-        let values = bytes
-            .chunks_exact(4)
-            .map(|chunk| i32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        let (chunks, tail) = bytes.as_chunks::<4>();
+        debug_assert!(tail.is_empty(), "length is a multiple of 4");
+        let values = chunks
+            .iter()
+            .map(|&chunk| i32::from_be_bytes(chunk))
             .collect();
         Ok(NbtTag::IntArray(values))
     }
@@ -129,13 +131,11 @@ impl<'a> Cursor<'a> {
             return Err(NbtError::LengthExceedsInput { length: len });
         }
         let bytes = self.take(len * 8)?;
-        let values = bytes
-            .chunks_exact(8)
-            .map(|chunk| {
-                i64::from_be_bytes([
-                    chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
-                ])
-            })
+        let (chunks, tail) = bytes.as_chunks::<8>();
+        debug_assert!(tail.is_empty(), "length is a multiple of 8");
+        let values = chunks
+            .iter()
+            .map(|&chunk| i64::from_be_bytes(chunk))
             .collect();
         Ok(NbtTag::LongArray(values))
     }
