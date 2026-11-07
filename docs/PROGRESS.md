@@ -414,16 +414,54 @@ errors» (не распарсились dimension_type/enchantment/sulfur_cube_a
       `ChunkNotReady(status)`, свет из NBT — в `docs/DECISIONS.md`,
       `blocks_report` в `server.toml` (блокер снят: отчёт сгенерирован),
       бэкап `game_rules.dat.orig`, guard флейка `join_slice`.
-- Открытые точки шага 3.2: block entities в payload (`0a` + 10×5 байт,
-  типы VarInt вместо ASCII) — внутренний формат не расшифрован; второе
-  u16-поле заголовка = числу клеток воды (одна наблюдаемая точка,
-  семантика water/fluid — `// SOURCE: wiki, unverified`).
+- Открытые точки шага 3.2 (сняты проверками ниже): block entities в
+  payload и id карт высот.
+
+## Часть 3, шаг 3.2½: три проверки перед 3.3 (выполнено)
+
+Четыре ignored-теста `parity` (вывод в `target/parity/*.txt`), все
+зелёные (`cargo fmt`, `clippy -D warnings`, `cargo test --workspace`):
+
+- [x] **Проверка 1 — `blob_walk.rs`:** ровно 24 секции NBT (Y −4..19:
+  14 packed + 10 single-valued), блоб 32581 Б пройден целиком —
+  `cursor 33487 == blob end 33487 (delta 0)`; длины data 2048/2736/3280
+  и fluid-заголовок `Y2=124` сверены. Семантика второго u16 = число
+  клеток воды — одна наблюдаемая точка, `// SOURCE: wiki, unverified`.
+- [x] **Проверка 2 — `block_entities.rs`:** формат
+  `[u8 packed xz][i16 BE y][VarInt тип][NBT]` подтверждён на всех 10
+  записях чанка (6,−2): координаты 10/10, типы 10/10 (из
+  `registries.json`), NBT сверен с чанком (9× `00`, один real NBT у
+  (5,−1) — `mob_spawner`, 175 Б). Фиксированный шаг 5 Б валиден
+  только при пустом NBT.
+- [x] **Проверка 3 — `heightmap_ids.rs`:** реестра `heightmap_type` в
+  `registries.json` **нет** (0 совпадений); id разрешены байтовым
+  пересечением по чанкам: **1 = WORLD_SURFACE, 4 = MOTION_BLOCKING,
+  5 = MOTION_BLOCKING_NO_LEAVES**. 7 wire-записей не равны ни одной
+  хранимой карте чанка — отпечатаны в `heightmap-ids.txt`,
+  не валят тест; точка для 3.3f.
+- [x] **Бонус — `light_framing.rs`:** фрейминг света закреплён данными
+  всех 9 чанков: `[4 BitSets (sky/block/emptySky/emptyBlock)]` →
+  `[VarInt count][count × (VarInt 2048 + 2048 Б)]`, `popcount(маски) ==
+  числу массивов`, пустые и занятые маски не пересекаются, конец
+  payload точен у всех 9.
+
+Решения записаны в `docs/DECISIONS.md`: (а) критерий парити 3а — сырые
+байты payload совпадают полностью, **кроме световых массивов**; свет
+сравнивается по структуре, расхождения — отдельным отчётом без падения
+теста; движок освещения — отдельный этап; (б) секция чанка без света в
+NBT → sky 15 / block 0, временное решение (не parity), помечено в
+`docs/SOURCES.md` (таблица 4).
 
 ## Что дальше
 
-- **Часть 3, шаг 3.3 (ждёт подтверждения владельца после показа 3.2):**
-  кодеки `level_chunk_with_light`/batch/center в `protocol` + отправка
-  чанков в play, критерий — байт-в-байт совпадение payload.
+- **Часть 3, шаг 3.3** (владелец подтвердил показ 3.2½): маленькими
+  коммитами a–g: кодеки `level_chunk_with_light`/`chunk_batch`/
+  `set_chunk_cache_center` + `encode(decode(bytes)) == bytes` (кроме
+  света), правило готовности/`ChunkNotReady`, актор-загрузчик в
+  отдельном пуле (без Mutex в тике), пейсинг по `chunk_batch_received`,
+  play-поля (спавн/`hashed_seed`/центр), парити-срез `chunk_slice` +
+  таблица chunk-diff, SOURCES/PROGRESS + push. После 3.3 — СТОП:
+  живая проверка, мир не расширять, движение игрока не добавлять.
 - Живая проверка: владелец запускает `cargo run -p server` (в логе `game
   data loaded (registries=32, ..., tag_registries=15)`), проверяет список
   серверов (теперь motd «A Minecraft Server», как у ванили) и вход клиентом
