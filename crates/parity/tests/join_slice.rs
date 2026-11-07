@@ -158,6 +158,43 @@ async fn record_join(
     trace
 }
 
+/// Kills a stray build `server.exe` so `cargo test` can always relink and
+/// the machine is never left running a forgotten server.
+///
+/// The test's own server runs in-process, but the workspace binary may be
+/// left behind by an earlier run (a live check, a crashed test harness) and
+/// its open file handle blocks the next `cargo test` build.
+fn kill_stray_server_exe() {
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/IM", "server.exe"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+    #[cfg(not(windows))]
+    {
+        // TODO: reach the same guarantee on other platforms.
+    }
+}
+
+/// Kills stray `server.exe` processes and aborts our in-process server on
+/// every exit path of the test, including a failed assertion or panic.
+struct ServerGuard {
+    /// Handle of the in-process `net::serve` task, if it was started.
+    abort: Option<tokio::task::AbortHandle>,
+}
+
+impl Drop for ServerGuard {
+    fn drop(&mut self) {
+        if let Some(abort) = self.abort.take() {
+            abort.abort();
+        }
+        kill_stray_server_exe();
+    }
+}
+
 /// Starts our own server in-process on an ephemeral port.
 ///
 /// The game data is loaded through the same path the real server uses
@@ -217,6 +254,9 @@ async fn join_slice_records_traces_for_both_servers() {
         None => return,
     };
     let ids = Arc::new(env.packet_ids().expect("packet ids"));
+    // Active from the very start: whatever fails below, the run cleans up
+    // stray `server.exe` processes and its own in-process server.
+    let mut guard = ServerGuard { abort: None };
 
     // Vanilla: start, join, stop.
     let vanilla_port = env.vanilla_port().expect("server-port in properties");
@@ -234,10 +274,12 @@ async fn join_slice_records_traces_for_both_servers() {
     .await;
     vanilla.stop().await.expect("vanilla stops cleanly");
 
-    // Ours: in-process server on an ephemeral port.
+    // Ours: in-process server on an ephemeral port, released only by the
+    // dropping guard so a panic above still tears it down.
     let (ours_addr, abort) = start_ours(&env, Arc::clone(&ids)).await;
+    guard.abort = Some(abort);
     let ours_trace = record_join(&env, Arc::clone(&ids), "ours", ours_addr, "join-ours.json").await;
-    abort.abort();
+    drop(guard);
 
     assert_joined(&vanilla_trace, &ids);
     assert_joined(&ours_trace, &ids);

@@ -28,6 +28,12 @@ client_jar = "path/to/client.jar"
 # registries get tags and the client fails to load registries.
 # registries_report = "path/to/generated/reports/registries.json"
 
+# Optional: reports/blocks.json generated from your game copy with
+# `tools\generate-reports.ps1`. When set, block state ids come from that
+# report, which is required to encode chunk block palettes; when omitted
+# chunk sections cannot be encoded (M3).
+# blocks_report = "path/to/generated/reports/blocks.json"
+
 # Optional: vanilla server 26.3 installation used by the ignored parity
 # tests (crates/parity): an official server.jar from Mojang's version
 # manifest and the directory it runs in (eula.txt, server.properties,

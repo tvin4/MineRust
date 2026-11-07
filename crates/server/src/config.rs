@@ -74,6 +74,15 @@ pub struct ServerConfig {
     /// enchantments. See `tools/generate-reports.ps1`.
     #[serde(default)]
     pub registries_report: Option<String>,
+    /// Optional path to the data generator's `reports/blocks.json`.
+    ///
+    /// When set, the numeric state ids of every block (`default.properties`
+    /// flattened per state) come from that report, which is what turns the
+    /// block palettes stored in region files into the ids the network
+    /// palette expects; without it chunk sections cannot be encoded. See
+    /// `tools/generate-reports.ps1`.
+    #[serde(default)]
+    pub blocks_report: Option<String>,
     /// Optional path to the official vanilla `server.jar` (M3 parity tests).
     ///
     /// Used only by the ignored parity tests of the `parity` crate, never by
@@ -121,6 +130,13 @@ impl ServerConfig {
             return Err(ConfigError::Invalid(
                 "registries_report is empty".to_owned(),
             ));
+        }
+        if self
+            .blocks_report
+            .as_deref()
+            .is_some_and(|path| path.trim().is_empty())
+        {
+            return Err(ConfigError::Invalid("blocks_report is empty".to_owned()));
         }
         if self
             .vanilla_server_jar
@@ -239,6 +255,31 @@ client_jar = "client.jar"
     fn rejects_an_empty_registries_report_path() {
         let text = example_toml()
             + r#"registries_report = " "
+"#;
+        let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+        assert!(matches!(config.validate(), Err(ConfigError::Invalid(_))));
+    }
+
+    #[test]
+    fn blocks_report_path_is_optional() {
+        let config: ServerConfig = toml::from_str(&example_toml()).expect("valid toml");
+        assert_eq!(config.blocks_report, None);
+
+        let text = example_toml()
+            + r#"blocks_report = "generated/reports/blocks.json"
+"#;
+        let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+        assert_eq!(
+            config.blocks_report.as_deref(),
+            Some("generated/reports/blocks.json")
+        );
+        config.validate().expect("valid");
+    }
+
+    #[test]
+    fn rejects_an_empty_blocks_report_path() {
+        let text = example_toml()
+            + r#"blocks_report = " "
 "#;
         let config: ServerConfig = toml::from_str(&text).expect("valid toml");
         assert!(matches!(config.validate(), Err(ConfigError::Invalid(_))));
