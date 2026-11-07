@@ -16,7 +16,9 @@ mod chunk;
 mod error;
 mod nbt;
 mod region;
+mod send;
 
 pub use chunk::{Chunk, ChunkNotReady, Section};
 pub use error::WorldError;
 pub use region::{load_region, region_coords, ChunkPos, StoredChunk};
+pub use send::{load_sendable_chunk, ChunkUnavailable};

@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use world::{load_region, Chunk, ChunkNotReady};
+use world::{load_region, load_sendable_chunk, Chunk, ChunkNotReady, ChunkUnavailable};
 
 /// Directory of the frozen template; normally the one configured for parity.
 fn template_dir() -> Option<PathBuf> {
@@ -114,4 +114,75 @@ fn the_send_rule_matches_the_observed_template() {
     assert_eq!(ready_statuses.get("minecraft:full"), Some(&1));
     eprintln!("sendable status counts: {ready_statuses:?}");
     eprintln!("refused status counts: {statuses:?}");
+}
+
+/// The same rule through the coordinate lookup the loader will call
+/// (step 3.3b): the nine observed chunks must be found and accepted by
+/// name, and every refusal must stay a specific, explicit value.
+#[test]
+#[ignore = "requires the owner's world template (MINECRAFT_WORLD_TEMPLATE)"]
+fn the_lookup_gate_answers_by_coordinates_with_reasons() {
+    let dir = match template_dir() {
+        Some(dir) => dir,
+        None => return,
+    };
+    let region = dir.join("dimensions/minecraft/overworld/region");
+    let data_version = 5023; // level.dat DataVersion of the template.
+
+    let ready = [
+        (5, -3),
+        (5, -2),
+        (5, -1),
+        (6, -3),
+        (6, -2),
+        (6, -1),
+        (7, -3),
+        (7, -2),
+        (7, -1),
+    ];
+    for (x, z) in ready {
+        let chunk = load_sendable_chunk(&region, x, z, data_version)
+            .unwrap_or_else(|err| panic!("chunk ({x}, {z}) is under the rule: {err}"));
+        assert_eq!((chunk.x, chunk.z), (x, z), "the chunk of these coordinates");
+    }
+
+    // Outside the template the gate says "not stored", never a default chunk.
+    let error = load_sendable_chunk(&region, 40_000, 40_000, data_version)
+        .expect_err("no region file is that far out");
+    assert!(
+        matches!(
+            error,
+            ChunkUnavailable::NotStored {
+                x: 40_000,
+                z: 40_000
+            }
+        ),
+        "{error}"
+    );
+
+    // The very chunk the rule accepts under this world's schema keeps
+    // refusing under another one, by name and with both versions.
+    let error = load_sendable_chunk(&region, 6, -2, 9999).expect_err("another DataVersion");
+    match error {
+        ChunkUnavailable::NotReady(ChunkNotReady::UnsupportedVersion {
+            x: 6,
+            z: -2,
+            found: 5023,
+            expected: 9999,
+        }) => {}
+        other => panic!("expected an explicit version refusal, got {other}"),
+    }
+
+    // A chunk of the 529 that waits for generation names its stored status
+    // through the lookup too (as opposed to never being found).
+    let sample = (0, 0);
+    let error = load_sendable_chunk(&region, sample.0, sample.1, data_version)
+        .expect_err("not every chunk of the template is sendable");
+    match &error {
+        ChunkUnavailable::NotReady(ChunkNotReady::NotGenerated { status, .. }) => {
+            assert!(status.starts_with("minecraft:"), "{error}");
+        }
+        other => panic!("expected a stored status refusal, got {other}"),
+    }
+    eprintln!("lookup refusal: {error}");
 }
