@@ -10,6 +10,7 @@ pub use config::{load_config, ConfigError, ServerConfig};
 
 use std::sync::Arc;
 
+use data::GameData;
 use protocol::StatusInfo;
 use tokio::net::TcpListener;
 
@@ -28,7 +29,11 @@ pub fn status_info(config: &ServerConfig) -> StatusInfo {
 }
 
 /// Binds the configured address and serves connections until an I/O error.
-pub async fn run(config: ServerConfig) -> std::io::Result<()> {
+///
+/// `game_data` holds the registries and tags loaded from the client jar
+/// (see `data::load_from_jar`); the caller loads it once at startup so a
+/// broken jar fails before the port is bound.
+pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> std::io::Result<()> {
     let listener = TcpListener::bind(&config.listen).await?;
     let local = listener.local_addr()?;
     tracing::info!(
@@ -39,5 +44,5 @@ pub async fn run(config: ServerConfig) -> std::io::Result<()> {
         version_name = %config.version_name,
         "listening"
     );
-    net::serve(listener, Arc::new(status_info(&config))).await
+    net::serve(listener, Arc::new(status_info(&config)), game_data).await
 }

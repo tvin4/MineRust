@@ -1,5 +1,6 @@
 //! Integration test: a client performs the full server list ping against a
-//! real server started on an ephemeral port.
+//! real server started on an ephemeral port, and a second test walks the
+//! offline login into the configuration state.
 //!
 //! All protocol values here are fictional test data, not real game values.
 
@@ -7,7 +8,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use protocol::{
-    Handshake, NextState, PingRequest, PongResponse, StatusInfo, StatusRequest, StatusResponse,
+    ClientInformation, FinishAck, FinishConfiguration, Handshake, LoginAcknowledged, LoginStart,
+    LoginSuccess, NextState, PingRequest, PongResponse, StatusInfo, StatusRequest, StatusResponse,
+    UpdateTags,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -33,11 +36,16 @@ fn test_status() -> StatusInfo {
 
 /// Starts the server on an ephemeral port and returns its address.
 async fn start_server() -> std::net::SocketAddr {
+    start_server_with_data(Arc::new(data::GameData::default())).await
+}
+
+/// Starts the server with explicit game data on an ephemeral port.
+async fn start_server_with_data(game_data: Arc<data::GameData>) -> std::net::SocketAddr {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
     let addr = listener.local_addr().expect("local addr");
-    tokio::spawn(net::serve(listener, Arc::new(test_status())));
+    tokio::spawn(net::serve(listener, Arc::new(test_status()), game_data));
     addr
 }
 
@@ -179,20 +187,88 @@ async fn status_can_be_queried_repeatedly_on_one_connection() {
 }
 
 #[tokio::test]
-async fn login_state_is_closed_without_a_response() {
+async fn offline_login_reaches_the_configuration_state() {
     let addr = start_server().await;
     let mut stream = TcpStream::connect(addr).await.expect("connect");
 
-    // Login is milestone M2: the server must simply close the connection
-    // instead of sending anything.
+    // Handshake into the login state.
     let packet = Handshake {
         protocol_version: TEST_PROTOCOL_VERSION,
         server_address: "localhost".to_owned(),
         server_port: 25565,
         next_state: NextState::Login,
     };
-    let payload = packet.encode_payload().expect("encodable");
-    send(&mut stream, Handshake::ID, &payload).await;
+    send(
+        &mut stream,
+        Handshake::ID,
+        &packet.encode_payload().expect("encodable"),
+    )
+    .await;
+
+    // Login Start -> Login Success with the documented offline UUID.
+    let name = "Steve";
+    let start = LoginStart {
+        name: name.to_owned(),
+        uuid: [0; 16],
+    };
+    send(
+        &mut stream,
+        LoginStart::ID,
+        &start.encode_payload().expect("encodable"),
+    )
+    .await;
+    let (id, payload) = recv(&mut stream).await;
+    assert_eq!(id, LoginSuccess::ID, "expected login success");
+    let mut reader = protocol::PacketReader::new(&payload);
+    let success = LoginSuccess::decode_payload(&mut reader).expect("decodable");
+    reader.ensure_empty().expect("no trailing bytes");
+    assert_eq!(success.profile.name, name);
+    assert_eq!(success.profile.uuid, protocol::offline_uuid(name));
+    assert_eq!(success.session_id, success.profile.uuid);
+    assert!(success.profile.properties.is_empty());
+
+    // Login Acknowledged -> configuration. With empty game data the server
+    // skips Registry Data and sends Update Tags followed by Finish.
+    send(
+        &mut stream,
+        LoginAcknowledged::ID,
+        &LoginAcknowledged.encode_payload(),
+    )
+    .await;
+    let (id, payload) = recv(&mut stream).await;
+    assert_eq!(id, UpdateTags::ID, "expected update tags");
+    let mut reader = protocol::PacketReader::new(&payload);
+    let tags = UpdateTags::decode_payload(&mut reader).expect("decodable");
+    reader.ensure_empty().expect("no trailing bytes");
+    assert!(tags.registries.is_empty());
+
+    let (id, payload) = recv(&mut stream).await;
+    assert_eq!(id, FinishConfiguration::ID, "expected finish configuration");
+    let mut reader = protocol::PacketReader::new(&payload);
+    FinishConfiguration::decode_payload(&mut reader).expect("decodable");
+    reader.ensure_empty().expect("no trailing bytes");
+
+    // Client Information is accepted, then Finish Acknowledged ends the
+    // configuration state (the play state arrives in M2 step 5, so the
+    // server closes the connection here).
+    let info = ClientInformation {
+        locale: "en_GB".to_owned(),
+        view_distance: 8,
+        chat_mode: 0,
+        chat_colors: true,
+        skin_parts: 0x7F,
+        main_hand: 1,
+        text_filtering: false,
+        allow_server_listings: true,
+        particle_status: 0,
+    };
+    send(
+        &mut stream,
+        ClientInformation::ID,
+        &info.encode_payload().expect("encodable"),
+    )
+    .await;
+    send(&mut stream, FinishAck::ID, &FinishAck.encode_payload()).await;
 
     let read = read_until_close(&mut stream).await;
     assert_eq!(read, 0, "server should close the connection");

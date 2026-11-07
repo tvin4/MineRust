@@ -15,7 +15,7 @@ pub use configuration::{
 };
 pub use handshake::{Handshake, NextState};
 pub use login::{
-    DisconnectLogin, GameProfile, LoginAcknowledged, LoginStart, LoginSuccess, ProfileProperty,
-    SetCompression,
+    offline_uuid, DisconnectLogin, GameProfile, LoginAcknowledged, LoginStart, LoginSuccess,
+    ProfileProperty, SetCompression,
 };
 pub use status::{PingRequest, PongResponse, StatusRequest, StatusResponse};

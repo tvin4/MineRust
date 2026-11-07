@@ -7,6 +7,7 @@ repository.workspace = true
 description = "Tokio networking layer for the MineRust server"
 
 [dependencies]
+data = { path = "../data" }
 protocol = { path = "../protocol" }
 thiserror = { workspace = true }
 tokio = { workspace = true }

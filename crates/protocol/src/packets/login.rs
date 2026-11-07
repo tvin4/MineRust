@@ -17,6 +17,21 @@ const MAX_PROPERTY_NAME_CHARS: usize = 64;
 /// Maximum length of a profile property signature (protocol String (1024)).
 const MAX_SIGNATURE_CHARS: usize = 1024;
 
+/// Derives the offline-mode player UUID the way the game does: a UUID v3
+/// (MD5) over the UTF-8 bytes of `OfflinePlayer:<name>`, as documented in
+/// the public protocol documentation
+/// (<https://minecraft.wiki/wiki/Java_Edition_protocol>). The protocol
+/// permits any UUID in Login Success; using the documented derivation keeps
+/// ids stable across restarts and matches the vanilla server.
+pub fn offline_uuid(name: &str) -> Uuid {
+    let mut hash = md5::compute(format!("OfflinePlayer:{name}"));
+    // RFC 4122 version 3 and variant 0b10, exactly as the game's
+    // `UUID.nameUUIDFromBytes` sets them.
+    hash[6] = (hash[6] & 0x0F) | 0x30;
+    hash[8] = (hash[8] & 0x3F) | 0x80;
+    hash.0
+}
+
 /// Serverbound Login Start: the first packet of the login state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoginStart {
@@ -378,5 +393,22 @@ mod tests {
         let decoded = DisconnectLogin::decode_payload(&mut reader).expect("decodable");
         assert_eq!(decoded, packet);
         reader.ensure_empty().expect("no trailing bytes");
+    }
+
+    #[test]
+    fn offline_uuid_is_a_stable_version_three_uuid() {
+        let steve = offline_uuid("Steve");
+        // Deterministic per name and distinct between names.
+        assert_eq!(steve, offline_uuid("Steve"));
+        assert_ne!(steve, offline_uuid("Alex"));
+
+        // UUID version 3 (bits 4-7 of time_hi_and_version) and IETF variant
+        // (bits 6-7 of clock_seq_hi_and_reserved).
+        assert_eq!(steve[6] >> 4, 3, "version");
+        assert_eq!(steve[8] >> 6, 0b10, "variant");
+
+        // The derivation hashes `OfflinePlayer:<name>`: adding a prefix to
+        // the input must change the result.
+        assert_ne!(steve, offline_uuid("xSteve"));
     }
 }

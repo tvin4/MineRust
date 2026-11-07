@@ -33,11 +33,21 @@ fn try_main() -> Result<()> {
         .with_context(|| format!("failed to load config {}", config_path.display()))?;
     tracing::info!(path = %config_path.display(), "config loaded");
 
+    // Load registries and tags from the user's client jar before binding,
+    // so a broken jar path fails fast with a clear error.
+    let game_data = data::load_from_jar(&config.client_jar).with_context(|| {
+        format!(
+            "failed to load game data from client jar {}",
+            config.client_jar
+        )
+    })?;
+    let game_data = std::sync::Arc::new(game_data);
+
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("failed to build tokio runtime")?;
-    runtime.block_on(server::run(config))?;
+    runtime.block_on(server::run(config, game_data))?;
     Ok(())
 }
 
