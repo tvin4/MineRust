@@ -540,6 +540,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "world",
 ]
 
 [[package]]
@@ -1112,6 +1113,15 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+
+[[package]]
+name = "world"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "protocol",
+ "thiserror",
+]
 
 [[package]]
 name = "zeroize"

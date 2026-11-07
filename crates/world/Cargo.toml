@@ -1,0 +1,12 @@
+[package]
+name = "world"
+description = "World storage: region files and the chunk model (M3)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+protocol = { path = "../protocol" }
+flate2.workspace = true
+thiserror.workspace = true
