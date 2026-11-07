@@ -3,7 +3,7 @@
 Полный план: `ARCHITECTURE.md` (раздел 8 — этапы M0–M10).
 Правила для агента: `AGENTS.md`.
 
-**Текущий этап: M2 — Login и вход в пустой мир (выполнен). Следующий: M3 — чтение ванильного мира, отправка чанков.**
+**Текущий этап: M3 — чтение ванильного мира, отправка чанков (в процессе, шаг 0: окружение ванили готово). Следующий шаг: крейт `parity`.**
 
 ## Что сделано
 
@@ -132,6 +132,29 @@ protocol_version=777 / version_name="26.3" из `version.json` клиентск�
 - [x] `tools/generate-reports.ps1` — сбор classpath из версионного json
       лаунчера, @argfile, запуск `net.minecraft.data.Main --reports`
       (проверено на машине владельца: 43 entry, отчёт сверен).
+
+### M3, шаг 0: окружение ванильного сервера (выполнено)
+
+- [x] Официальный `server.jar` 26.3 скачан через манифест Mojang
+      (`piston-data.mojang.com`, sha1 `33680f5f…` сверен) в
+      `C:\MineRust-data\server.jar` (вне репозитория).
+- [x] `C:\MineRust-data\vanilla`: первый запуск создал `eula.txt` и
+      `server.properties`; EULA принят владельцем → `eula=true` (единственная
+      правка файла). `server.properties`: `level-seed=12345`,
+      `online-mode=false`, `server-port=25566`, `view-distance=10` (дефолт),
+      `level-type=minecraft:normal`, дополнительно `white-list=false`
+      (дефолт 26.3 — true, блокировал бы offline-вход тест-клиента).
+- [x] Мир сгенерирован с сидом 12345 — проверено разбором gzip+NBT: тег
+      `seed` (long) в `world/data/minecraft/world_gen_settings.dat` = 12345
+      (в `level.dat` 26.3 сида больше нет). Мир сохранён чисто (`stop`,
+      exit=0) и скопирован в шаблон `C:\MineRust-data\world-template`.
+- [x] `server.toml` (gitignored): добавлены `vanilla_server_jar` и
+      `vanilla_server_dir` (оба пути — вне Git). `ServerConfig` получил
+      опциональные `vanilla_server_jar` /
+      `vanilla_server_dir` (валидация непустых, тесты парсинга);
+      `server.example.toml` — закомментированные примеры.
+      `git check-ignore` подтверждён: ни `server.toml`, ни `C:\MineRust-data`
+      в Git не попадают. Тестов: 135 (было 132).
 
 ## Что дальше
 

@@ -65,6 +65,18 @@ pub struct ServerConfig {
     /// the ids are unverified. See `tools/generate-reports.ps1`.
     #[serde(default)]
     pub packets_report: Option<String>,
+    /// Optional path to the official vanilla `server.jar` (M3 parity tests).
+    ///
+    /// Used only by the ignored parity tests of the `parity` crate, never by
+    /// the running server. Missing means "parity tests unavailable".
+    #[serde(default)]
+    pub vanilla_server_jar: Option<String>,
+    /// Optional working directory of the vanilla server installation.
+    ///
+    /// Contains `server.properties`, `logs/` and per-run world copies; used
+    /// only by the ignored parity tests of the `parity` crate.
+    #[serde(default)]
+    pub vanilla_server_dir: Option<String>,
 }
 
 impl ServerConfig {
@@ -91,6 +103,24 @@ impl ServerConfig {
             .is_some_and(|path| path.trim().is_empty())
         {
             return Err(ConfigError::Invalid("packets_report is empty".to_owned()));
+        }
+        if self
+            .vanilla_server_jar
+            .as_deref()
+            .is_some_and(|path| path.trim().is_empty())
+        {
+            return Err(ConfigError::Invalid(
+                "vanilla_server_jar is empty".to_owned(),
+            ));
+        }
+        if self
+            .vanilla_server_dir
+            .as_deref()
+            .is_some_and(|path| path.trim().is_empty())
+        {
+            return Err(ConfigError::Invalid(
+                "vanilla_server_dir is empty".to_owned(),
+            ));
         }
         Ok(())
     }
@@ -169,6 +199,41 @@ client_jar = "client.jar"
 "#;
         let config: ServerConfig = toml::from_str(&text).expect("valid toml");
         assert!(matches!(config.validate(), Err(ConfigError::Invalid(_))));
+    }
+
+    #[test]
+    fn vanilla_paths_are_optional() {
+        let config: ServerConfig = toml::from_str(&example_toml()).expect("valid toml");
+        assert_eq!(config.vanilla_server_jar, None);
+        assert_eq!(config.vanilla_server_dir, None);
+        config.validate().expect("valid");
+    }
+
+    #[test]
+    fn parses_vanilla_paths() {
+        let text = example_toml()
+            + r#"vanilla_server_jar = "C:/data/server.jar"
+vanilla_server_dir = "C:/data/vanilla"
+"#;
+        let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+        assert_eq!(
+            config.vanilla_server_jar.as_deref(),
+            Some("C:/data/server.jar")
+        );
+        assert_eq!(
+            config.vanilla_server_dir.as_deref(),
+            Some("C:/data/vanilla")
+        );
+        config.validate().expect("valid");
+    }
+
+    #[test]
+    fn rejects_empty_vanilla_paths() {
+        for field in ["vanilla_server_jar", "vanilla_server_dir"] {
+            let text = example_toml() + &format!("{field} = \" \"\n");
+            let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+            assert!(matches!(config.validate(), Err(ConfigError::Invalid(_))));
+        }
     }
 
     #[test]

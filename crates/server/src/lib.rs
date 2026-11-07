@@ -106,6 +106,8 @@ mod tests {
             version_name: "test".to_owned(),
             client_jar: "client.jar".to_owned(),
             packets_report: report,
+            vanilla_server_jar: None,
+            vanilla_server_dir: None,
         }
     }
 
