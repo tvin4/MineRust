@@ -56,13 +56,15 @@ CI runs the same checks on every push and pull request
 
 1. Copy `server.example.toml` to `server.toml` (it is gitignored) and fill in
    the values from **your own copy of the game**: `protocol_version` and
-   `version_name` live in `version.json` inside the client jar. Do not commit
-   real values.
+   `version_name` live in `version.json` inside the client jar, and
+   `client_jar` is the path to that jar (registries and tags are loaded from
+   `data/minecraft/` inside it at startup). Do not commit real values.
 
    ```toml
    listen = "0.0.0.0:25565"
    motd = "A MineRust server"
    max_players = 20
+   client_jar = "path/to/your/client.jar"
    protocol_version = <from your game's version.json>
    version_name = "<from your game's version.json>"
    ```

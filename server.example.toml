@@ -1,11 +1,16 @@
 # Example server configuration. Copy this file to `server.toml` (gitignored)
 # and fill in the values from YOUR copy of the game: the protocol version
-# number and version name live in `version.json` inside the client jar, see
-# ARCHITECTURE.md section 5. Do not commit real values to the repository.
+# number and version name live in `version.json` inside the client jar, and
+# `client_jar` points at that same jar — registries and tags are read from
+# `data/minecraft/` inside it at startup. See ARCHITECTURE.md section 5.
+# Do not commit real values to the repository.
 
 listen = "0.0.0.0:25565"
 motd = "A MineRust server"
 max_players = 20
+
+# Path to the client jar of your game installation.
+client_jar = "path/to/client.jar"
 
 # Placeholders — replace with the real values from your game installation.
 protocol_version = 0

@@ -1,9 +1,9 @@
 //! Server configuration: a TOML file loaded at startup.
 //!
-//! The file is intentionally **not** stored in the repository: it contains the
-//! protocol version number and version name of a particular game release,
-//! which are taken from the user's own copy of the game. See
-//! `server.example.toml` for the shape of the file.
+//! The file is intentionally **not** stored in the repository: it contains
+//! the protocol version number, version name and client jar path of a
+//! particular game release, which are taken from the user's own copy of the
+//! game. See `server.example.toml` for the shape of the file.
 
 use std::path::Path;
 
@@ -52,6 +52,11 @@ pub struct ServerConfig {
     pub protocol_version: i32,
     /// Version name displayed in the server list.
     pub version_name: String,
+    /// Path to the client jar of the user's game copy.
+    ///
+    /// Registries and tags are loaded from `data/minecraft/` inside it at
+    /// startup; take the path from your own installation of the game.
+    pub client_jar: String,
 }
 
 impl ServerConfig {
@@ -68,6 +73,9 @@ impl ServerConfig {
         }
         if self.version_name.trim().is_empty() {
             return Err(ConfigError::Invalid("version_name is empty".to_owned()));
+        }
+        if self.client_jar.trim().is_empty() {
+            return Err(ConfigError::Invalid("client_jar is empty".to_owned()));
         }
         Ok(())
     }
@@ -100,6 +108,7 @@ motd = "A MineRust server"
 max_players = 20
 protocol_version = 4242
 version_name = "test-version"
+client_jar = "client.jar"
 "#
         .to_owned()
     }
@@ -111,7 +120,15 @@ version_name = "test-version"
         assert_eq!(config.max_players, 20);
         assert_eq!(config.protocol_version, 4242);
         assert_eq!(config.version_name, "test-version");
+        assert_eq!(config.client_jar, "client.jar");
         config.validate().expect("valid");
+    }
+
+    #[test]
+    fn rejects_an_empty_client_jar_path() {
+        let text = example_toml().replace("client.jar", "");
+        let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+        assert!(matches!(config.validate(), Err(ConfigError::Invalid(_))));
     }
 
     #[test]
