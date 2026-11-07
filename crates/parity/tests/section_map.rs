@@ -11,55 +11,15 @@
 //! `reports/blocks.json`. A field that cannot be read from that data stays
 //! undecoded here and is reported, never guessed.
 
+#[path = "common/chunk_trace.rs"]
+mod chunk_trace;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use chunk_trace::{read_varint, vanilla_payload, varint_stream};
 use protocol::NbtTag;
 use serde_json::Value;
-use world::Chunk;
-
-/// Chunk coordinates of the first batch after the spawn fix (step 3.0/4).
-const FIRST: (i32, i32) = (6, -2);
-
-/// Loads the recorded payload of `FIRST` from the last vanilla run.
-fn vanilla_payload(workspace: &Path) -> Vec<u8> {
-    let text = std::fs::read_to_string(workspace.join("target/parity/join-vanilla.json"))
-        .expect("join-vanilla.json (run join_slice first)");
-    let trace: Value = serde_json::from_str(&text).expect("trace is JSON");
-    for packet in trace["packets"].as_array().expect("packets array") {
-        if packet["name"] != "minecraft:level_chunk_with_light" {
-            continue;
-        }
-        let hex = packet["payload"].as_str().expect("payload hex");
-        let bytes: Vec<u8> = (0..hex.len())
-            .step_by(2)
-            .map(|index| u8::from_str_radix(&hex[index..index + 2], 16).expect("hex"))
-            .collect();
-        if bytes.len() < 8 {
-            continue;
-        }
-        let x = i32::from_be_bytes(bytes[0..4].try_into().expect("big endian"));
-        let z = i32::from_be_bytes(bytes[4..8].try_into().expect("big endian"));
-        if (x, z) == FIRST {
-            return bytes;
-        }
-    }
-    panic!("chunk ({}, {}) not in the trace", FIRST.0, FIRST.1);
-}
-
-/// Reads the stored model of `FIRST` from the world template.
-fn stored_chunk() -> Chunk {
-    let env = parity::load_parity_env().expect("parity environment");
-    let region = env
-        .world_template
-        .join("dimensions/minecraft/overworld/region/r.0.-1.mca");
-    let stored = world::load_region(&region)
-        .expect("region holding the spawn chunk")
-        .into_iter()
-        .find(|chunk| (chunk.x, chunk.z) == FIRST)
-        .expect("stored chunk in the region");
-    Chunk::from_stored(&stored).expect("model")
-}
 
 /// Path of the `blocks.json` data report (state ids of the game copy).
 fn blocks_report() -> PathBuf {
@@ -221,41 +181,6 @@ fn data_bytes(section: &world::Section) -> Vec<u8> {
     out
 }
 
-/// A VarInt read from `payload` at `at`; `None` when it runs past the end.
-fn read_varint(payload: &[u8], at: usize) -> Option<(i32, usize)> {
-    let mut value = 0_u32;
-    let mut taken = 0_usize;
-    loop {
-        let byte = *payload.get(at + taken)?;
-        value |= u32::from(byte & 0x7f) << (taken * 7);
-        taken += 1;
-        if byte & 0x80 == 0 {
-            return Some((value as i32, taken));
-        }
-        if taken == 5 {
-            return None;
-        }
-    }
-}
-
-/// A byte range read as a stream of VarInts (used to look at record
-/// prefixes: fields that are really VarInts come out whole, bytes of
-/// fixed-width fields come out broken, and the difference is evidence too).
-fn varint_stream(bytes: &[u8]) -> Vec<i32> {
-    let mut out = Vec::new();
-    let mut cursor = 0_usize;
-    while cursor < bytes.len() {
-        match read_varint(bytes, cursor) {
-            Some((value, len)) => {
-                out.push(value);
-                cursor += len;
-            }
-            None => break,
-        }
-    }
-    out
-}
-
 /// Bits per cell of a block container with a palette of `count` entries:
 /// the wire never goes below 4 bits (measured on all fourteen records; the
 /// data sizes 2048/2736/3280 bytes fit exactly).
@@ -372,8 +297,9 @@ fn frame_palette(
 #[ignore = "requires the owner's world, the trace and blocks.json"]
 fn section_records_match_the_stored_palettes() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let env = parity::load_parity_env().expect("parity environment");
     let payload = vanilla_payload(&workspace);
-    let chunk = stored_chunk();
+    let chunk = chunk_trace::stored_chunk(&env.world_template);
 
     // Every packed data array frames its section: the record starts somewhere
     // before the data; records follow in ascending Y order (measured).

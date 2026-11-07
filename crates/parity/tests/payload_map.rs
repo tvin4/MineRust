@@ -11,66 +11,19 @@
 //! stored chunk measures where each field sits on the wire, no guessing
 //! involved.
 
+#[path = "common/chunk_trace.rs"]
+mod chunk_trace;
+
 use std::path::Path;
 
+use chunk_trace::{all_payloads, stored_chunk, vanilla_payload, FIRST};
 use parity::load_parity_env;
 use protocol::NbtTag;
-use serde_json::Value;
-use world::{Chunk, StoredChunk};
-
-/// Chunk coordinates of the first batch after the spawn fix (step 3.0/4).
-const FIRST: (i32, i32) = (6, -2);
 
 /// Prefix lengths probed for an anchor: light is a byte pattern that repeats
 /// (`0x00`/`0xff` runs), so short prefixes match everywhere and only a long
 /// one can be unique.
 const PROBE: [usize; 7] = [32, 64, 128, 256, 512, 1024, 2048];
-
-/// Loads the trace written by `join_slice` and returns the payload hex of
-/// the stored chunk whose coordinates match `FIRST`.
-fn vanilla_payload(workspace: &Path) -> String {
-    let text = std::fs::read_to_string(workspace.join("target/parity/join-vanilla.json"))
-        .expect("join-vanilla.json (run join_slice first)");
-    let trace: Value = serde_json::from_str(&text).expect("trace is JSON");
-    for packet in trace["packets"].as_array().expect("packets array") {
-        if packet["name"] != "minecraft:level_chunk_with_light" {
-            continue;
-        }
-        let hex = packet["payload"].as_str().expect("payload hex");
-        let bytes = hex_to_bytes(hex);
-        if bytes.len() < 8 {
-            continue;
-        }
-        let x = i32::from_be_bytes(bytes[0..4].try_into().expect("big endian"));
-        let z = i32::from_be_bytes(bytes[4..8].try_into().expect("big endian"));
-        if (x, z) == FIRST {
-            return hex.to_owned();
-        }
-    }
-    panic!(
-        "the first sent chunk ({}, {}) is not in the trace",
-        FIRST.0, FIRST.1
-    );
-}
-
-/// Hex string of even length to bytes.
-fn hex_to_bytes(hex: &str) -> Vec<u8> {
-    (0..hex.len())
-        .step_by(2)
-        .map(|index| u8::from_str_radix(&hex[index..index + 2], 16).expect("hex"))
-        .collect()
-}
-
-/// Reads the stored model of `FIRST` from the world template.
-fn stored_chunk(env_dir: &Path) -> Chunk {
-    let region = env_dir.join("dimensions/minecraft/overworld/region/r.0.-1.mca");
-    let stored = world::load_region(&region)
-        .expect("region holding the spawn chunk")
-        .into_iter()
-        .find(|chunk: &StoredChunk| (chunk.x, chunk.z) == FIRST)
-        .expect("stored chunk in the region");
-    Chunk::from_stored(&stored).expect("model")
-}
 
 /// Finds `needle` in `haystack`, returning all byte offsets.
 fn find_all(haystack: &[u8], needle: &[u8]) -> Vec<usize> {
@@ -82,28 +35,6 @@ fn find_all(haystack: &[u8], needle: &[u8]) -> Vec<usize> {
         if haystack[index..index + needle.len()] == *needle {
             out.push(index);
         }
-    }
-    out
-}
-
-/// Reads the payload hex of every sent `level_chunk_with_light` of the last
-/// vanilla run, in trace order, with its coordinates.
-fn all_payloads(workspace: &Path) -> Vec<((i32, i32), Vec<u8>)> {
-    let text = std::fs::read_to_string(workspace.join("target/parity/join-vanilla.json"))
-        .expect("join-vanilla.json (run join_slice first)");
-    let trace: Value = serde_json::from_str(&text).expect("trace is JSON");
-    let mut out = Vec::new();
-    for packet in trace["packets"].as_array().expect("packets array") {
-        if packet["name"] != "minecraft:level_chunk_with_light" {
-            continue;
-        }
-        let bytes = hex_to_bytes(packet["payload"].as_str().expect("payload hex"));
-        if bytes.len() < 8 {
-            continue;
-        }
-        let x = i32::from_be_bytes(bytes[0..4].try_into().expect("big endian"));
-        let z = i32::from_be_bytes(bytes[4..8].try_into().expect("big endian"));
-        out.push(((x, z), bytes));
     }
     out
 }
@@ -142,8 +73,7 @@ fn probe(payload: &[u8], needle: &[u8]) -> (usize, Option<usize>, usize) {
 fn locates_the_stored_light_inside_the_recorded_payload() {
     let env = load_parity_env().expect("parity environment");
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let payload_hex = vanilla_payload(&workspace);
-    let payload = hex_to_bytes(&payload_hex);
+    let payload = vanilla_payload(&workspace);
     let chunk = stored_chunk(&env.world_template);
 
     eprintln!(
