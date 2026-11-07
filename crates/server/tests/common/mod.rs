@@ -39,11 +39,24 @@ pub async fn start_server() -> std::net::SocketAddr {
 
 /// Starts the server with explicit game data on an ephemeral port.
 pub async fn start_server_with_data(game_data: Arc<data::GameData>) -> std::net::SocketAddr {
+    start_server_with_ids(game_data, Arc::new(data::PacketIds::compiled())).await
+}
+
+/// Starts the server with explicit game data and explicit packet ids.
+pub async fn start_server_with_ids(
+    game_data: Arc<data::GameData>,
+    packet_ids: Arc<data::PacketIds>,
+) -> std::net::SocketAddr {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
     let addr = listener.local_addr().expect("local addr");
-    tokio::spawn(net::serve(listener, Arc::new(test_status()), game_data));
+    tokio::spawn(net::serve(
+        listener,
+        Arc::new(test_status()),
+        game_data,
+        packet_ids,
+    ));
     addr
 }
 

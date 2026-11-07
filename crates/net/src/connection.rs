@@ -4,14 +4,15 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use data::GameData;
+use data::{GameData, PacketIds};
 use protocol::{
     decode_frame, offline_uuid, ClientInformation, ConfirmTeleportation, FinishAck,
     FinishConfiguration, GameEvent, GameProfile, Handshake, KeepAlive, LoginAcknowledged,
     LoginPlay, LoginStart, LoginSuccess, NextState, PingRequest, PlayerInfoEntry, PlayerInfoUpdate,
     PongResponse, Position, RegistryData, RegistryEntry, RegistryTag, SetCenterChunk,
     SetDefaultSpawnPosition, StatusInfo, StatusRequest, StatusResponse, SynchronizePlayerPosition,
-    TagRegistry, UpdateTags, MAX_STRING_CHARS,
+    TagRegistry, UpdateTags, CONFIGURATION_PLUGIN_MESSAGE, MAX_STRING_CHARS, MOVE_PLAYER_POS,
+    MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT, MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
 };
 use tokio::io::{AsyncRead, AsyncWrite, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -25,21 +26,6 @@ use crate::frame::{read_frame, write_frame};
 /// (handshake, status, login and configuration). Once in play there is no
 /// global timeout: a joined client is kept alive by keep-alives instead.
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Serverbound Plugin Message packet id in the configuration state. The
-/// channel name is logged; the payload is ignored (M2 has no gameplay).
-const PLUGIN_MESSAGE_ID: u32 = 0x02;
-
-/// Serverbound Plugin Message packet id in the play state.
-const PLAY_PLUGIN_MESSAGE_ID: u32 = 0x16;
-
-/// Serverbound Client Information packet id in the play state (sent when
-/// the settings change mid-game); same layout as in configuration.
-const PLAY_CLIENT_INFORMATION_ID: u32 = 0x0E;
-
-/// Serverbound movement packet ids (position, position+rotation, rotation,
-/// status only). Logged at trace level and otherwise ignored in M2.
-const PLAY_MOVEMENT_IDS: std::ops::RangeInclusive<u32> = 0x1E..=0x21;
 
 /// Identifier of the dimension the player joins.
 const OVERWORLD: &str = "minecraft:overworld";
@@ -68,19 +54,21 @@ const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Accepts connections forever, spawning one task per connection.
 ///
-/// The status document and the loaded game data are shared as immutable
-/// `Arc`s; there is no mutable shared state on this path.
+/// The status document, the loaded game data and the packet ids are shared
+/// as immutable `Arc`s; there is no mutable shared state on this path.
 pub async fn serve(
     listener: TcpListener,
     status: Arc<StatusInfo>,
     game_data: Arc<GameData>,
+    packet_ids: Arc<PacketIds>,
 ) -> std::io::Result<()> {
     loop {
         let (stream, peer) = listener.accept().await?;
         let status = Arc::clone(&status);
         let game_data = Arc::clone(&game_data);
+        let packet_ids = Arc::clone(&packet_ids);
         tokio::spawn(async move {
-            match handle_connection(stream, status, game_data).await {
+            match handle_connection(stream, status, game_data, packet_ids).await {
                 Ok(()) => debug!(%peer, "connection closed"),
                 Err(ConnectionError::TimedOut) => debug!(%peer, "connection timed out"),
                 Err(err) if err.is_client_disconnect() => {
@@ -111,14 +99,16 @@ async fn handle_connection(
     stream: TcpStream,
     status: Arc<StatusInfo>,
     game_data: Arc<GameData>,
+    packet_ids: Arc<PacketIds>,
 ) -> Result<(), ConnectionError> {
+    let ids = packet_ids.as_ref();
     let (read_half, write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
     let mut writer = write_half;
 
     let body = with_timeout(read_frame(&mut reader)).await?;
     let (packet_id, mut payload) = decode_frame(&body)?;
-    if packet_id != Handshake::ID {
+    if packet_id != ids.id(Handshake::KEY) {
         return Err(ConnectionError::UnexpectedPacket {
             id: packet_id,
             state: "handshake",
@@ -134,11 +124,13 @@ async fn handle_connection(
     );
 
     match handshake.next_state {
-        NextState::Status => with_timeout(status_state(&mut reader, &mut writer, &status)).await,
+        NextState::Status => {
+            with_timeout(status_state(&mut reader, &mut writer, &status, ids)).await
+        }
         NextState::Login => {
             let player_name =
-                with_timeout(login_state(&mut reader, &mut writer, &game_data)).await?;
-            play_state(reader, writer, &game_data, &status, &player_name).await
+                with_timeout(login_state(&mut reader, &mut writer, &game_data, ids)).await?;
+            play_state(reader, writer, &game_data, &status, &player_name, ids).await
         }
         // Transfer is a separate protocol flow not needed by M2.
         NextState::Transfer => {
@@ -153,6 +145,7 @@ async fn status_state<R, W>(
     reader: &mut R,
     writer: &mut W,
     status: &StatusInfo,
+    ids: &PacketIds,
 ) -> Result<(), ConnectionError>
 where
     R: AsyncRead + Unpin,
@@ -163,20 +156,25 @@ where
         let (packet_id, mut payload) = decode_frame(&body)?;
         match packet_id {
             // A client may also send a ping without a preceding request.
-            id if id == StatusRequest::ID => {
+            id if id == ids.id(StatusRequest::KEY) => {
                 StatusRequest::decode_payload(&mut payload)?;
                 let response = StatusResponse {
                     json: status.to_json(),
                 };
-                write_frame(writer, StatusResponse::ID, &response.encode_payload()?).await?;
+                write_frame(
+                    writer,
+                    ids.id(StatusResponse::KEY),
+                    &response.encode_payload()?,
+                )
+                .await?;
             }
-            id if id == PingRequest::ID => {
+            id if id == ids.id(PingRequest::KEY) => {
                 let ping = PingRequest::decode_payload(&mut payload)?;
                 payload.ensure_empty()?;
                 let pong = PongResponse {
                     payload: ping.payload,
                 };
-                write_frame(writer, PongResponse::ID, &pong.encode_payload()).await?;
+                write_frame(writer, ids.id(PongResponse::KEY), &pong.encode_payload()).await?;
                 // The protocol says the connection closes after the pong.
                 return Ok(());
             }
@@ -199,6 +197,7 @@ async fn login_state<R, W>(
     reader: &mut R,
     writer: &mut W,
     game_data: &GameData,
+    ids: &PacketIds,
 ) -> Result<String, ConnectionError>
 where
     R: AsyncRead + Unpin,
@@ -206,7 +205,7 @@ where
 {
     let body = read_frame(reader).await?;
     let (packet_id, mut payload) = decode_frame(&body)?;
-    if packet_id != LoginStart::ID {
+    if packet_id != ids.id(LoginStart::KEY) {
         return Err(ConnectionError::UnexpectedPacket {
             id: packet_id,
             state: "login",
@@ -227,11 +226,16 @@ where
         },
         session_id: uuid,
     };
-    write_frame(writer, LoginSuccess::ID, &success.encode_payload()?).await?;
+    write_frame(
+        writer,
+        ids.id(LoginSuccess::KEY),
+        &success.encode_payload()?,
+    )
+    .await?;
 
     let body = read_frame(reader).await?;
     let (packet_id, mut payload) = decode_frame(&body)?;
-    if packet_id != LoginAcknowledged::ID {
+    if packet_id != ids.id(LoginAcknowledged::KEY) {
         return Err(ConnectionError::UnexpectedPacket {
             id: packet_id,
             state: "login",
@@ -241,7 +245,7 @@ where
     payload.ensure_empty()?;
     debug!("login acknowledged, entering configuration");
 
-    configuration_state(reader, writer, game_data).await?;
+    configuration_state(reader, writer, game_data, ids).await?;
     Ok(start.name)
 }
 
@@ -252,6 +256,7 @@ async fn configuration_state<R, W>(
     reader: &mut R,
     writer: &mut W,
     game_data: &GameData,
+    ids: &PacketIds,
 ) -> Result<(), ConnectionError>
 where
     R: AsyncRead + Unpin,
@@ -270,7 +275,7 @@ where
                 })
                 .collect(),
         };
-        write_frame(writer, RegistryData::ID, &packet.encode_payload()?).await?;
+        write_frame(writer, ids.id(RegistryData::KEY), &packet.encode_payload()?).await?;
     }
 
     let tags = UpdateTags {
@@ -289,10 +294,10 @@ where
             })
             .collect(),
     };
-    write_frame(writer, UpdateTags::ID, &tags.encode_payload()?).await?;
+    write_frame(writer, ids.id(UpdateTags::KEY), &tags.encode_payload()?).await?;
     write_frame(
         writer,
-        FinishConfiguration::ID,
+        ids.id(FinishConfiguration::KEY),
         &FinishConfiguration.encode_payload(),
     )
     .await?;
@@ -306,7 +311,7 @@ where
         let body = read_frame(reader).await?;
         let (packet_id, mut payload) = decode_frame(&body)?;
         match packet_id {
-            id if id == ClientInformation::ID => {
+            id if id == ids.id(ClientInformation::KEY) => {
                 let info = ClientInformation::decode_payload(&mut payload)?;
                 payload.ensure_empty()?;
                 debug!(
@@ -315,12 +320,12 @@ where
                     "client information received"
                 );
             }
-            id if id == PLUGIN_MESSAGE_ID => {
+            id if id == ids.id(CONFIGURATION_PLUGIN_MESSAGE) => {
                 // The channel name is worth logging; M2 ignores the payload.
                 let channel = payload.read_string(MAX_STRING_CHARS)?;
                 debug!(%channel, "plugin message received, ignored");
             }
-            id if id == FinishAck::ID => {
+            id if id == ids.id(FinishAck::KEY) => {
                 FinishAck::decode_payload(&mut payload)?;
                 payload.ensure_empty()?;
                 debug!("configuration acknowledged, entering play");
@@ -354,6 +359,7 @@ async fn play_state<R, W>(
     game_data: &GameData,
     status: &StatusInfo,
     player_name: &str,
+    ids: &PacketIds,
 ) -> Result<(), ConnectionError>
 where
     R: AsyncRead + Unpin + Send + 'static,
@@ -409,7 +415,12 @@ where
         online_mode: false,
         enforces_secure_chat: false,
     };
-    write_frame(&mut writer, LoginPlay::ID, &login.encode_payload()?).await?;
+    write_frame(
+        &mut writer,
+        ids.id(LoginPlay::KEY),
+        &login.encode_payload()?,
+    )
+    .await?;
 
     let spawn = SetDefaultSpawnPosition {
         dimension: OVERWORLD.to_owned(),
@@ -419,7 +430,7 @@ where
     };
     write_frame(
         &mut writer,
-        SetDefaultSpawnPosition::ID,
+        ids.id(SetDefaultSpawnPosition::KEY),
         &spawn.encode_payload()?,
     )
     .await?;
@@ -435,20 +446,30 @@ where
             latency: 0,
         }],
     };
-    write_frame(&mut writer, PlayerInfoUpdate::ID, &info.encode_payload()?).await?;
+    write_frame(
+        &mut writer,
+        ids.id(PlayerInfoUpdate::KEY),
+        &info.encode_payload()?,
+    )
+    .await?;
 
     let center = SetCenterChunk {
         chunk_x: SPAWN.x >> 4,
         chunk_z: SPAWN.z >> 4,
     };
-    write_frame(&mut writer, SetCenterChunk::ID, &center.encode_payload()).await?;
+    write_frame(
+        &mut writer,
+        ids.id(SetCenterChunk::KEY),
+        &center.encode_payload(),
+    )
+    .await?;
 
     // Without event 13 the client stays on its loading screen.
     let event = GameEvent {
         event: GameEvent::START_WAITING_FOR_CHUNKS,
         value: 0.0,
     };
-    write_frame(&mut writer, GameEvent::ID, &event.encode_payload()).await?;
+    write_frame(&mut writer, ids.id(GameEvent::KEY), &event.encode_payload()).await?;
 
     let teleport = SynchronizePlayerPosition {
         teleport_id: JOIN_TELEPORT_ID,
@@ -464,7 +485,7 @@ where
     };
     write_frame(
         &mut writer,
-        SynchronizePlayerPosition::ID,
+        ids.id(SynchronizePlayerPosition::KEY),
         &teleport.encode_payload(),
     )
     .await?;
@@ -499,7 +520,7 @@ where
         tokio::select! {
             _ = keep_alive.tick() => {
                 let packet = KeepAlive { id: unix_millis() };
-                write_frame(&mut writer, KeepAlive::ID, &packet.encode_payload()).await?;
+                write_frame(&mut writer, ids.id(KeepAlive::KEY), &packet.encode_payload()).await?;
             }
             frame = frame_rx.recv() => {
                 let body = match frame {
@@ -511,7 +532,7 @@ where
                 };
                 let (packet_id, mut payload) = decode_frame(&body)?;
                 match packet_id {
-                    id if id == ConfirmTeleportation::ID => {
+                    id if id == ids.id(ConfirmTeleportation::KEY) => {
                         let confirm = ConfirmTeleportation::decode_payload(&mut payload)?;
                         payload.ensure_empty()?;
                         debug!(
@@ -522,12 +543,12 @@ where
                             "teleport confirmed"
                         );
                     }
-                    id if id == KeepAlive::SERVERBOUND_ID => {
+                    id if id == ids.id(KeepAlive::SERVERBOUND_KEY) => {
                         let keep_alive = KeepAlive::decode_payload(&mut payload)?;
                         payload.ensure_empty()?;
                         debug!(keep_alive_id = keep_alive.id, "keep alive answered");
                     }
-                    id if id == PLAY_CLIENT_INFORMATION_ID => {
+                    id if id == ids.id(ClientInformation::PLAY_KEY) => {
                         let info = ClientInformation::decode_payload(&mut payload)?;
                         payload.ensure_empty()?;
                         debug!(
@@ -536,7 +557,7 @@ where
                             "client information received"
                         );
                     }
-                    id if id == PLAY_PLUGIN_MESSAGE_ID => {
+                    id if id == ids.id(PLAY_PLUGIN_MESSAGE) => {
                         // The channel name is worth logging; M2 ignores the
                         // payload of plugin messages.
                         let channel = payload.read_string(MAX_STRING_CHARS)?;
@@ -544,7 +565,12 @@ where
                     }
                     // Movement carries gameplay the empty world does not
                     // simulate yet.
-                    id if PLAY_MOVEMENT_IDS.contains(&id) => {
+                    id
+                        if id == ids.id(MOVE_PLAYER_POS)
+                            || id == ids.id(MOVE_PLAYER_POS_ROT)
+                            || id == ids.id(MOVE_PLAYER_ROT)
+                            || id == ids.id(MOVE_PLAYER_STATUS_ONLY) =>
+                    {
                         trace!(id, "movement received, ignored");
                     }
                     // M2 has no gameplay: unknown or not-yet-handled

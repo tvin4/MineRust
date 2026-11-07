@@ -100,8 +100,8 @@
     "semantic_hash": ""
   },
   "crates/protocol/src/nbt/decode.rs": {
-    "mtime": 1794009184.202,
-    "ast_hash": "22e674a8795431cdaecd6467226c33b6",
+    "mtime": 1794048514.7723877,
+    "ast_hash": "f5fe87400e89878655eb4e242e23a13a",
     "semantic_hash": ""
   },
   "crates/protocol/src/nbt/from_json.rs": {

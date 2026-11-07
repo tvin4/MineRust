@@ -6,6 +6,8 @@
 
 mod common;
 
+use std::sync::Arc;
+
 use protocol::{
     ClientInformation, ConfirmTeleportation, FinishAck, FinishConfiguration, GameEvent, Handshake,
     LoginAcknowledged, LoginPlay, LoginStart, LoginSuccess, NextState, PingRequest,
@@ -16,9 +18,33 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
 use common::{
-    handshake, read_until_close, recv, send, start_server, TEST_MAX_PLAYERS, TEST_PROTOCOL_VERSION,
-    TEST_VERSION_NAME,
+    handshake, read_until_close, recv, send, start_server, start_server_with_ids, TEST_MAX_PLAYERS,
+    TEST_PROTOCOL_VERSION, TEST_VERSION_NAME,
 };
+
+/// The server must speak the packet ids of the loaded packets report, not
+/// the compiled ones: the id of the status response is overridden in a
+/// fixture report built from the compiled keys of the protocol crate.
+#[tokio::test]
+async fn status_response_comes_from_the_packets_report() {
+    const OVERRIDE_ID: u32 = 0x11; // deliberately not the compiled default
+
+    let report = data::fixtures::packets_report_json(&[(StatusResponse::KEY, OVERRIDE_ID)]);
+    let ids = Arc::new(data::packets_from_json(&report).expect("fixture report parses"));
+    let addr = start_server_with_ids(Arc::new(data::GameData::default()), ids).await;
+
+    let mut stream = TcpStream::connect(addr).await.expect("connect");
+    handshake(&mut stream).await;
+    send(
+        &mut stream,
+        StatusRequest::ID,
+        &StatusRequest.encode_payload(),
+    )
+    .await;
+
+    let (packet_id, _) = recv(&mut stream).await;
+    assert_eq!(packet_id, OVERRIDE_ID, "id must come from the report");
+}
 
 #[tokio::test]
 async fn server_list_ping_end_to_end() {

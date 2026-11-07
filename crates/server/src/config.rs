@@ -57,6 +57,14 @@ pub struct ServerConfig {
     /// Registries and tags are loaded from `data/minecraft/` inside it at
     /// startup; take the path from your own installation of the game.
     pub client_jar: String,
+    /// Optional path to the data generator's `reports/packets.json`.
+    ///
+    /// When set, every packet id the server speaks is taken from that report
+    /// (generated from the user's own copy of the game) and checked against
+    /// the compiled defaults; without it the compiled defaults are used and
+    /// the ids are unverified. See `tools/generate-reports.ps1`.
+    #[serde(default)]
+    pub packets_report: Option<String>,
 }
 
 impl ServerConfig {
@@ -76,6 +84,13 @@ impl ServerConfig {
         }
         if self.client_jar.trim().is_empty() {
             return Err(ConfigError::Invalid("client_jar is empty".to_owned()));
+        }
+        if self
+            .packets_report
+            .as_deref()
+            .is_some_and(|path| path.trim().is_empty())
+        {
+            return Err(ConfigError::Invalid("packets_report is empty".to_owned()));
         }
         Ok(())
     }
@@ -127,6 +142,31 @@ client_jar = "client.jar"
     #[test]
     fn rejects_an_empty_client_jar_path() {
         let text = example_toml().replace("client.jar", "");
+        let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+        assert!(matches!(config.validate(), Err(ConfigError::Invalid(_))));
+    }
+
+    #[test]
+    fn report_path_is_optional() {
+        let config: ServerConfig = toml::from_str(&example_toml()).expect("valid toml");
+        assert_eq!(config.packets_report, None);
+
+        let text = example_toml()
+            + r#"packets_report = "generated/reports/packets.json"
+"#;
+        let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+        assert_eq!(
+            config.packets_report.as_deref(),
+            Some("generated/reports/packets.json")
+        );
+        config.validate().expect("valid");
+    }
+
+    #[test]
+    fn rejects_an_empty_report_path() {
+        let text = example_toml()
+            + r#"packets_report = " "
+"#;
         let config: ServerConfig = toml::from_str(&text).expect("valid toml");
         assert!(matches!(config.validate(), Err(ConfigError::Invalid(_))));
     }
