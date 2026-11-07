@@ -1,0 +1,15 @@
+[package]
+name = "data"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Loading of game registries and tags from the user's copy of the game"
+
+[dependencies]
+protocol = { path = "../protocol" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+zip = { workspace = true }
