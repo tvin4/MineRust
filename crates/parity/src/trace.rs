@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 /// Protocol state a recorded packet belongs to (serialisable form of
 /// [`ProtocolState`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TraceState {
     /// The initial handshake.
@@ -41,7 +41,7 @@ impl From<ProtocolState> for TraceState {
 }
 
 /// Direction of a recorded packet (serialisable form of [`Direction`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TraceDirection {
     /// Sent by the server.

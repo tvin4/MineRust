@@ -183,15 +183,26 @@ protocol_version=777 / version_name="26.3" из `version.json` клиентск�
 - [x] Новые ключи `protocol`: `SELECT_KNOWN_PACKS` (0x0f cb),
       `SELECT_KNOWN_PACKS_SERVERBOUND` (0x07 sb), `UPDATE_ENABLED_FEATURES`
       (0x0d cb), `CONFIGURATION_CLIENTBOUND_PLUGIN_MESSAGE` (0x01 cb) —
-      `used_packet_keys()` теперь 35. Тестов (без ignored-срезов): 147.
+      `used_packet_keys()` теперь 35. Тестов (без ignored-срезов): 151.
+
+- [x] Дифф-движок `src/diff.rs`: группировка `(state, direction, id)`,
+      сравнение счётчиков и сырых байт n-ных вхождений; нормализация
+      случайностей строго ограничена двумя правилами (порт handshake —
+      эфемерный порт тестового сервера, teleport id — растёт на
+      соединении). Имена/UUID/координаты/entity id НЕ нормализуются —
+      это и есть объект спора. Ignored-тест `tests/diff_report.rs`
+      строит отчёты → `target/parity-report/{status,join}-diff.md`.
+- [x] Прогнаны отчёты: status — 1 расхождение payload (формат и текст
+      description в status_response); join — 43 строки состава (ваниль
+      1799 пакетов против наших 14: чанки, теги, реестры, keep-alive) и
+      7 расхождений payload из 14 сопоставленных л.с.
 
 ## Что дальше
 
-- **Срез 1, остановка по согласованию:** собрать дифф трейсов
-  `(state, direction, id, payload)` с нормализацией случайностей (UUID, имя,
-  порт handshake, teleport id), показать владельцу таблицу расхождений
-  status+login+configuration+join и **не чинить ничего до подтверждения**.
-- Дифф-движок/отчёт `target/parity-report` — руками или тестом крейта.
+- **Срез 1, стоп по согласованию:** таблица расхождений
+  status+login+configuration+join показана владельцу отдельно
+  (отчёты `target/parity-report/*.md`). **Ничего в сервере не чинить до
+  подтверждения** — починка может начаться только по этой таблице.
 - Ручная проверка M2 владельцем: `cargo run -p server` с `client_jar` в
   `server.toml`, вход клиентом 26.3 — мир должен открыться без вылета
   (пока пустой: чанки нет, `TODO` до M3). Рекомендуется сразу сгенерировать
