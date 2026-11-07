@@ -28,6 +28,12 @@ pub enum ConnectionError {
     /// but intentionally does not implement `std::error::Error`).
     #[error("no system entropy for the session uuid: {0}")]
     Entropy(String),
+    /// No keep-alive answer arrived within the timeout.
+    // SOURCE: wiki, unverified — the timeout value is not observable in a
+    // recording (see `KEEP_ALIVE_INTERVAL` in `connection.rs`, the interval
+    // itself is measured).
+    #[error("no keep-alive answer within the timeout")]
+    KeepAliveTimeout,
 }
 
 impl ConnectionError {
