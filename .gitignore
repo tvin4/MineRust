@@ -12,6 +12,9 @@
 # of the user's own game installation (see server.example.toml).
 /server.toml
 
+# Local knowledge graph built by graphify (rebuilt by the git hook).
+/graphify-out/
+
 # IDE / OS
 /.idea/
 /.vscode/
