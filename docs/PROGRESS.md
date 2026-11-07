@@ -3,7 +3,7 @@
 Полный план: `ARCHITECTURE.md` (раздел 8 — этапы M0–M10).
 Правила для агента: `AGENTS.md`.
 
-**Текущий этап: M3 — чтение ванильного мира, отправка чанков (в процессе, шаг 0: окружение ванили готово). Следующий шаг: крейт `parity`.**
+**Текущий этап: M3 — крейт `parity` готов, срезы status и join прогнаны на ванили 26.3 и на нашем сервере. Следующий шаг: дифф трейсов → таблица расхождений владельцу (стоп до подтверждения).**
 
 ## Что сделано
 
@@ -156,8 +156,42 @@ protocol_version=777 / version_name="26.3" из `version.json` клиентск�
       `git check-ignore` подтверждён: ни `server.toml`, ни `C:\MineRust-data`
       в Git не попадают. Тестов: 135 (было 132).
 
+### M3, шаги 1–3: крейт parity и срезы status/join (выполнено)
+
+- [x] Шаг 1 — каркас: `crates/parity` с `env.rs` (путь к `server.toml` через
+      `MINECRAFT_SERVER_TOML`/корень workspace) и `vanilla.rs`
+      (`Vanilla::start/stop`: мир на прогон копируется из `world-template`,
+      ожидание `Done (` в `logs/latest.log`, `stop` по stdin,
+      kill_on_drop). Ignored-тест `vanilla_server_starts_and_stops`
+      проверен вживую (~12 s, exit 0).
+- [x] Шаг 2 — скриптованный тест-клиент: `trace.rs` (raw-трейсы
+      `(state, direction, id, payload)` в JSON), `client.rs`
+      (шаги Send/Wait/Respond/Quiet, фреймы с поддержкой Set Compression),
+      `tests/status_slice.rs`: трейсы status для ванили и нашего сервера →
+      `target/parity/status-{vanilla,ours}.json`.
+- [x] Шаг 3 — join-срез `tests/join_slice.rs`: handshake → login →
+      configuration → play до тишины; трейсы →
+      `target/parity/join-{vanilla,ours}.json` (ваниль 1799 пакетов,
+      наш 14). Вживую оба сервера прошли сценарий.
+- [x] Настройка ванили по факту: ответ на пробу `select_known_packs`
+      — отдельный сервербаунд-пакет `minecraft:select_known_packs` (id 7 из
+      `reports/packets.json`), не `custom_payload` (эхо в custom_payload
+      роняло ваниль с «Internal Exception»). Клиент также автоматически
+      подтверждает play keep-alive (иначе ваниль кикает по ~30 s таймауту);
+      эхо known packs помечено `// SOURCE: wiki, unverified` до
+      подтверждения прогоном.
+- [x] Новые ключи `protocol`: `SELECT_KNOWN_PACKS` (0x0f cb),
+      `SELECT_KNOWN_PACKS_SERVERBOUND` (0x07 sb), `UPDATE_ENABLED_FEATURES`
+      (0x0d cb), `CONFIGURATION_CLIENTBOUND_PLUGIN_MESSAGE` (0x01 cb) —
+      `used_packet_keys()` теперь 35. Тестов (без ignored-срезов): 147.
+
 ## Что дальше
 
+- **Срез 1, остановка по согласованию:** собрать дифф трейсов
+  `(state, direction, id, payload)` с нормализацией случайностей (UUID, имя,
+  порт handshake, teleport id), показать владельцу таблицу расхождений
+  status+login+configuration+join и **не чинить ничего до подтверждения**.
+- Дифф-движок/отчёт `target/parity-report` — руками или тестом крейта.
 - Ручная проверка M2 владельцем: `cargo run -p server` с `client_jar` в
   `server.toml`, вход клиентом 26.3 — мир должен открыться без вылета
   (пока пустой: чанки нет, `TODO` до M3). Рекомендуется сразу сгенерировать

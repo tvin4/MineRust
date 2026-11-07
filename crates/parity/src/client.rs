@@ -16,7 +16,7 @@ use data::PacketIds;
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
 use flate2::Compression;
-use protocol::{decode_varint, encode_varint, Direction, ProtocolState, SetCompression};
+use protocol::{decode_varint, encode_varint, Direction, KeepAlive, ProtocolState, SetCompression};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::Instant;
@@ -27,6 +27,11 @@ use crate::trace::Trace;
 const MAX_BODY: usize = 16 * 1024 * 1024;
 
 /// One action of the client script. The script itself lives in the test.
+///
+/// Every step is unconditional except [`Step::Respond`], which covers the
+/// single optional exchange the parity plan needs: vanilla's known-packs
+/// probe does not exist in our own server (Variant A), so the script must be
+/// able to walk past it without failing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
     /// Send a packet; `to` switches the protocol state afterwards.
@@ -44,6 +49,18 @@ pub enum Step {
         id: u32,
         /// How long to wait for it.
         timeout: Duration,
+    },
+    /// Answer a server probe if it arrives within `timeout`; when it does
+    /// not (our server sends no probe), the step just ends quietly.
+    Respond {
+        /// Serverbound-side id being answered.
+        id: u32,
+        /// How long to wait for the probe.
+        timeout: Duration,
+        /// Packet id of the reply.
+        reply_id: u32,
+        /// Raw payload of the reply.
+        reply_payload: Vec<u8>,
     },
     /// Record packets until the line has been quiet for `quiet`, but never
     /// longer than `limit` in total; succeeds either way.
@@ -64,6 +81,16 @@ impl Step {
     /// A wait step; see [`Step::Wait`].
     pub fn wait(id: u32, timeout: Duration) -> Self {
         Self::Wait { id, timeout }
+    }
+
+    /// A probe-answer step; see [`Step::Respond`].
+    pub fn respond(id: u32, timeout: Duration, reply_id: u32, reply_payload: Vec<u8>) -> Self {
+        Self::Respond {
+            id,
+            timeout,
+            reply_id,
+            reply_payload,
+        }
     }
 
     /// A quiet-drain step; see [`Step::Quiet`].
@@ -136,6 +163,10 @@ pub struct Client {
     /// Reverse map for readable names in the trace: (state, direction, id).
     names: HashMap<(u8, u8, u32), &'static str>,
     trace: Trace,
+    /// Packets already satisfied for wait steps: waits check the recorded
+    /// tail first, so packets read by a previous (possibly timed-out) step
+    /// are never lost or read twice.
+    read_pos: usize,
 }
 
 impl Client {
@@ -172,6 +203,7 @@ impl Client {
             ids,
             names,
             trace: Trace::new(target),
+            read_pos: 0,
         })
     }
 
@@ -186,7 +218,20 @@ impl Client {
                     }
                 }
                 Step::Wait { id, timeout } => self.wait_for(*id, *timeout).await?,
-                Step::Quiet { quiet, limit } => self.drain(*quiet, *limit).await?,
+                Step::Respond {
+                    id,
+                    timeout,
+                    reply_id,
+                    reply_payload,
+                } => {
+                    self.respond(*id, *timeout, *reply_id, reply_payload)
+                        .await?
+                }
+                Step::Quiet { quiet, limit } => {
+                    self.drain(*quiet, *limit).await?;
+                    // The drain deliberately read everything up to silence.
+                    self.read_pos = self.trace.len();
+                }
             }
         }
         Ok(())
@@ -234,12 +279,37 @@ impl Client {
         }
     }
 
-    /// Waits until a packet with `id` is recorded.
+    /// Finds a recorded clientbound packet `id` of the current state that no
+    /// earlier wait step has consumed yet.
+    fn find_since(&self, id: u32) -> Option<usize> {
+        let state = self.state.into();
+        self.trace
+            .packets
+            .iter()
+            .enumerate()
+            .skip(self.read_pos)
+            .find(|(_, entry)| {
+                entry.state == state
+                    && entry.direction == crate::trace::TraceDirection::Clientbound
+                    && entry.id == id
+            })
+            .map(|(index, _)| index)
+    }
+
+    /// Waits until a clientbound packet with `id` arrives, or finds one a
+    /// previous step already recorded but did not consume.
     async fn wait_for(&mut self, id: u32, timeout: Duration) -> Result<(), ClientError> {
+        if let Some(index) = self.find_since(id) {
+            self.read_pos = index + 1;
+            return Ok(());
+        }
         let until = Instant::now() + timeout;
         loop {
             match self.recv_until(until).await? {
-                Some((got, _)) if got == id => return Ok(()),
+                Some((got, _)) if got == id => {
+                    self.read_pos = self.trace.len();
+                    return Ok(());
+                }
                 Some(_) => {}
                 None => {
                     return Err(ClientError::Timeout {
@@ -247,6 +317,33 @@ impl Client {
                         what: format!("packet 0x{id:X}"),
                     });
                 }
+            }
+        }
+    }
+
+    /// Answers a server probe when it arrives within `timeout`, and does
+    /// nothing (quietly continuing the script) when it never does.
+    async fn respond(
+        &mut self,
+        id: u32,
+        timeout: Duration,
+        reply_id: u32,
+        reply_payload: &[u8],
+    ) -> Result<(), ClientError> {
+        if let Some(index) = self.find_since(id) {
+            self.read_pos = index + 1;
+            return self.send(reply_id, reply_payload).await;
+        }
+        let until = Instant::now() + timeout;
+        loop {
+            match self.recv_until(until).await? {
+                Some((got, _)) if got == id => {
+                    self.read_pos = self.trace.len();
+                    return self.send(reply_id, reply_payload).await;
+                }
+                Some(_) => {}
+                // The server performs no such exchange: move on.
+                None => return Ok(()),
             }
         }
     }
@@ -295,6 +392,10 @@ impl Client {
 
         self.record(Direction::Clientbound, id, &payload);
         self.apply_set_compression(id, &payload)?;
+        // Transport level, like compression: a real client acknowledges
+        // play keep-alives, and without an acknowledgement vanilla drops an
+        // idle recording after its ~30 second timeout.
+        self.ack_keep_alive(id, &payload).await?;
         Ok(Some((id, payload)))
     }
 
@@ -351,6 +452,18 @@ impl Client {
         // A negative threshold means "compression off" in the protocol.
         self.threshold = if threshold < 0 { None } else { Some(threshold) };
         Ok(())
+    }
+
+    /// Echoes a play Keep Alive back as the serverbound Keep Alive.
+    ///
+    /// Only the play state is covered: the scripts stay fast enough in the
+    /// other states for vanilla to keep the connection open on its own.
+    async fn ack_keep_alive(&mut self, id: u32, payload: &[u8]) -> Result<(), ClientError> {
+        if self.state != ProtocolState::Play || id != self.ids.id(KeepAlive::KEY) {
+            return Ok(());
+        }
+        let reply_id = self.ids.id(KeepAlive::SERVERBOUND_KEY);
+        self.send(reply_id, payload).await
     }
 
     /// Builds one wire frame, compressing it when vanilla's threshold is on.
@@ -451,6 +564,74 @@ mod tests {
     use super::*;
 
     const STATE: ProtocolState = ProtocolState::Login;
+
+    /// Reads one varint-prefixed frame body off a socket (fake server side).
+    async fn read_frame(sock: &mut tokio::net::TcpStream) -> Vec<u8> {
+        use tokio::io::AsyncReadExt;
+        let mut length = 0usize;
+        let mut shift = 0;
+        loop {
+            let mut byte = [0u8; 1];
+            sock.read_exact(&mut byte).await.expect("length byte");
+            length |= usize::from(byte[0] & 0x7F) << shift;
+            if byte[0] & 0x80 == 0 {
+                break;
+            }
+            shift += 7;
+        }
+        let mut body = vec![0u8; length];
+        sock.read_exact(&mut body).await.expect("frame body");
+        body
+    }
+
+    /// A play Keep Alive must be answered with the same payload so vanilla
+    /// does not time an idle recording out.
+    #[tokio::test]
+    async fn play_keep_alive_is_acknowledged() {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
+        let addr = listener.local_addr().expect("local addr");
+        let ids = Arc::new(PacketIds::compiled());
+        let server_ids = Arc::clone(&ids);
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.expect("accept");
+            // The script's first step: one handshake frame.
+            read_frame(&mut sock).await;
+            let payload = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
+            let frame =
+                protocol::encode_frame(server_ids.id(KeepAlive::KEY), &payload).expect("frame");
+            sock.write_all(&frame).await.expect("keep-alive written");
+            let ack = read_frame(&mut sock).await;
+            let (id, consumed) = protocol::decode_varint(&ack).expect("ack id");
+            assert_eq!(
+                id,
+                i32::try_from(server_ids.id(KeepAlive::SERVERBOUND_KEY)).expect("fits i32")
+            );
+            assert_eq!(&ack[consumed..], payload, "ack echoes the payload");
+            // Hold the connection open until the client's drain ends: an
+            // EOF on the wire is a lost connection, not a normal ending.
+            let _ = done_rx.await;
+        });
+
+        let mut client = Client::connect("loopback", addr, Arc::clone(&ids))
+            .await
+            .expect("connect");
+        let steps = [
+            Step::send(0x00, Vec::new(), Some(ProtocolState::Play)),
+            Step::quiet(Duration::from_millis(500), Duration::from_secs(5)),
+        ];
+        client.run(&steps).await.expect("script runs");
+        drop(done_tx);
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("fake server finishes")
+            .expect("fake server task");
+    }
 
     #[test]
     fn split_packet_reads_id_then_payload() {

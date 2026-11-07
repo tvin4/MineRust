@@ -25,6 +25,46 @@ pub const CONFIGURATION_PLUGIN_MESSAGE: PacketKey = PacketKey::serverbound(
     0x02,
 );
 
+/// Key of the clientbound Plugin Message packet in the configuration state
+/// (vanilla sends its brand on this channel).
+pub const CONFIGURATION_CLIENTBOUND_PLUGIN_MESSAGE: PacketKey = PacketKey::clientbound(
+    ProtocolState::Configuration,
+    "minecraft:custom_payload",
+    0x01,
+);
+
+/// Key of the clientbound Known Packs probe: vanilla asks which data packs
+/// the client already has, and the answer decides how registries are sent.
+///
+/// Id from the game's own `reports/packets.json`; the payload layout of the
+/// reply was observed in the parity trace.
+// SOURCE: wiki, unverified (the reply format is echoed from vanilla's
+// probe; only a successful parity run proves it).
+pub const SELECT_KNOWN_PACKS: PacketKey = PacketKey::clientbound(
+    ProtocolState::Configuration,
+    "minecraft:select_known_packs",
+    0x0f,
+);
+
+/// Key of the serverbound Known Packs answer: the client lists the packs it
+/// already has (or an empty list), which decides whether the server sends
+/// full registry data.
+///
+/// Id from the game's own `reports/packets.json`.
+pub const SELECT_KNOWN_PACKS_SERVERBOUND: PacketKey = PacketKey::serverbound(
+    ProtocolState::Configuration,
+    "minecraft:select_known_packs",
+    0x07,
+);
+
+/// Key of the clientbound Enabled Features packet vanilla sends during the
+/// configuration exchange.
+pub const UPDATE_ENABLED_FEATURES: PacketKey = PacketKey::clientbound(
+    ProtocolState::Configuration,
+    "minecraft:update_enabled_features",
+    0x0d,
+);
+
 /// One entry of the Registry Data packet.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RegistryEntry {

@@ -18,7 +18,9 @@ mod status;
 
 pub use configuration::{
     ClientInformation, FinishAck, FinishConfiguration, RegistryData, RegistryEntry, RegistryTag,
-    TagRegistry, UpdateTags, CONFIGURATION_PLUGIN_MESSAGE,
+    TagRegistry, UpdateTags, CONFIGURATION_CLIENTBOUND_PLUGIN_MESSAGE,
+    CONFIGURATION_PLUGIN_MESSAGE, SELECT_KNOWN_PACKS, SELECT_KNOWN_PACKS_SERVERBOUND,
+    UPDATE_ENABLED_FEATURES,
 };
 pub use handshake::{Handshake, NextState};
 pub use login::{
@@ -63,6 +65,10 @@ pub fn used_packet_keys() -> &'static [PacketKey] {
         FinishAck::KEY,
         ClientInformation::KEY,
         CONFIGURATION_PLUGIN_MESSAGE,
+        CONFIGURATION_CLIENTBOUND_PLUGIN_MESSAGE,
+        SELECT_KNOWN_PACKS,
+        SELECT_KNOWN_PACKS_SERVERBOUND,
+        UPDATE_ENABLED_FEATURES,
         // play, clientbound
         LoginPlay::KEY,
         SetDefaultSpawnPosition::KEY,
