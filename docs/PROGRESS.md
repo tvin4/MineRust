@@ -332,14 +332,54 @@ errors» (не распарсились dimension_type/enchantment/sulfur_cube_a
 
 - Тестов без ignored-срезов: 168 зелёных; `fmt`/`clippy -D warnings` чистые.
 
+## Часть 3, шаг 3.0: обследование шаблона мира (выполнено)
+
+- [x] `crates/parity/tests/world_inspect.rs` (`#[ignore]`, запуск
+      `cargo test -p parity --test world_inspect -- --ignored --nocapture`,
+      вывод в `target/parity/world-inspect.txt`): NBT-деревья `level.dat`,
+      `world_gen_settings.dat`, `game_rules.dat` + ведомость всех `.mca`.
+  - Шаблон: 4 region-файла, **529 чанков** в квадрате 23×23 (x −5..17,
+    z −13..9), все zlib, `DataVersion=5023`, `Version.Name = "26.3"`.
+  - Корень чанка: `DataVersion, Heightmaps, InhabitedTime, LastUpdate,
+    PostProcessing, **Status** (с большой буквы), block_entities,
+    block_ticks, entities, fluid_ticks, sections(24), structures,
+    xPos, yPos, zPos`.
+  - `Status` по чанкам: `structure_starts` 480, `biomes` 24, `terrain` 16,
+    `initialize_light` 8, `full` 1; палитры блоков и биомов — имена (+свойства)
+    в самом NBT (подтверждение правки 2 плана: для сети нужен маппинг на
+    state id, т.е. `reports/blocks.json`).
+  - **Свет (`BlockLight`/`SkyLight`) есть только у 9 из 529 чанков** — ровно
+    3×3 вокруг спавна (5..7, −3..−1); эти же 9 чанков ваниль прислала первым
+    батчем при джоине.
+- [x] (правка плана 4, эксперимент) Позиция игрока **плавала** между
+      прогонами: `(89.5,131,−24.5)` → `(91.5,140,−32.5)` (центр чанков
+      `(5,−2)` → `(5,−3)`), при одинаковом `set_default_spawn_position` из
+      level.dat `[96,145,−32]`. Имя правила найдено в данных 26.3
+      (реестр `minecraft:game_rule`): `minecraft:respawn_radius` = 10 →
+      обнулён в `game_rules.dat` шаблона (бэкап в temp). После: **2 прогона
+      из 2** дают `(96.5,145,−31.5)` (= блок спавна), центр `(6,−2)`,
+      порядок 9 чанков байт-стабилен. Diff хэшей шаблона до/после прогона:
+      менялся **только** `game_rules.dat` (правка), прогоны шаблон не трогают
+      (`prepare_world` копирует его в рабочую копию ванили).
+- [x] (правка плана 3, по трейсу) Первый батч — **9 чанков**, бот запрашивает
+      view distance **8** (до 17×17 = 289 потенциально): `9 ≠ весь радиус`,
+      плюс тело `chunk_batch_finished` = `09` = размеру пачки. Ограничение:
+      9 = ровно число «готовых» чанков (со светом), поэтому одно число не
+      разделяет гипотезы «окно первой порции» vs «что было готово»; sb
+      `chunk_batch_received` в трейсе нет — бот-клиент его не шлёт (все 8 sb
+      — логин/конфигурация/keep-alive).
+- **Правки плана учтены:** `blocks.json` отсутствует в `C:\MineRust-data\
+  reports` — блокер палитры (правка 2); chанк другой версии → явная ошибка
+  (6); `set_chunk_cache_center` — две VarInt, расхождений нет (1); свет и
+  `light_update` (открытые вопросы 1–2) — данные выше; отсутствующих чанков
+  отправлять не будем (5).
+
 ## Что дальше
 
-- **Часть 2, п.2.6 (следующий шаг):** перегнать срезы (`cargo test -p parity
-  --test join_slice -- --ignored`, `--test status_slice -- --ignored`),
-  перегенерировать отчёты (`cargo test -p parity --test diff_report --
-  --ignored`), показать владельцу обновлённую таблицу расхождений — и
-  **СТОП**, ждать ответа после живой проверки. ЧАСТЬ 3 (чанки) — только
-  после «часть 2 принята».
+- **Часть 3, шаг 3.1 (следующий, ждёт «обследование принято»):** крейт
+  `crates/world` — region-ридер `.mca` и модель чанка, палитра из
+  `reports/blocks.json` (нужна регенерация отчётов — см. блокеры), затем
+  3.2 кодеки `level_chunk_with_light`/batch/center в `protocol`.
 - Живая проверка: владелец запускает `cargo run -p server` (в логе `game
   data loaded (registries=32, ..., tag_registries=15)`), проверяет список
   серверов (теперь motd «A Minecraft Server», как у ванили) и вход клиентом
@@ -360,7 +400,18 @@ errors» (не распарсились dimension_type/enchantment/sulfur_cube_a
   unverified).
 - `hashed_seed` Login (play) = 0, пока у нас нет мира: формула уже сверена
   с трейсом ванили (`protocol::hashed_seed`), значение придёт с
-  level.dat в части 3.
+  level.dat в части 3. (В шаблоне `level.dat`: spawn `[96,145,−32]`,
+  `world_gen_settings.dat`: seed 12345 → base-64 из трейса сверять оттуда.)
+- **Блокер палитры чанков:** `C:\MineRust-data\reports\blocks.json`
+  отсутствует (там только `packets.json`/`registries.json`) — нужен повторный
+  прогон `tools\generate-reports.ps1` (владелец запускает его со своим
+  version-json; вывод `--reports` включает `blocks.json`) и путь к нему в
+  `server.toml` (правка 2 плана части 3). Без него mapping имя+свойства →
+  state id для network-палитры/секций чанка сделать не из чего.
+- `parity` прогон `join_slice` оставляет живым `target\debug\server.exe`
+  (пришлось убивать вручную перед `cargo test --workspace` — файл не
+  удалялся при ребилде): в скрипте джоина сервер останавливается не
+  всегда (флейк, разобрать отдельно).
 - Join-состав всё ещё расходится (вензель, чанки, 3748 vs 46 пакетов и
   `select_known_packs`) — это ожидание части 3/решений из
   `docs/DECISIONS.md`, не забытые правки.
