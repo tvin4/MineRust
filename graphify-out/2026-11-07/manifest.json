@@ -25,8 +25,8 @@
     "semantic_hash": ""
   },
   "docs/PROGRESS.md": {
-    "mtime": 1794062744.738464,
-    "ast_hash": "1bed7170fedde12dc3e97225f8e5d293",
+    "mtime": 1794063869.9247556,
+    "ast_hash": "3ac5477e77e25bb2a07b2a36b77ec869",
     "semantic_hash": ""
   },
   "crates/protocol/src/codec.rs": {
@@ -195,8 +195,8 @@
     "semantic_hash": ""
   },
   "crates/parity/src/lib.rs": {
-    "mtime": 1794058966.3879087,
-    "ast_hash": "237af3e0115f01ccef45abbf48ae303d",
+    "mtime": 1794063191.339361,
+    "ast_hash": "c46a2b2b087be439630e1d87c7d94342",
     "semantic_hash": ""
   },
   "crates/parity/src/vanilla.rs": {
@@ -215,8 +215,8 @@
     "semantic_hash": ""
   },
   "crates/parity/src/trace.rs": {
-    "mtime": 1794059001.5095553,
-    "ast_hash": "c17c13dddb6daf7f3eb95432f4345fd8",
+    "mtime": 1794063191.4525836,
+    "ast_hash": "b258a50c15f83c646084a5787465f374",
     "semantic_hash": ""
   },
   "crates/parity/tests/status_slice.rs": {
@@ -227,6 +227,16 @@
   "crates/parity/tests/join_slice.rs": {
     "mtime": 1794061905.0326602,
     "ast_hash": "724339535426002738f1873c6a4382fc",
+    "semantic_hash": ""
+  },
+  "crates/parity/src/diff.rs": {
+    "mtime": 1794063480.227958,
+    "ast_hash": "e8b3befbfae4acba1232ec52277eaddd",
+    "semantic_hash": ""
+  },
+  "crates/parity/tests/diff_report.rs": {
+    "mtime": 1794063235.100933,
+    "ast_hash": "2d32b5d585b03e724f7f8957ec3663f2",
     "semantic_hash": ""
   }
 }

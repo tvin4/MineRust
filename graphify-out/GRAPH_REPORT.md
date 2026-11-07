@@ -1,16 +1,16 @@
 # Graph Report - MineRust  (2026-11-07)
 
 ## Corpus Check
-- 45 files · ~39,864 words
+- 47 files · ~41,722 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 772 nodes · 1967 edges · 23 communities
-- Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 96 edges (avg confidence: 0.8)
+- 804 nodes · 2060 edges · 25 communities
+- Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 101 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `5da7009e`
+- Built from commit: `c0b50673`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -27,9 +27,11 @@
 - status.rs
 - NbtError
 - main.rs
+- PacketKey
+- status.rs
 - encode_frame
+- PacketIds
 - frame.rs
-- vanilla.rs
 - configuration.rs
 - Uuid
 - Client
@@ -46,7 +48,7 @@
 7. `DataError` - 23 edges
 8. `Client` - 23 edges
 9. `GameData` - 21 edges
-10. `Trace` - 19 edges
+10. `Trace` - 21 edges
 
 ## Surprising Connections (you probably didn't know these)
 - `load_the_real_client_jar()` --calls--> `load_from_jar()`  [INFERRED]
@@ -63,7 +65,7 @@
 ## Import Cycles
 - None detected.
 
-## Communities (23 total, 0 thin omitted)
+## Communities (25 total, 0 thin omitted)
 
 ### Community 0 - "ARCHITECTURE.md — многопоточный Minecraft на Rust"
 Cohesion: 0.20
@@ -87,7 +89,7 @@ Nodes (32): Cursor<'a>, decode_reports_consumed_bytes(), depth_limit_allows_512_
 
 ### Community 5 - "CodecError"
 Cohesion: 0.08
-Nodes (25): decode_varint(), encode_varint(), fixed_width_integers_are_big_endian(), ints_and_floats_are_big_endian(), nbt_roundtrips_through_the_packet_cursor(), PacketReader<'a>, PacketWriter, Position (+17 more)
+Nodes (27): CodecError, decode_varint(), encode_varint(), fixed_width_integers_are_big_endian(), ints_and_floats_are_big_endian(), nbt_roundtrips_through_the_packet_cursor(), PacketReader<'a>, PacketWriter (+19 more)
 
 ### Community 7 - "handshake.rs"
 Cohesion: 0.26
@@ -98,12 +100,12 @@ Cohesion: 0.11
 Nodes (36): ConfigError, example_toml(), load_config(), parses_a_valid_config(), parses_vanilla_paths(), rejects_an_empty_client_jar_path(), rejects_an_empty_report_path(), rejects_empty_listen_address() (+28 more)
 
 ### Community 9 - "login.rs"
-Cohesion: 0.06
-Nodes (52): CodecError, check_frame_len(), decode_frame_len(), empty_payload_frame(), encode_frame(), frame_roundtrip(), length_field_over_three_bytes_is_rejected(), maximum_frame_length_is_accepted() (+44 more)
+Cohesion: 0.09
+Nodes (39): check_frame_len(), decode_frame(), decode_frame_len(), empty_payload_frame(), encode_frame(), frame_roundtrip(), length_field_over_three_bytes_is_rejected(), maximum_frame_length_is_accepted() (+31 more)
 
 ### Community 10 - "status.rs"
-Cohesion: 0.11
-Nodes (30): GameData, RegistryData, RegistryEntry, BTreeMap, NbtTag, Option, String, Vec (+22 more)
+Cohesion: 0.19
+Nodes (20): handshake(), read_until_close(), recv(), recv_frame(), Arc, SocketAddr, TcpStream, Vec (+12 more)
 
 ### Community 11 - "NbtError"
 Cohesion: 0.14
@@ -113,17 +115,25 @@ Nodes (35): DataError, Error, String, collect_tags(), load_from_jar(), load_from
 Cohesion: 0.52
 Nodes (6): main(), parse_args(), PathBuf, Result, try_main(), ExitCode
 
+### Community 13 - "PacketKey"
+Cohesion: 0.15
+Nodes (12): describe_shows_state_direction_and_name(), Direction, every_state_and_direction_has_a_distinct_index(), keys_of_the_same_packet_in_two_directions_differ(), PacketKey, ProtocolState, Self, String (+4 more)
+
+### Community 14 - "status.rs"
+Cohesion: 0.18
+Nodes (12): ping_and_pong_roundtrip_payloads(), PingRequest, PongResponse, Result, Self, String, Vec, status_request_frame_has_no_fields() (+4 more)
+
 ### Community 15 - "encode_frame"
-Cohesion: 0.08
-Nodes (40): jar_exactly(), jar_with(), packets_report_json(), String, Vec, write_jar(), load_packets_report(), packets_from_json() (+32 more)
+Cohesion: 0.12
+Nodes (27): jar_exactly(), jar_with(), packets_report_json(), String, Vec, write_jar(), packets_from_json(), a_registry_without_entries_is_an_error() (+19 more)
+
+### Community 16 - "PacketIds"
+Cohesion: 0.06
+Nodes (54): Box, load_packets_report(), PacketIds, parse_report(), ProtocolId, ReportFile, AsRef, HashMap (+46 more)
 
 ### Community 18 - "frame.rs"
-Cohesion: 0.12
-Nodes (33): PacketIds, configuration_state(), handle_connection(), login_state(), play_state(), Arc, R, Result (+25 more)
-
-### Community 19 - "vanilla.rs"
 Cohesion: 0.08
-Nodes (39): Box, EnvError, load_parity_env(), ParityEnv, parse_server_port(), Error, Option, PathBuf (+31 more)
+Nodes (41): GameData, RegistryData, RegistryEntry, BTreeMap, NbtTag, Option, String, Vec (+33 more)
 
 ### Community 21 - "configuration.rs"
 Cohesion: 0.13
@@ -138,8 +148,8 @@ Cohesion: 0.16
 Nodes (24): build_frame(), Client, ClientError, packets_at_the_threshold_are_zlib_compressed(), play_keep_alive_is_acknowledged(), read_frame(), read_varint_prefixed(), Arc (+16 more)
 
 ### Community 24 - "Trace"
-Cohesion: 0.06
-Nodes (32): Option, from_hex(), hex_digit(), hex_roundtrips(), HexError, Error, Option, Path (+24 more)
+Cohesion: 0.08
+Nodes (48): count_differences_are_reported_per_packet_kind(), CountRow, diff_traces(), direction_name(), entry(), group(), handshake_port_difference_is_normalised_away(), hex_prefix() (+40 more)
 
 ### Community 44 - "SOURCES.md — аудит источников данных (M1–M2, по состоянию на пред-M3)"
 Cohesion: 0.22
@@ -152,12 +162,12 @@ Nodes (8): SOURCES.md — аудит источников данных (M1–M2,
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `CodecError` connect `login.rs` to `lib.rs`, `CodecError`, `handshake.rs`, `frame.rs`, `configuration.rs`, `Uuid`, `Client`?**
-  _High betweenness centrality (0.359) - this node is a cross-community bridge._
-- **Why does `NbtError` connect `lib.rs` to `MineRust`, `login.rs`, `NbtError`?**
-  _High betweenness centrality (0.242) - this node is a cross-community bridge._
-- **Why does `DataError` connect `NbtError` to `lib.rs`, `config.rs`, `encode_frame`, `vanilla.rs`, `Trace`?**
-  _High betweenness centrality (0.179) - this node is a cross-community bridge._
+- **Why does `CodecError` connect `CodecError` to `lib.rs`, `handshake.rs`, `login.rs`, `status.rs`, `frame.rs`, `configuration.rs`, `Uuid`, `Client`?**
+  _High betweenness centrality (0.347) - this node is a cross-community bridge._
+- **Why does `NbtError` connect `lib.rs` to `MineRust`, `NbtError`, `CodecError`?**
+  _High betweenness centrality (0.231) - this node is a cross-community bridge._
+- **Why does `DataError` connect `NbtError` to `PacketIds`, `config.rs`, `lib.rs`, `encode_frame`?**
+  _High betweenness centrality (0.173) - this node is a cross-community bridge._
 - **Are the 24 inferred relationships involving `encode_frame()` (e.g. with `encode_varint()` and `.to_frame()`) actually correct?**
   _`encode_frame()` has 24 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `Главные правила`, `Юридические границы (строго)`, `Стиль кода` to the rest of the system?**

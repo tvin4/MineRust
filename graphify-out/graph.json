@@ -142,8 +142,8 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "crates_data_src_lib",
-      "community": 10,
-      "community_name": "status.rs",
+      "community": 18,
+      "community_name": "frame.rs",
       "norm_label": "lib.rs"
     },
     {
@@ -153,8 +153,8 @@
       "source_location": "L41",
       "_origin": "ast",
       "id": "crates_data_src_lib_registryentry",
-      "community": 10,
-      "community_name": "status.rs",
+      "community": 18,
+      "community_name": "frame.rs",
       "norm_label": "registryentry"
     },
     {
@@ -164,8 +164,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_data_src_lib_rs_string",
-      "community": 10,
-      "community_name": "status.rs",
+      "community": 18,
+      "community_name": "frame.rs",
       "norm_label": "string"
     },
     {
@@ -175,8 +175,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_data_src_lib_rs_nbttag",
-      "community": 10,
-      "community_name": "status.rs",
+      "community": 18,
+      "community_name": "frame.rs",
       "norm_label": "nbttag"
     },
     {
@@ -186,8 +186,8 @@
       "source_location": "L52",
       "_origin": "ast",
       "id": "crates_data_src_lib_registrydata",
-      "community": 10,
-      "community_name": "status.rs",
+      "community": 18,
+      "community_name": "frame.rs",
       "norm_label": "registrydata"
     },
     {
@@ -197,8 +197,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_data_src_lib_rs_vec",
-      "community": 10,
-      "community_name": "status.rs",
+      "community": 18,
+      "community_name": "frame.rs",
       "norm_label": "vec"
     },
     {
@@ -208,8 +208,8 @@
       "source_location": "L59",
       "_origin": "ast",
       "id": "crates_data_src_lib_registrydata_entries",
-      "community": 10,
-      "community_name": "status.rs",
+      "community": 18,
+      "community_name": "frame.rs",
       "norm_label": ".entries()"
     },
     {
@@ -219,8 +219,8 @@
       "source_location": "L64",
       "_origin": "ast",
       "id": "crates_data_src_lib_registrydata_entry_id",
-      "community": 10,
-      "community_name": "status.rs",
+      "community": 18,
+      "community_name": "frame.rs",
       "norm_label": ".entry_id()"
     },
     {
@@ -230,8 +230,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_data_src_lib_rs_option",
-      "community": 10,
-      "community_name": "status.rs",
+      "community": 18,
+      "community_name": "frame.rs",
       "norm_label": "option"
     },
     {
@@ -241,8 +241,8 @@
       "source_location": "L78",
       "_origin": "ast",
       "id": "crates_data_src_lib_gamedata",
-      "community": 10,
-      "community_name": "status.rs",
+      "community": 18,
+      "community_name": "frame.rs",
       "norm_label": "gamedata"
     },
     {
@@ -252,8 +252,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_data_src_lib_rs_btreemap",
-      "community": 10,
-      "community_name": "status.rs",
+      "community": 18,
+      "community_name": "frame.rs",
       "norm_label": "btreemap"
     },
     {
@@ -263,8 +263,8 @@
       "source_location": "L86",
       "_origin": "ast",
       "id": "crates_data_src_lib_gamedata_registries",
-      "community": 10,
-      "community_name": "status.rs",
+      "community": 18,
+      "community_name": "frame.rs",
       "norm_label": ".registries()"
     },
     {
@@ -274,8 +274,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "iterator",
-      "community": 10,
-      "community_name": "status.rs",
+      "community": 18,
+      "community_name": "frame.rs",
       "norm_label": "iterator"
     },
     {
@@ -285,8 +285,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "item",
-      "community": 10,
-      "community_name": "status.rs",
+      "community": 18,
+      "community_name": "frame.rs",
       "norm_label": "item"
     },
     {
@@ -296,8 +296,8 @@
       "source_location": "L91",
       "_origin": "ast",
       "id": "crates_data_src_lib_gamedata_registry",
-      "community": 10,
-      "community_name": "status.rs",
+      "community": 18,
+      "community_name": "frame.rs",
       "norm_label": ".registry()"
     },
     {
@@ -307,8 +307,8 @@
       "source_location": "L98",
       "_origin": "ast",
       "id": "crates_data_src_lib_gamedata_tags",
-      "community": 10,
-      "community_name": "status.rs",
+      "community": 18,
+      "community_name": "frame.rs",
       "norm_label": ".tags()"
     },
     {
@@ -505,8 +505,8 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "crates_data_src_packets",
-      "community": 15,
-      "community_name": "encode_frame",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "packets.rs"
     },
     {
@@ -516,8 +516,8 @@
       "source_location": "L25",
       "_origin": "ast",
       "id": "crates_data_src_packets_protocolid",
-      "community": 15,
-      "community_name": "encode_frame",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "protocolid"
     },
     {
@@ -527,8 +527,8 @@
       "source_location": "L35",
       "_origin": "ast",
       "id": "crates_data_src_packets_statereport",
-      "community": 15,
-      "community_name": "encode_frame",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "statereport"
     },
     {
@@ -538,8 +538,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_data_src_packets_rs_hashmap",
-      "community": 15,
-      "community_name": "encode_frame",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "hashmap"
     },
     {
@@ -549,8 +549,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_data_src_packets_rs_string",
-      "community": 15,
-      "community_name": "encode_frame",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "string"
     },
     {
@@ -560,8 +560,8 @@
       "source_location": "L49",
       "_origin": "ast",
       "id": "crates_data_src_packets_reportfile",
-      "community": 15,
-      "community_name": "encode_frame",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "reportfile"
     },
     {
@@ -571,8 +571,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_data_src_packets_rs_option",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "option"
     },
     {
@@ -582,8 +582,8 @@
       "source_location": "L68",
       "_origin": "ast",
       "id": "crates_data_src_packets_packetids",
-      "community": 18,
-      "community_name": "frame.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "packetids"
     },
     {
@@ -593,8 +593,8 @@
       "source_location": "L75",
       "_origin": "ast",
       "id": "crates_data_src_packets_stateids",
-      "community": 15,
-      "community_name": "encode_frame",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "stateids"
     },
     {
@@ -604,8 +604,8 @@
       "source_location": "L85",
       "_origin": "ast",
       "id": "crates_data_src_packets_packetids_compiled",
-      "community": 15,
-      "community_name": "encode_frame",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": ".compiled()"
     },
     {
@@ -615,8 +615,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_data_src_packets_rs_self",
-      "community": 15,
-      "community_name": "encode_frame",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "self"
     },
     {
@@ -626,8 +626,8 @@
       "source_location": "L92",
       "_origin": "ast",
       "id": "crates_data_src_packets_packetids_len",
-      "community": 18,
-      "community_name": "frame.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": ".len()"
     },
     {
@@ -637,8 +637,8 @@
       "source_location": "L101",
       "_origin": "ast",
       "id": "crates_data_src_packets_packetids_is_empty",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": ".is_empty()"
     },
     {
@@ -648,8 +648,8 @@
       "source_location": "L106",
       "_origin": "ast",
       "id": "crates_data_src_packets_packetids_lookup",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": ".lookup()"
     },
     {
@@ -659,8 +659,8 @@
       "source_location": "L115",
       "_origin": "ast",
       "id": "crates_data_src_packets_packetids_id",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": ".id()"
     },
     {
@@ -670,8 +670,8 @@
       "source_location": "L124",
       "_origin": "ast",
       "id": "crates_data_src_packets_packetids_verify",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": ".verify()"
     },
     {
@@ -681,8 +681,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_data_src_packets_rs_result",
-      "community": 15,
-      "community_name": "encode_frame",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "result"
     },
     {
@@ -692,8 +692,8 @@
       "source_location": "L141",
       "_origin": "ast",
       "id": "crates_data_src_packets_load_packets_report",
-      "community": 15,
-      "community_name": "encode_frame",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "load_packets_report()"
     },
     {
@@ -703,8 +703,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_data_src_packets_rs_asref",
-      "community": 15,
-      "community_name": "encode_frame",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "asref"
     },
     {
@@ -714,8 +714,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_data_src_packets_rs_path",
-      "community": 15,
-      "community_name": "encode_frame",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "path"
     },
     {
@@ -736,8 +736,8 @@
       "source_location": "L157",
       "_origin": "ast",
       "id": "crates_data_src_packets_parse_report",
-      "community": 15,
-      "community_name": "encode_frame",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "parse_report()"
     },
     {
@@ -1176,8 +1176,8 @@
       "source_location": "L360",
       "_origin": "ast",
       "id": "crates_data_src_tests_compiled_packet_ids_match_the_real_report",
-      "community": 15,
-      "community_name": "encode_frame",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "compiled_packet_ids_match_the_real_report()"
     },
     {
@@ -1385,8 +1385,8 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "crates_net_src_error",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 18,
+      "community_name": "frame.rs",
       "norm_label": "error.rs"
     },
     {
@@ -2039,14 +2039,300 @@
       "norm_label": "packets_at_the_threshold_are_zlib_compressed()"
     },
     {
+      "label": "diff.rs",
+      "file_type": "code",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L1",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "diff.rs"
+    },
+    {
+      "label": "CountRow",
+      "file_type": "code",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L20",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_countrow",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "countrow"
+    },
+    {
+      "label": "Option",
+      "file_type": "code",
+      "source_file": "",
+      "source_location": "",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_rs_option",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "option"
+    },
+    {
+      "label": "String",
+      "file_type": "code",
+      "source_file": "",
+      "source_location": "",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_rs_string",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "string"
+    },
+    {
+      "label": "PayloadRow",
+      "file_type": "code",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L37",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_payloadrow",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "payloadrow"
+    },
+    {
+      "label": "Vec",
+      "file_type": "code",
+      "source_file": "",
+      "source_location": "",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_rs_vec",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "vec"
+    },
+    {
+      "label": "TracesDiff",
+      "file_type": "code",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L56",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_tracesdiff",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "tracesdiff"
+    },
+    {
+      "label": ".is_identical()",
+      "file_type": "code",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L75",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_tracesdiff_is_identical",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": ".is_identical()"
+    },
+    {
+      "label": "diff_traces()",
+      "file_type": "code",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L81",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_diff_traces",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "diff_traces()"
+    },
+    {
+      "label": "group()",
+      "file_type": "code",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L141",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_group",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "group()"
+    },
+    {
+      "label": "BTreeMap",
+      "file_type": "code",
+      "source_file": "",
+      "source_location": "",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_rs_btreemap",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "btreemap"
+    },
+    {
+      "label": "normalize()",
+      "file_type": "code",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L165",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_normalize",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "normalize()"
+    },
+    {
+      "label": "normalize_port()",
+      "file_type": "code",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L180",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_normalize_port",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "normalize_port()"
+    },
+    {
+      "label": "normalize_first_varint()",
+      "file_type": "code",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L191",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_normalize_first_varint",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "normalize_first_varint()"
+    },
+    {
+      "label": "render_report()",
+      "file_type": "code",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L205",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_render_report",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "render_report()"
+    },
+    {
+      "label": "direction_name()",
+      "file_type": "code",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L274",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_direction_name",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "direction_name()"
+    },
+    {
+      "label": "packet_label()",
+      "file_type": "code",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L283",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_packet_label",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "packet_label()"
+    },
+    {
+      "label": "payload_label()",
+      "file_type": "code",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L289",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_payload_label",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "payload_label()"
+    },
+    {
+      "label": "label()",
+      "file_type": "code",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L294",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_label",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "label()"
+    },
+    {
+      "label": "hex_prefix()",
+      "file_type": "code",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L302",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_hex_prefix",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "hex_prefix()"
+    },
+    {
+      "label": "entry()",
+      "file_type": "code",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L316",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_entry",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "entry()"
+    },
+    {
+      "label": "trace()",
+      "file_type": "code",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L332",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_trace",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "trace()"
+    },
+    {
+      "label": "count_differences_are_reported_per_packet_kind()",
+      "file_type": "code",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L340",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_count_differences_are_reported_per_packet_kind",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "count_differences_are_reported_per_packet_kind()"
+    },
+    {
+      "label": "handshake_port_difference_is_normalised_away()",
+      "file_type": "code",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L382",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_handshake_port_difference_is_normalised_away",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "handshake_port_difference_is_normalised_away()"
+    },
+    {
+      "label": "teleport_id_difference_is_normalised_but_coordinates_are_not()",
+      "file_type": "code",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L407",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_teleport_id_difference_is_normalised_but_coordinates_are_not",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "teleport_id_difference_is_normalised_but_coordinates_are_not()"
+    },
+    {
+      "label": "report_lists_both_tables()",
+      "file_type": "code",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L440",
+      "_origin": "ast",
+      "id": "crates_parity_src_diff_report_lists_both_tables",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "report_lists_both_tables()"
+    },
+    {
       "label": "env.rs",
       "file_type": "code",
       "source_file": "crates/parity/src/env.rs",
       "source_location": "L1",
       "_origin": "ast",
       "id": "crates_parity_src_env",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "env.rs"
     },
     {
@@ -2056,8 +2342,8 @@
       "source_location": "L17",
       "_origin": "ast",
       "id": "crates_parity_src_env_enverror",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "enverror"
     },
     {
@@ -2067,8 +2353,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_parity_src_env_rs_string",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "string"
     },
     {
@@ -2078,8 +2364,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "box",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "box"
     },
     {
@@ -2089,8 +2375,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_parity_src_env_rs_pathbuf",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "pathbuf"
     },
     {
@@ -2100,8 +2386,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_parity_src_env_rs_error",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "error"
     },
     {
@@ -2111,8 +2397,8 @@
       "source_location": "L82",
       "_origin": "ast",
       "id": "crates_parity_src_env_parityenv",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "parityenv"
     },
     {
@@ -2122,8 +2408,8 @@
       "source_location": "L98",
       "_origin": "ast",
       "id": "crates_parity_src_env_parityenv_vanilla_port",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": ".vanilla_port()"
     },
     {
@@ -2133,8 +2419,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_parity_src_env_rs_result",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "result"
     },
     {
@@ -2144,8 +2430,8 @@
       "source_location": "L113",
       "_origin": "ast",
       "id": "crates_parity_src_env_parityenv_packet_ids",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": ".packet_ids()"
     },
     {
@@ -2155,8 +2441,8 @@
       "source_location": "L141",
       "_origin": "ast",
       "id": "crates_parity_src_env_parse_server_port",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "parse_server_port()"
     },
     {
@@ -2166,8 +2452,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_parity_src_env_rs_option",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "option"
     },
     {
@@ -2177,8 +2463,8 @@
       "source_location": "L150",
       "_origin": "ast",
       "id": "crates_parity_src_env_server_toml_path",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "server_toml_path()"
     },
     {
@@ -2188,8 +2474,8 @@
       "source_location": "L164",
       "_origin": "ast",
       "id": "crates_parity_src_env_load_parity_env",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "load_parity_env()"
     },
     {
@@ -2199,8 +2485,8 @@
       "source_location": "L222",
       "_origin": "ast",
       "id": "crates_parity_src_env_server_port_is_read_from_the_properties_text",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "server_port_is_read_from_the_properties_text()"
     },
     {
@@ -2210,8 +2496,8 @@
       "source_location": "L235",
       "_origin": "ast",
       "id": "crates_parity_src_env_server_toml_path_defaults_to_the_workspace_root_and_honours_the_env",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "server_toml_path_defaults_to_the_workspace_root_and_honours_the_env()"
     },
     {
@@ -2221,8 +2507,8 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "crates_parity_src_lib",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "lib.rs"
     },
     {
@@ -2375,8 +2661,8 @@
       "source_location": "L97",
       "_origin": "ast",
       "id": "crates_parity_src_trace_trace_record",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 13,
+      "community_name": "PacketKey",
       "norm_label": ".record()"
     },
     {
@@ -2798,14 +3084,80 @@
       "norm_label": "copy_dir_all_missing_source_is_an_error()"
     },
     {
+      "label": "diff_report.rs",
+      "file_type": "code",
+      "source_file": "crates/parity/tests/diff_report.rs",
+      "source_location": "L1",
+      "_origin": "ast",
+      "id": "crates_parity_tests_diff_report",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "diff_report.rs"
+    },
+    {
+      "label": "trace_dir()",
+      "file_type": "code",
+      "source_file": "crates/parity/tests/diff_report.rs",
+      "source_location": "L18",
+      "_origin": "ast",
+      "id": "crates_parity_tests_diff_report_trace_dir",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "trace_dir()"
+    },
+    {
+      "label": "PathBuf",
+      "file_type": "code",
+      "source_file": "",
+      "source_location": "",
+      "_origin": "ast",
+      "id": "crates_parity_tests_diff_report_rs_pathbuf",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "pathbuf"
+    },
+    {
+      "label": "report_dir()",
+      "file_type": "code",
+      "source_file": "crates/parity/tests/diff_report.rs",
+      "source_location": "L27",
+      "_origin": "ast",
+      "id": "crates_parity_tests_diff_report_report_dir",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "report_dir()"
+    },
+    {
+      "label": "report_pair()",
+      "file_type": "code",
+      "source_file": "crates/parity/tests/diff_report.rs",
+      "source_location": "L36",
+      "_origin": "ast",
+      "id": "crates_parity_tests_diff_report_report_pair",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "report_pair()"
+    },
+    {
+      "label": "renders_status_and_join_reports()",
+      "file_type": "code",
+      "source_file": "crates/parity/tests/diff_report.rs",
+      "source_location": "L63",
+      "_origin": "ast",
+      "id": "crates_parity_tests_diff_report_renders_status_and_join_reports",
+      "community": 24,
+      "community_name": "Trace",
+      "norm_label": "renders_status_and_join_reports()"
+    },
+    {
       "label": "join_slice.rs",
       "file_type": "code",
       "source_file": "crates/parity/tests/join_slice.rs",
       "source_location": "L1",
       "_origin": "ast",
       "id": "crates_parity_tests_join_slice",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "join_slice.rs"
     },
     {
@@ -2815,8 +3167,8 @@
       "source_location": "L35",
       "_origin": "ast",
       "id": "crates_parity_tests_join_slice_known_packs_reply",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "known_packs_reply()"
     },
     {
@@ -2826,8 +3178,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_parity_tests_join_slice_rs_vec",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "vec"
     },
     {
@@ -2837,8 +3189,8 @@
       "source_location": "L46",
       "_origin": "ast",
       "id": "crates_parity_tests_join_slice_parity_env_or_skip",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "parity_env_or_skip()"
     },
     {
@@ -2848,8 +3200,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_parity_tests_join_slice_rs_option",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "option"
     },
     {
@@ -2859,8 +3211,8 @@
       "source_location": "L57",
       "_origin": "ast",
       "id": "crates_parity_tests_join_slice_out_dir",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "out_dir()"
     },
     {
@@ -2870,8 +3222,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_parity_tests_join_slice_rs_pathbuf",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "pathbuf"
     },
     {
@@ -2881,8 +3233,8 @@
       "source_location": "L67",
       "_origin": "ast",
       "id": "crates_parity_tests_join_slice_join_steps",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "join_steps()"
     },
     {
@@ -2892,8 +3244,8 @@
       "source_location": "L133",
       "_origin": "ast",
       "id": "crates_parity_tests_join_slice_record_join",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "record_join()"
     },
     {
@@ -2903,8 +3255,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_parity_tests_join_slice_rs_arc",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "arc"
     },
     {
@@ -2914,8 +3266,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_parity_tests_join_slice_rs_socketaddr",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "socketaddr"
     },
     {
@@ -2925,8 +3277,8 @@
       "source_location": "L162",
       "_origin": "ast",
       "id": "crates_parity_tests_join_slice_start_ours",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "start_ours()"
     },
     {
@@ -2936,8 +3288,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_parity_tests_join_slice_rs_aborthandle",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "aborthandle"
     },
     {
@@ -2947,8 +3299,8 @@
       "source_location": "L181",
       "_origin": "ast",
       "id": "crates_parity_tests_join_slice_assert_joined",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "assert_joined()"
     },
     {
@@ -2958,8 +3310,8 @@
       "source_location": "L209",
       "_origin": "ast",
       "id": "crates_parity_tests_join_slice_join_slice_records_traces_for_both_servers",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "join_slice_records_traces_for_both_servers()"
     },
     {
@@ -2969,8 +3321,8 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "crates_parity_tests_status_slice",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "status_slice.rs"
     },
     {
@@ -2980,8 +3332,8 @@
       "source_location": "L22",
       "_origin": "ast",
       "id": "crates_parity_tests_status_slice_parity_env_or_skip",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "parity_env_or_skip()"
     },
     {
@@ -2991,8 +3343,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_parity_tests_status_slice_rs_option",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "option"
     },
     {
@@ -3002,8 +3354,8 @@
       "source_location": "L33",
       "_origin": "ast",
       "id": "crates_parity_tests_status_slice_out_dir",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "out_dir()"
     },
     {
@@ -3013,8 +3365,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_parity_tests_status_slice_rs_pathbuf",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "pathbuf"
     },
     {
@@ -3024,8 +3376,8 @@
       "source_location": "L42",
       "_origin": "ast",
       "id": "crates_parity_tests_status_slice_status_steps",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "status_steps()"
     },
     {
@@ -3035,8 +3387,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_parity_tests_status_slice_rs_vec",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "vec"
     },
     {
@@ -3046,8 +3398,8 @@
       "source_location": "L70",
       "_origin": "ast",
       "id": "crates_parity_tests_status_slice_record_status",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "record_status()"
     },
     {
@@ -3057,8 +3409,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_parity_tests_status_slice_rs_arc",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "arc"
     },
     {
@@ -3068,8 +3420,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_parity_tests_status_slice_rs_socketaddr",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "socketaddr"
     },
     {
@@ -3079,8 +3431,8 @@
       "source_location": "L90",
       "_origin": "ast",
       "id": "crates_parity_tests_status_slice_start_ours",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "start_ours()"
     },
     {
@@ -3090,8 +3442,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_parity_tests_status_slice_rs_aborthandle",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "aborthandle"
     },
     {
@@ -3101,8 +3453,8 @@
       "source_location": "L109",
       "_origin": "ast",
       "id": "crates_parity_tests_status_slice_assert_status_trace",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "assert_status_trace()"
     },
     {
@@ -3112,8 +3464,8 @@
       "source_location": "L133",
       "_origin": "ast",
       "id": "crates_parity_tests_status_slice_status_slice_records_traces_for_both_servers",
-      "community": 19,
-      "community_name": "vanilla.rs",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "status_slice_records_traces_for_both_servers()"
     },
     {
@@ -3167,8 +3519,8 @@
       "source_location": "L35",
       "_origin": "ast",
       "id": "crates_protocol_src_codec_codecerror",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 5,
+      "community_name": "CodecError",
       "norm_label": "codecerror"
     },
     {
@@ -3178,8 +3530,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "utf8error",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 5,
+      "community_name": "CodecError",
       "norm_label": "utf8error"
     },
     {
@@ -3882,8 +4234,8 @@
       "source_location": "L49",
       "_origin": "ast",
       "id": "crates_protocol_src_frame_decode_frame",
-      "community": 18,
-      "community_name": "frame.rs",
+      "community": 9,
+      "community_name": "login.rs",
       "norm_label": "decode_frame()"
     },
     {
@@ -4025,8 +4377,8 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "crates_protocol_src_lib",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 16,
+      "community_name": "PacketIds",
       "norm_label": "lib.rs"
     },
     {
@@ -4938,8 +5290,8 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "crates_protocol_src_packet_id",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 13,
+      "community_name": "PacketKey",
       "norm_label": "packet_id.rs"
     },
     {
@@ -4949,8 +5301,8 @@
       "source_location": "L11",
       "_origin": "ast",
       "id": "crates_protocol_src_packet_id_protocolstate",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 13,
+      "community_name": "PacketKey",
       "norm_label": "protocolstate"
     },
     {
@@ -4960,8 +5312,8 @@
       "source_location": "L29",
       "_origin": "ast",
       "id": "crates_protocol_src_packet_id_protocolstate_index",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 13,
+      "community_name": "PacketKey",
       "norm_label": ".index()"
     },
     {
@@ -4971,8 +5323,8 @@
       "source_location": "L40",
       "_origin": "ast",
       "id": "crates_protocol_src_packet_id_protocolstate_as_str",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 13,
+      "community_name": "PacketKey",
       "norm_label": ".as_str()"
     },
     {
@@ -4982,8 +5334,8 @@
       "source_location": "L51",
       "_origin": "ast",
       "id": "crates_protocol_src_packet_id_protocolstate_all",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 13,
+      "community_name": "PacketKey",
       "norm_label": ".all()"
     },
     {
@@ -4993,8 +5345,8 @@
       "source_location": "L64",
       "_origin": "ast",
       "id": "crates_protocol_src_packet_id_direction",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 13,
+      "community_name": "PacketKey",
       "norm_label": "direction"
     },
     {
@@ -5004,8 +5356,8 @@
       "source_location": "L76",
       "_origin": "ast",
       "id": "crates_protocol_src_packet_id_direction_index",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 13,
+      "community_name": "PacketKey",
       "norm_label": ".index()"
     },
     {
@@ -5015,8 +5367,8 @@
       "source_location": "L84",
       "_origin": "ast",
       "id": "crates_protocol_src_packet_id_direction_as_str",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 13,
+      "community_name": "PacketKey",
       "norm_label": ".as_str()"
     },
     {
@@ -5026,8 +5378,8 @@
       "source_location": "L100",
       "_origin": "ast",
       "id": "crates_protocol_src_packet_id_packetkey",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 13,
+      "community_name": "PacketKey",
       "norm_label": "packetkey"
     },
     {
@@ -5037,8 +5389,8 @@
       "source_location": "L113",
       "_origin": "ast",
       "id": "crates_protocol_src_packet_id_packetkey_new",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 13,
+      "community_name": "PacketKey",
       "norm_label": ".new()"
     },
     {
@@ -5048,8 +5400,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_protocol_src_packet_id_rs_self",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 13,
+      "community_name": "PacketKey",
       "norm_label": "self"
     },
     {
@@ -5059,8 +5411,8 @@
       "source_location": "L128",
       "_origin": "ast",
       "id": "crates_protocol_src_packet_id_packetkey_clientbound",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 13,
+      "community_name": "PacketKey",
       "norm_label": ".clientbound()"
     },
     {
@@ -5070,8 +5422,8 @@
       "source_location": "L133",
       "_origin": "ast",
       "id": "crates_protocol_src_packet_id_packetkey_serverbound",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 13,
+      "community_name": "PacketKey",
       "norm_label": ".serverbound()"
     },
     {
@@ -5081,8 +5433,8 @@
       "source_location": "L138",
       "_origin": "ast",
       "id": "crates_protocol_src_packet_id_packetkey_describe",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 13,
+      "community_name": "PacketKey",
       "norm_label": ".describe()"
     },
     {
@@ -5092,8 +5444,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_protocol_src_packet_id_rs_string",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 13,
+      "community_name": "PacketKey",
       "norm_label": "string"
     },
     {
@@ -5103,8 +5455,8 @@
       "source_location": "L153",
       "_origin": "ast",
       "id": "crates_protocol_src_packet_id_every_state_and_direction_has_a_distinct_index",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 13,
+      "community_name": "PacketKey",
       "norm_label": "every_state_and_direction_has_a_distinct_index()"
     },
     {
@@ -5114,8 +5466,8 @@
       "source_location": "L174",
       "_origin": "ast",
       "id": "crates_protocol_src_packet_id_keys_of_the_same_packet_in_two_directions_differ",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 13,
+      "community_name": "PacketKey",
       "norm_label": "keys_of_the_same_packet_in_two_directions_differ()"
     },
     {
@@ -5125,8 +5477,8 @@
       "source_location": "L182",
       "_origin": "ast",
       "id": "crates_protocol_src_packet_id_describe_shows_state_direction_and_name",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 13,
+      "community_name": "PacketKey",
       "norm_label": "describe_shows_state_direction_and_name()"
     },
     {
@@ -6203,8 +6555,8 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_mod",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 13,
+      "community_name": "PacketKey",
       "norm_label": "mod.rs"
     },
     {
@@ -6214,8 +6566,8 @@
       "source_location": "L46",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_mod_used_packet_keys",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 13,
+      "community_name": "PacketKey",
       "norm_label": "used_packet_keys()"
     },
     {
@@ -6225,8 +6577,8 @@
       "source_location": "L98",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_mod_used_keys_are_unique_in_state_direction_and_name",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 13,
+      "community_name": "PacketKey",
       "norm_label": "used_keys_are_unique_in_state_direction_and_name()"
     },
     {
@@ -6236,8 +6588,8 @@
       "source_location": "L109",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_mod_used_keys_cover_every_state_and_both_directions",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 13,
+      "community_name": "PacketKey",
       "norm_label": "used_keys_cover_every_state_and_both_directions()"
     },
     {
@@ -6247,8 +6599,8 @@
       "source_location": "L125",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_mod_used_keys_carry_the_compiled_default_ids",
-      "community": 24,
-      "community_name": "Trace",
+      "community": 13,
+      "community_name": "PacketKey",
       "norm_label": "used_keys_carry_the_compiled_default_ids()"
     },
     {
@@ -6830,8 +7182,8 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": "status.rs"
     },
     {
@@ -6841,8 +7193,8 @@
       "source_location": "L9",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status_statusrequest",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": "statusrequest"
     },
     {
@@ -6852,8 +7204,8 @@
       "source_location": "L20",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status_statusrequest_encode_payload",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": ".encode_payload()"
     },
     {
@@ -6863,8 +7215,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status_rs_vec",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": "vec"
     },
     {
@@ -6874,8 +7226,8 @@
       "source_location": "L25",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status_statusrequest_decode_payload",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": ".decode_payload()"
     },
     {
@@ -6885,8 +7237,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status_rs_result",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": "result"
     },
     {
@@ -6896,8 +7248,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status_rs_self",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": "self"
     },
     {
@@ -6907,8 +7259,8 @@
       "source_location": "L31",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status_statusrequest_to_frame",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": ".to_frame()"
     },
     {
@@ -6918,8 +7270,8 @@
       "source_location": "L38",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status_statusresponse",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": "statusresponse"
     },
     {
@@ -6929,8 +7281,8 @@
       "source_location": "",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status_rs_string",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": "string"
     },
     {
@@ -6940,8 +7292,8 @@
       "source_location": "L52",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status_statusresponse_encode_payload",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": ".encode_payload()"
     },
     {
@@ -6951,8 +7303,8 @@
       "source_location": "L59",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status_statusresponse_decode_payload",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": ".decode_payload()"
     },
     {
@@ -6962,8 +7314,8 @@
       "source_location": "L66",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status_statusresponse_to_frame",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": ".to_frame()"
     },
     {
@@ -6973,8 +7325,8 @@
       "source_location": "L73",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status_pingrequest",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": "pingrequest"
     },
     {
@@ -6984,8 +7336,8 @@
       "source_location": "L87",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status_pingrequest_encode_payload",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": ".encode_payload()"
     },
     {
@@ -6995,8 +7347,8 @@
       "source_location": "L94",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status_pingrequest_decode_payload",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": ".decode_payload()"
     },
     {
@@ -7006,8 +7358,8 @@
       "source_location": "L101",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status_pingrequest_to_frame",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": ".to_frame()"
     },
     {
@@ -7017,8 +7369,8 @@
       "source_location": "L108",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status_pongresponse",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": "pongresponse"
     },
     {
@@ -7028,8 +7380,8 @@
       "source_location": "L122",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status_pongresponse_encode_payload",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": ".encode_payload()"
     },
     {
@@ -7039,8 +7391,8 @@
       "source_location": "L129",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status_pongresponse_decode_payload",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": ".decode_payload()"
     },
     {
@@ -7050,8 +7402,8 @@
       "source_location": "L136",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status_pongresponse_to_frame",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": ".to_frame()"
     },
     {
@@ -7061,8 +7413,8 @@
       "source_location": "L147",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status_status_request_frame_has_no_fields",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": "status_request_frame_has_no_fields()"
     },
     {
@@ -7072,8 +7424,8 @@
       "source_location": "L158",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status_status_response_roundtrips_unicode_json",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": "status_response_roundtrips_unicode_json()"
     },
     {
@@ -7083,8 +7435,8 @@
       "source_location": "L172",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status_status_response_rejects_oversized_json",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": "status_response_rejects_oversized_json()"
     },
     {
@@ -7094,8 +7446,8 @@
       "source_location": "L181",
       "_origin": "ast",
       "id": "crates_protocol_src_packets_status_ping_and_pong_roundtrip_payloads",
-      "community": 9,
-      "community_name": "login.rs",
+      "community": 14,
+      "community_name": "status.rs",
       "norm_label": "ping_and_pong_roundtrip_payloads()"
     },
     {
@@ -8378,7 +8730,7 @@
       "label": "\u0427\u0442\u043e \u0434\u0430\u043b\u044c\u0448\u0435",
       "file_type": "document",
       "source_file": "docs/PROGRESS.md",
-      "source_location": "L188",
+      "source_location": "L200",
       "_origin": "ast",
       "id": "docs_progress_\u0447\u0442\u043e_\u0434\u0430\u043b\u044c\u0448\u0435",
       "community": 2,
@@ -8389,7 +8741,7 @@
       "label": "\u0418\u0437\u0432\u0435\u0441\u0442\u043d\u044b\u0435 \u043f\u0440\u043e\u0431\u043b\u0435\u043c\u044b / \u0431\u043b\u043e\u043a\u0435\u0440\u044b",
       "file_type": "document",
       "source_file": "docs/PROGRESS.md",
-      "source_location": "L206",
+      "source_location": "L217",
       "_origin": "ast",
       "id": "docs_progress_\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u044b\u0435_\u043f\u0440\u043e\u0431\u043b\u0435\u043c\u044b_\u0431\u043b\u043e\u043a\u0435\u0440\u044b",
       "community": 2,
@@ -13221,7 +13573,7 @@
       "relation": "imports_from",
       "confidence": "EXTRACTED",
       "source_file": "crates/parity/src/lib.rs",
-      "source_location": "L24",
+      "source_location": "L25",
       "weight": 1.0,
       "context": "import",
       "_origin": "ast",
@@ -14845,6 +15197,993 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L340",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff",
+      "target": "crates_parity_src_diff_count_differences_are_reported_per_packet_kind",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L20",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff",
+      "target": "crates_parity_src_diff_countrow",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L81",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff",
+      "target": "crates_parity_src_diff_diff_traces",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L274",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff",
+      "target": "crates_parity_src_diff_direction_name",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L316",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff",
+      "target": "crates_parity_src_diff_entry",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L141",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff",
+      "target": "crates_parity_src_diff_group",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L382",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff",
+      "target": "crates_parity_src_diff_handshake_port_difference_is_normalised_away",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L302",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff",
+      "target": "crates_parity_src_diff_hex_prefix",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L294",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff",
+      "target": "crates_parity_src_diff_label",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L165",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff",
+      "target": "crates_parity_src_diff_normalize",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L191",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff",
+      "target": "crates_parity_src_diff_normalize_first_varint",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L180",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff",
+      "target": "crates_parity_src_diff_normalize_port",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L283",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff",
+      "target": "crates_parity_src_diff_packet_label",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L289",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff",
+      "target": "crates_parity_src_diff_payload_label",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L37",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff",
+      "target": "crates_parity_src_diff_payloadrow",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L205",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff",
+      "target": "crates_parity_src_diff_render_report",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L440",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff",
+      "target": "crates_parity_src_diff_report_lists_both_tables",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L407",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff",
+      "target": "crates_parity_src_diff_teleport_id_difference_is_normalised_but_coordinates_are_not",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L332",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff",
+      "target": "crates_parity_src_diff_trace",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L56",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff",
+      "target": "crates_parity_src_diff_tracesdiff",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "imports_from",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L13",
+      "weight": 1.0,
+      "context": "import",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff",
+      "target": "crates_parity_src_trace_trace",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "imports_from",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/lib.rs",
+      "source_location": "L26",
+      "weight": 1.0,
+      "context": "import",
+      "_origin": "ast",
+      "source": "crates_parity_src_lib",
+      "target": "crates_parity_src_diff",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L28",
+      "weight": 1.0,
+      "context": "field",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_countrow",
+      "target": "crates_parity_src_diff_rs_option",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L28",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_countrow",
+      "target": "crates_parity_src_diff_rs_string",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L24",
+      "weight": 1.0,
+      "context": "field",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_countrow",
+      "target": "crates_parity_src_trace_tracedirection",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L22",
+      "weight": 1.0,
+      "context": "field",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_countrow",
+      "target": "crates_parity_src_trace_tracestate",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L283",
+      "weight": 1.0,
+      "context": "parameter_type",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_packet_label",
+      "target": "crates_parity_src_diff_countrow",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L66",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_tracesdiff",
+      "target": "crates_parity_src_diff_countrow",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L316",
+      "weight": 1.0,
+      "context": "parameter_type",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_entry",
+      "target": "crates_parity_src_diff_rs_option",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L294",
+      "weight": 1.0,
+      "context": "parameter_type",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_label",
+      "target": "crates_parity_src_diff_rs_option",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L180",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_normalize_port",
+      "target": "crates_parity_src_diff_rs_option",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L45",
+      "weight": 1.0,
+      "context": "field",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_payloadrow",
+      "target": "crates_parity_src_diff_rs_option",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L302",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_hex_prefix",
+      "target": "crates_parity_src_diff_rs_string",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L294",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_label",
+      "target": "crates_parity_src_diff_rs_string",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L283",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_packet_label",
+      "target": "crates_parity_src_diff_rs_string",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L289",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_payload_label",
+      "target": "crates_parity_src_diff_rs_string",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L45",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_payloadrow",
+      "target": "crates_parity_src_diff_rs_string",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L205",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_render_report",
+      "target": "crates_parity_src_diff_rs_string",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L60",
+      "weight": 1.0,
+      "context": "field",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_tracesdiff",
+      "target": "crates_parity_src_diff_rs_string",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L289",
+      "weight": 1.0,
+      "context": "parameter_type",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_payload_label",
+      "target": "crates_parity_src_diff_payloadrow",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L51",
+      "weight": 1.0,
+      "context": "field",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_payloadrow",
+      "target": "crates_parity_src_diff_rs_vec",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L41",
+      "weight": 1.0,
+      "context": "field",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_payloadrow",
+      "target": "crates_parity_src_trace_tracedirection",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L39",
+      "weight": 1.0,
+      "context": "field",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_payloadrow",
+      "target": "crates_parity_src_trace_tracestate",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L68",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_tracesdiff",
+      "target": "crates_parity_src_diff_payloadrow",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L141",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_group",
+      "target": "crates_parity_src_diff_rs_vec",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L165",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_normalize",
+      "target": "crates_parity_src_diff_rs_vec",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L191",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_normalize_first_varint",
+      "target": "crates_parity_src_diff_rs_vec",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L180",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_normalize_port",
+      "target": "crates_parity_src_diff_rs_vec",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L332",
+      "weight": 1.0,
+      "context": "parameter_type",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_trace",
+      "target": "crates_parity_src_diff_rs_vec",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L68",
+      "weight": 1.0,
+      "context": "field",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_tracesdiff",
+      "target": "crates_parity_src_diff_rs_vec",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L81",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_diff_traces",
+      "target": "crates_parity_src_diff_tracesdiff",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L205",
+      "weight": 1.0,
+      "context": "parameter_type",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_render_report",
+      "target": "crates_parity_src_diff_tracesdiff",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L75",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_tracesdiff",
+      "target": "crates_parity_src_diff_tracesdiff_is_identical",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L370",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_count_differences_are_reported_per_packet_kind",
+      "target": "crates_parity_src_diff_diff_traces",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L82",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_diff_traces",
+      "target": "crates_parity_src_diff_group",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L113",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_diff_traces",
+      "target": "crates_parity_src_diff_normalize",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L81",
+      "weight": 1.0,
+      "context": "parameter_type",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_diff_traces",
+      "target": "crates_parity_src_trace_trace",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L402",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_handshake_port_difference_is_normalised_away",
+      "target": "crates_parity_src_diff_diff_traces",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L452",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_report_lists_both_tables",
+      "target": "crates_parity_src_diff_diff_traces",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L433",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_teleport_id_difference_is_normalised_but_coordinates_are_not",
+      "target": "crates_parity_src_diff_diff_traces",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "crates/parity/tests/diff_report.rs",
+      "source_location": "L49",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_tests_diff_report_report_pair",
+      "target": "crates_parity_src_diff_diff_traces"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L144",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_group",
+      "target": "crates_parity_src_diff_entry",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L141",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_group",
+      "target": "crates_parity_src_diff_rs_btreemap",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L141",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_group",
+      "target": "crates_parity_src_trace_traceentry",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L141",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_group",
+      "target": "crates_protocol_src_packet_id_packetkey",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L174",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_normalize",
+      "target": "crates_parity_src_diff_normalize_first_varint",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L173",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_normalize",
+      "target": "crates_parity_src_diff_normalize_port",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L166",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_normalize",
+      "target": "crates_parity_src_trace_from_hex"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L165",
+      "weight": 1.0,
+      "context": "parameter_type",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_normalize",
+      "target": "crates_parity_src_trace_traceentry",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L453",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_report_lists_both_tables",
+      "target": "crates_parity_src_diff_render_report",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "crates/parity/tests/diff_report.rs",
+      "source_location": "L50",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_tests_diff_report_report_pair",
+      "target": "crates_parity_src_diff_render_report"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L274",
+      "weight": 1.0,
+      "context": "parameter_type",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_direction_name",
+      "target": "crates_parity_src_trace_tracedirection",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L284",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_packet_label",
+      "target": "crates_parity_src_diff_label",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L290",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_payload_label",
+      "target": "crates_parity_src_diff_label",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L304",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_hex_prefix",
+      "target": "crates_parity_src_trace_to_hex"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L328",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_entry",
+      "target": "crates_parity_src_trace_to_hex"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L316",
+      "weight": 1.0,
+      "context": "parameter_type",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_entry",
+      "target": "crates_parity_src_trace_tracedirection",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L316",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_entry",
+      "target": "crates_parity_src_trace_traceentry",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L316",
+      "weight": 1.0,
+      "context": "parameter_type",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_entry",
+      "target": "crates_parity_src_trace_tracestate",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L341",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_count_differences_are_reported_per_packet_kind",
+      "target": "crates_parity_src_diff_trace",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L384",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_handshake_port_difference_is_normalised_away",
+      "target": "crates_parity_src_diff_trace",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L441",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_report_lists_both_tables",
+      "target": "crates_parity_src_diff_trace",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L422",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_teleport_id_difference_is_normalised_but_coordinates_are_not",
+      "target": "crates_parity_src_diff_trace",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/src/diff.rs",
+      "source_location": "L332",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "_origin": "ast",
+      "source": "crates_parity_src_diff_trace",
+      "target": "crates_parity_src_trace_traceentry",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
       "source_file": "crates/parity/src/env.rs",
       "source_location": "L17",
       "weight": 1.0,
@@ -14923,7 +16262,7 @@
       "relation": "imports_from",
       "confidence": "EXTRACTED",
       "source_file": "crates/parity/src/lib.rs",
-      "source_location": "L25",
+      "source_location": "L27",
       "weight": 1.0,
       "context": "import",
       "_origin": "ast",
@@ -15353,7 +16692,7 @@
       "relation": "imports_from",
       "confidence": "EXTRACTED",
       "source_file": "crates/parity/src/lib.rs",
-      "source_location": "L26",
+      "source_location": "L28",
       "weight": 1.0,
       "context": "import",
       "_origin": "ast",
@@ -15365,7 +16704,7 @@
       "relation": "imports_from",
       "confidence": "EXTRACTED",
       "source_file": "crates/parity/src/lib.rs",
-      "source_location": "L29",
+      "source_location": "L31",
       "weight": 1.0,
       "context": "import",
       "_origin": "ast",
@@ -16691,6 +18030,110 @@
       "_origin": "ast",
       "source": "crates_parity_src_vanilla_copy_dir_all_missing_source_is_an_error",
       "target": "crates_parity_src_vanilla_scratch_dir",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/tests/diff_report.rs",
+      "source_location": "L63",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_tests_diff_report",
+      "target": "crates_parity_tests_diff_report_renders_status_and_join_reports",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/tests/diff_report.rs",
+      "source_location": "L27",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_tests_diff_report",
+      "target": "crates_parity_tests_diff_report_report_dir",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/tests/diff_report.rs",
+      "source_location": "L36",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_tests_diff_report",
+      "target": "crates_parity_tests_diff_report_report_pair",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/tests/diff_report.rs",
+      "source_location": "L18",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_tests_diff_report",
+      "target": "crates_parity_tests_diff_report_trace_dir",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/tests/diff_report.rs",
+      "source_location": "L37",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_tests_diff_report_report_pair",
+      "target": "crates_parity_tests_diff_report_trace_dir",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/tests/diff_report.rs",
+      "source_location": "L18",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_parity_tests_diff_report_trace_dir",
+      "target": "crates_parity_tests_diff_report_rs_pathbuf",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/tests/diff_report.rs",
+      "source_location": "L27",
+      "weight": 1.0,
+      "context": "return_type",
+      "_origin": "ast",
+      "source": "crates_parity_tests_diff_report_report_dir",
+      "target": "crates_parity_tests_diff_report_rs_pathbuf",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/tests/diff_report.rs",
+      "source_location": "L52",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_tests_diff_report_report_pair",
+      "target": "crates_parity_tests_diff_report_report_dir",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "crates/parity/tests/diff_report.rs",
+      "source_location": "L64",
+      "weight": 1.0,
+      "_origin": "ast",
+      "source": "crates_parity_tests_diff_report_renders_status_and_join_reports",
+      "target": "crates_parity_tests_diff_report_report_pair",
       "confidence_score": 1.0
     },
     {
@@ -31356,7 +32799,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "docs/PROGRESS.md",
-      "source_location": "L206",
+      "source_location": "L217",
       "weight": 1.0,
       "_origin": "ast",
       "source": "docs_progress_progress_md_\u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441_\u043f\u0440\u043e\u0435\u043a\u0442\u0430",
@@ -31367,7 +32810,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "docs/PROGRESS.md",
-      "source_location": "L188",
+      "source_location": "L200",
       "weight": 1.0,
       "_origin": "ast",
       "source": "docs_progress_progress_md_\u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441_\u043f\u0440\u043e\u0435\u043a\u0442\u0430",
@@ -31541,5 +32984,5 @@
     }
   ],
   "hyperedges": [],
-  "built_at_commit": "5da7009efb25501fdccabc07b184a4251de7d550"
+  "built_at_commit": "c0b50673ffb1a37e3df9f0cfc8ecc2c5514d3915"
 }
