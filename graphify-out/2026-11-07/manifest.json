@@ -25,8 +25,8 @@
     "semantic_hash": ""
   },
   "docs/PROGRESS.md": {
-    "mtime": 1794005552.834167,
-    "ast_hash": "f69679e30d2e51771be33e98025849ed",
+    "mtime": 1794048281.7975447,
+    "ast_hash": "e790c48ad14495230464f86650468dba",
     "semantic_hash": ""
   },
   "crates/protocol/src/codec.rs": {
