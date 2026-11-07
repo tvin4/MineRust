@@ -19,14 +19,15 @@ pub struct StatusInfo {
 impl StatusInfo {
     /// Renders the JSON document carried by the status response packet.
     ///
-    /// The field layout follows the public protocol documentation: `version`
-    /// (with mandatory `name`), `players` and `description` as a text
-    /// component.
+    /// The field layout and the plain-string `description` are read off the
+    /// recorded status response of a real 26.3 server (`parity` slice
+    /// `status`):
+    /// `{"description":"...","players":{...},"version":{...}}`.
     pub fn to_json(&self) -> String {
         serde_json::json!({
-            "version": { "name": self.version_name, "protocol": self.protocol_version },
+            "description": self.motd,
             "players": { "max": self.max_players, "online": self.online_players },
-            "description": { "text": self.motd },
+            "version": { "name": self.version_name, "protocol": self.protocol_version },
         })
         .to_string()
     }
@@ -51,7 +52,17 @@ mod tests {
         assert_eq!(value["version"]["protocol"].as_i64(), Some(4242));
         assert_eq!(value["players"]["max"].as_i64(), Some(20));
         assert_eq!(value["players"]["online"].as_i64(), Some(0));
-        assert_eq!(value["description"]["text"].as_str(), Some("Hello, world!"));
+        // Plain string, as the vanilla 26.3 recording sends it.
+        assert_eq!(value["description"].as_str(), Some("Hello, world!"));
+        assert!(value["description"].is_string(), "vanilla sends a string");
+        // The field order of the vanilla recording: description first.
+        let keys: Vec<&str> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, ["description", "players", "version"]);
     }
 
     #[test]
@@ -65,7 +76,7 @@ mod tests {
         };
         let value: serde_json::Value = serde_json::from_str(&info.to_json()).expect("valid json");
         assert_eq!(
-            value["description"]["text"].as_str(),
+            value["description"].as_str(),
             Some("quote \" and \\ and \n")
         );
     }

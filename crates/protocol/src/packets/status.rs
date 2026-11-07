@@ -157,7 +157,9 @@ mod tests {
     #[test]
     fn status_response_roundtrips_unicode_json() {
         let response = StatusResponse {
-            json: r#"{"description":{"text":"Привет 🌍"}}"#.to_owned(),
+            // Vanilla 26.3 carries the motd as a plain string (see
+            // `StatusInfo::to_json`); the packet itself just passes JSON on.
+            json: r#"{"description":"Привет 🌍"}"#.to_owned(),
         };
         let frame = response.to_frame().expect("encodable");
         let (id, mut reader) = split_frame(&frame).expect("splittable");

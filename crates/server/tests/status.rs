@@ -78,10 +78,7 @@ async fn server_list_ping_end_to_end() {
         Some(i64::from(TEST_MAX_PLAYERS))
     );
     assert_eq!(json["players"]["online"].as_i64(), Some(0));
-    assert_eq!(
-        json["description"]["text"].as_str(),
-        Some("Integration test MOTD")
-    );
+    assert_eq!(json["description"].as_str(), Some("Integration test MOTD"));
 
     // Ping -> pong with the same payload, then the server closes.
     let ping = PingRequest {
