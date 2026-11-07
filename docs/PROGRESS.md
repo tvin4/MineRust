@@ -374,12 +374,56 @@ errors» (не распарсились dimension_type/enchantment/sulfur_cube_a
   `light_update` (открытые вопросы 1–2) — данные выше; отсутствующих чанков
   отправлять не будем (5).
 
+## Часть 3, шаги 3.1 и 3.2: crates/world и раскладка payload (выполнено)
+
+- [x] **Шаг 3.1 — крейт `crates/world`:** region-ридер `.mca` (заголовок
+      секторов, zlib/gzip/raw, проверка длины) и модель чанка/секции
+      (Block Light/Sky Light, палитры блоков и биомов из NBT шаблона),
+      загрузка `blocks.json` (имя+свойства → state id). Юнит-тесты зелёные;
+      структура/документация под `cargo clippy -D warnings`.
+- [x] **Шаг 3.2 — раскладка `level_chunk_with_light` из трейса ванили**
+      (ignored-тесты `parity`, вывод в `target/parity/section-map.txt`,
+      `chunks-open.txt`):
+  - **Payload (45852 байта для (6,−2)):** `x,z` BE i32 @0 → карты высот
+    @8..**903** → VarInt длины sections-blob @903 (32581, 3 байта) →
+    blob 906..33487 → block entities @33487 → свет @33550..45852.
+    **`03 04 25` расшифровано:** после x,z — VarInt счётчик карт высот
+    (3 записи `[id]["25"]=VarInt 37 longs`); `04`/`05`/`01` — id записи.
+    Во всех 9 чанках карты кончаются ровно на байте 903 (тест `chunks_open`).
+  - **Запись секции:** `[u16 non-air][u16 fluid-счётчик][VarInt bits]
+    [VarInt count палитры][count×VarInt state-id][data (BE i64, без
+    length-преамбулы)]` затем биомы `[VarInt 0][VarInt id]` либо
+    `[bits][count][ids][data]`. Длина data = `ceil(4096/(64/bits))*8`:
+    bits 4→2048, 5→2736, 6→3280 байт — все 14 секций сходятся (assert);
+    bits = 4/5/6 по размеру палитры (≤16/≤32/больше).
+  - **Сверки (все зелёные):** `state ids equal: true` и
+    `block names equal: true` для всех 14 секций (wire ↔ NBT, вариации
+    `sculk_vein`/`leaf_litter`/`dark_oak_leaves` резолвятся через
+    `blocks.json`); non-air, посчитанный из data, равен u16-заголовку;
+    биомы (deep_dark=11, dark_forest=9, lush_caves=31, plains) байт-в-байт.
+  - **Свет NBT ↔ wire — расхождение (документировано):** точные близнецы
+    (2048/2048) — BlockLight Y−3/Y−2 и SkyLight Y9/Y10; слот Y8 и один
+    block-слот отличаются — свет менялся между джоином и сохранением
+    шаблона (NBT хранит свет только для Y=[−3,−2]).
+  - **Утечки палитр не было:** сырой дамп `raw_palettes.rs` видит все
+    19/25/20 элементов списков; причина расхождений была в парсере
+    (форма `{"id", "properties"}`) и в ложном кадре палитры.
+- [x] Правки владельца к 3.0 учтены: правило ChunkReady по данным
+      (`DataVersion=5023`, `Status` ∈ {`full`, `initialize_light`}, есть
+      хотя бы один BlockLight/SkyLight → 9 пригодных, 520 остальных → M6),
+      `ChunkNotReady(status)`, свет из NBT — в `docs/DECISIONS.md`,
+      `blocks_report` в `server.toml` (блокер снят: отчёт сгенерирован),
+      бэкап `game_rules.dat.orig`, guard флейка `join_slice`.
+- Открытые точки шага 3.2: block entities в payload (`0a` + 10×5 байт,
+  типы VarInt вместо ASCII) — внутренний формат не расшифрован; второе
+  u16-поле заголовка = числу клеток воды (одна наблюдаемая точка,
+  семантика water/fluid — `// SOURCE: wiki, unverified`).
+
 ## Что дальше
 
-- **Часть 3, шаг 3.1 (следующий, ждёт «обследование принято»):** крейт
-  `crates/world` — region-ридер `.mca` и модель чанка, палитра из
-  `reports/blocks.json` (нужна регенерация отчётов — см. блокеры), затем
-  3.2 кодеки `level_chunk_with_light`/batch/center в `protocol`.
+- **Часть 3, шаг 3.3 (ждёт подтверждения владельца после показа 3.2):**
+  кодеки `level_chunk_with_light`/batch/center в `protocol` + отправка
+  чанков в play, критерий — байт-в-байт совпадение payload.
 - Живая проверка: владелец запускает `cargo run -p server` (в логе `game
   data loaded (registries=32, ..., tag_registries=15)`), проверяет список
   серверов (теперь motd «A Minecraft Server», как у ванили) и вход клиентом
@@ -402,12 +446,10 @@ errors» (не распарсились dimension_type/enchantment/sulfur_cube_a
   с трейсом ванили (`protocol::hashed_seed`), значение придёт с
   level.dat в части 3. (В шаблоне `level.dat`: spawn `[96,145,−32]`,
   `world_gen_settings.dat`: seed 12345 → base-64 из трейса сверять оттуда.)
-- **Блокер палитры чанков:** `C:\MineRust-data\reports\blocks.json`
-  отсутствует (там только `packets.json`/`registries.json`) — нужен повторный
-  прогон `tools\generate-reports.ps1` (владелец запускает его со своим
-  version-json; вывод `--reports` включает `blocks.json`) и путь к нему в
-  `server.toml` (правка 2 плана части 3). Без него mapping имя+свойства →
-  state id для network-палитры/секций чанка сделать не из чего.
+- Блокер палитры чанков снят: `C:\MineRust-data\reports\blocks.json`
+  сгенерирован владельцем (`tools\generate-reports.ps1`) и прописан в
+  `server.toml`; mapping имя+свойства → state id работает (сверено на
+  всех 14 секциях шага 3.2).
 - `parity` прогон `join_slice` оставляет живым `target\debug\server.exe`
   (пришлось убивать вручную перед `cargo test --workspace` — файл не
   удалялся при ребилде): в скрипте джоина сервер останавливается не
