@@ -5,8 +5,13 @@
 
 use protocol::NbtTag;
 
+use crate::fixtures;
 use crate::fixtures::{jar_exactly, jar_with};
-use crate::{load_from_jar, load_from_zip, DataError, GameData, SYNCHRONIZED_REGISTRIES};
+use crate::{
+    load_from_jar, load_from_zip, load_packets_report, packets_from_json, DataError, GameData,
+    PacketIds, SYNCHRONIZED_REGISTRIES,
+};
+use protocol::{GameEvent, KeepAlive, StatusResponse};
 
 /// Loads a fixture jar built from `files`.
 fn load(files: &[(&str, &str)]) -> Result<GameData, DataError> {
@@ -266,5 +271,104 @@ fn load_the_real_client_jar() {
         "minecraft:pattern_item/skull",
     ] {
         assert!(!banner_tags[tag].is_empty(), "{tag}");
+    }
+}
+
+#[test]
+fn without_a_report_every_id_comes_from_the_key_default() {
+    let ids = PacketIds::compiled();
+    assert!(ids.is_empty());
+    for key in protocol::used_packet_keys() {
+        assert_eq!(ids.id(*key), key.default_id, "{}", key.describe());
+    }
+    let error = ids
+        .verify(protocol::used_packet_keys())
+        .expect_err("compiled ids never verify");
+    match error {
+        DataError::MissingPackets { count, keys } => {
+            assert_eq!(count, protocol::used_packet_keys().len());
+            assert!(
+                keys.contains("play/clientbound/minecraft:game_event"),
+                "{keys}"
+            );
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+}
+
+#[test]
+fn report_ids_override_the_compiled_defaults() {
+    // Fictional ids: only the override itself carries meaning.
+    let status_response = StatusResponse::KEY;
+    let json = fixtures::packets_report_json(&[(status_response, 0x42)]);
+    let ids = packets_from_json(&json).expect("fixture report parses");
+    assert_eq!(ids.id(status_response), 0x42);
+    assert_eq!(ids.id(KeepAlive::KEY), KeepAlive::ID);
+    ids.verify(protocol::used_packet_keys())
+        .expect("the fixture contains every key");
+    assert!(!ids.is_empty());
+    assert_eq!(ids.len(), protocol::used_packet_keys().len());
+}
+
+#[test]
+fn report_without_a_state_is_rejected() {
+    let json = fixtures::packets_report_json(&[]);
+    let full: serde_json::Value = serde_json::from_str(&json).expect("fixture is valid JSON");
+    let mut object = full.as_object().expect("object").clone();
+    object.remove("play");
+    let text = serde_json::to_string(&object).expect("re-serialize");
+    match packets_from_json(&text) {
+        Err(DataError::MissingState { state }) => assert_eq!(state, "play"),
+        other => panic!("unexpected result: {other:?}"),
+    }
+}
+
+#[test]
+fn report_without_a_needed_packet_is_rejected() {
+    let json = fixtures::packets_report_json(&[]);
+    let key = GameEvent::KEY;
+    let drop = key.name;
+    let entry = format!("\"{drop}\":{{\"protocol_id\":{}}}", key.default_id);
+    let text = json
+        .replace(&format!("{entry},"), "")
+        .replace(&format!(",{entry}"), "");
+    assert_ne!(text.len(), json.len(), "the key must have been removed");
+    let ids = packets_from_json(&text).expect("the report still parses");
+    match ids.verify(protocol::used_packet_keys()) {
+        Err(DataError::MissingPackets { count, keys }) => {
+            assert_eq!(count, 1);
+            assert!(keys.contains(drop), "{keys}");
+        }
+        other => panic!("unexpected result: {other:?}"),
+    }
+}
+
+#[test]
+fn report_with_invalid_json_names_the_file() {
+    match packets_from_json("{ not json") {
+        Err(DataError::Json { path, .. }) => assert_eq!(path, "packets report"),
+        other => panic!("unexpected result: {other:?}"),
+    }
+}
+
+/// Compares every compiled default packet id with the packets report of the
+/// user's own game copy. Skipped by `cargo test` because CI has no game
+/// data. Run manually with:
+/// `MINECRAFT_PACKETS_REPORT=path/to/reports/packets.json cargo test -p data -- --ignored`
+#[test]
+#[ignore = "needs MINECRAFT_PACKETS_REPORT pointing at a packets report"]
+fn compiled_packet_ids_match_the_real_report() {
+    let path = std::env::var("MINECRAFT_PACKETS_REPORT")
+        .expect("MINECRAFT_PACKETS_REPORT must point at reports/packets.json");
+    let ids = load_packets_report(&path).expect("the report must load");
+    ids.verify(protocol::used_packet_keys())
+        .expect("report covers every key");
+    for key in protocol::used_packet_keys() {
+        assert_eq!(
+            ids.id(*key),
+            key.default_id,
+            "compiled id of {} differs from the game report",
+            key.describe()
+        );
     }
 }

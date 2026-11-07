@@ -15,6 +15,7 @@
 
 mod error;
 mod load;
+mod packets;
 mod tags;
 
 #[cfg(any(test, feature = "fixtures"))]
@@ -25,6 +26,7 @@ mod tests;
 
 pub use error::DataError;
 pub use load::{load_from_jar, load_from_zip, SYNCHRONIZED_REGISTRIES};
+pub use packets::{load_packets_report, packets_from_json, PacketIds};
 
 use std::collections::BTreeMap;
 

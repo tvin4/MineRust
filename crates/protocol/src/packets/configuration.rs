@@ -10,9 +10,20 @@
 use crate::codec::{CodecError, PacketReader, PacketWriter, MAX_STRING_CHARS};
 use crate::frame::encode_frame;
 use crate::nbt::NbtTag;
+use crate::packet_id::{PacketKey, ProtocolState};
 
 /// Maximum locale length in UTF-16 code units (protocol String (16)).
 const MAX_LOCALE_CHARS: usize = 16;
+
+/// Key of the serverbound Plugin Message packet in the configuration state.
+///
+/// The server does not define a struct for it: the channel name is logged
+/// and the payload is ignored.
+pub const CONFIGURATION_PLUGIN_MESSAGE: PacketKey = PacketKey::serverbound(
+    ProtocolState::Configuration,
+    "minecraft:custom_payload",
+    0x02,
+);
 
 /// One entry of the Registry Data packet.
 #[derive(Debug, Clone, PartialEq)]
@@ -39,6 +50,13 @@ pub struct RegistryData {
 impl RegistryData {
     /// Packet id of Registry Data (configuration state, clientbound).
     pub const ID: u32 = 0x07;
+
+    /// Key that resolves the Registry Data id at runtime.
+    pub const KEY: PacketKey = PacketKey::clientbound(
+        ProtocolState::Configuration,
+        "minecraft:registry_data",
+        Self::ID,
+    );
 
     /// Encodes the payload (packet id excluded).
     pub fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
@@ -119,6 +137,13 @@ impl UpdateTags {
     /// Packet id of Update Tags (configuration state, clientbound).
     pub const ID: u32 = 0x0E;
 
+    /// Key that resolves the Update Tags id at runtime.
+    pub const KEY: PacketKey = PacketKey::clientbound(
+        ProtocolState::Configuration,
+        "minecraft:update_tags",
+        Self::ID,
+    );
+
     /// Encodes the payload (packet id excluded).
     pub fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
         let mut writer = PacketWriter::new();
@@ -180,6 +205,13 @@ impl FinishConfiguration {
     /// Packet id of Finish Configuration (configuration state, clientbound).
     pub const ID: u32 = 0x03;
 
+    /// Key that resolves the Finish Configuration id at runtime.
+    pub const KEY: PacketKey = PacketKey::clientbound(
+        ProtocolState::Configuration,
+        "minecraft:finish_configuration",
+        Self::ID,
+    );
+
     /// Encodes the payload; there is none, so this always succeeds.
     pub fn encode_payload(&self) -> Vec<u8> {
         Vec::new()
@@ -206,6 +238,13 @@ impl FinishAck {
     /// Packet id of Acknowledge Finish Configuration (configuration state,
     /// serverbound).
     pub const ID: u32 = 0x03;
+
+    /// Key that resolves the Finish Acknowledged id at runtime.
+    pub const KEY: PacketKey = PacketKey::serverbound(
+        ProtocolState::Configuration,
+        "minecraft:finish_configuration",
+        Self::ID,
+    );
 
     /// Encodes the payload; there is none, so this always succeeds.
     pub fn encode_payload(&self) -> Vec<u8> {
@@ -251,6 +290,18 @@ pub struct ClientInformation {
 impl ClientInformation {
     /// Packet id of Client Information (configuration state, serverbound).
     pub const ID: u32 = 0x00;
+
+    /// Key that resolves the configuration Client Information id at runtime.
+    pub const KEY: PacketKey = PacketKey::serverbound(
+        ProtocolState::Configuration,
+        "minecraft:client_information",
+        Self::ID,
+    );
+
+    /// Key of the same packet in the play state, where the id differs and
+    /// the compiled default is `0x0E` (SOURCE: wiki, unverified).
+    pub const PLAY_KEY: PacketKey =
+        PacketKey::serverbound(ProtocolState::Play, "minecraft:client_information", 0x0E);
 
     /// Encodes the payload (packet id excluded).
     pub fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {

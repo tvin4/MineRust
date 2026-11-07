@@ -7,6 +7,7 @@
 
 use crate::codec::{CodecError, PacketReader, PacketWriter, Uuid, MAX_STRING_CHARS};
 use crate::frame::encode_frame;
+use crate::packet_id::{PacketKey, ProtocolState};
 
 /// Maximum player name length in UTF-16 code units (protocol String (16)).
 const MAX_NAME_CHARS: usize = 16;
@@ -46,6 +47,10 @@ impl LoginStart {
     /// Packet id of Login Start (login state, serverbound).
     pub const ID: u32 = 0x00;
 
+    /// Key that resolves the Login Start id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::serverbound(ProtocolState::Login, "minecraft:hello", Self::ID);
+
     /// Encodes the payload (packet id excluded).
     pub fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
         let mut writer = PacketWriter::new();
@@ -81,6 +86,13 @@ pub struct SetCompression {
 impl SetCompression {
     /// Packet id of Set Compression (login state, clientbound).
     pub const ID: u32 = 0x03;
+
+    /// Key that resolves the Set Compression id at runtime.
+    pub const KEY: PacketKey = PacketKey::clientbound(
+        ProtocolState::Login,
+        "minecraft:login_compression",
+        Self::ID,
+    );
 
     /// Encodes the payload (packet id excluded).
     pub fn encode_payload(&self) -> Vec<u8> {
@@ -137,6 +149,10 @@ pub struct LoginSuccess {
 impl LoginSuccess {
     /// Packet id of Login Success (login state, clientbound).
     pub const ID: u32 = 0x02;
+
+    /// Key that resolves the Login Success id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::clientbound(ProtocolState::Login, "minecraft:login_finished", Self::ID);
 
     /// Encodes the payload (packet id excluded).
     pub fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
@@ -207,6 +223,13 @@ impl LoginAcknowledged {
     /// Packet id of Login Acknowledged (login state, serverbound).
     pub const ID: u32 = 0x03;
 
+    /// Key that resolves the Login Acknowledged id at runtime.
+    pub const KEY: PacketKey = PacketKey::serverbound(
+        ProtocolState::Login,
+        "minecraft:login_acknowledged",
+        Self::ID,
+    );
+
     /// Encodes the payload; there is none, so this always succeeds.
     pub fn encode_payload(&self) -> Vec<u8> {
         Vec::new()
@@ -234,6 +257,10 @@ pub struct DisconnectLogin {
 impl DisconnectLogin {
     /// Packet id of Disconnect (login state, clientbound).
     pub const ID: u32 = 0x00;
+
+    /// Key that resolves the login Disconnect id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::clientbound(ProtocolState::Login, "minecraft:login_disconnect", Self::ID);
 
     /// Builds a disconnect reason from plain text.
     pub fn from_text(text: &str) -> Self {

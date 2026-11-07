@@ -2,6 +2,7 @@
 
 use crate::codec::{CodecError, PacketReader, PacketWriter};
 use crate::frame::encode_frame;
+use crate::packet_id::{PacketKey, ProtocolState};
 
 /// Sanity limit for the handshake server address, in UTF-16 code units.
 ///
@@ -48,6 +49,10 @@ pub struct Handshake {
 impl Handshake {
     /// Packet id of the handshake packet.
     pub const ID: u32 = 0x00;
+
+    /// Key that resolves the handshake packet id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::serverbound(ProtocolState::Handshake, "minecraft:intention", Self::ID);
 
     /// Encodes the packet payload (packet id excluded).
     pub fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {

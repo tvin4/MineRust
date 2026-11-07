@@ -2,6 +2,7 @@
 
 use crate::codec::{CodecError, PacketReader, PacketWriter, MAX_STRING_CHARS};
 use crate::frame::encode_frame;
+use crate::packet_id::{PacketKey, ProtocolState};
 
 /// Serverbound status request; it has no fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -10,6 +11,10 @@ pub struct StatusRequest;
 impl StatusRequest {
     /// Packet id of the status request (status state, serverbound).
     pub const ID: u32 = 0x00;
+
+    /// Key that resolves the status request id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::serverbound(ProtocolState::Status, "minecraft:status_request", Self::ID);
 
     /// Encodes the payload; there is none, so this always succeeds.
     pub fn encode_payload(&self) -> Vec<u8> {
@@ -38,6 +43,10 @@ pub struct StatusResponse {
 impl StatusResponse {
     /// Packet id of the status response (status state, clientbound).
     pub const ID: u32 = 0x00;
+
+    /// Key that resolves the status response id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::clientbound(ProtocolState::Status, "minecraft:status_response", Self::ID);
 
     /// Encodes the payload (the JSON as a protocol string).
     pub fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
@@ -70,6 +79,10 @@ impl PingRequest {
     /// Packet id of the ping request (status state, serverbound).
     pub const ID: u32 = 0x01;
 
+    /// Key that resolves the ping request id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::serverbound(ProtocolState::Status, "minecraft:ping_request", Self::ID);
+
     /// Encodes the payload (a big-endian `i64`).
     pub fn encode_payload(&self) -> Vec<u8> {
         let mut writer = PacketWriter::new();
@@ -100,6 +113,10 @@ pub struct PongResponse {
 impl PongResponse {
     /// Packet id of the pong response (status state, clientbound).
     pub const ID: u32 = 0x01;
+
+    /// Key that resolves the pong response id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::clientbound(ProtocolState::Status, "minecraft:pong_response", Self::ID);
 
     /// Encodes the payload (a big-endian `i64`).
     pub fn encode_payload(&self) -> Vec<u8> {

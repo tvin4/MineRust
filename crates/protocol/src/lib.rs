@@ -13,8 +13,11 @@
 mod codec;
 mod frame;
 mod nbt;
+mod packet_id;
 mod packets;
 mod status;
+
+pub use packet_id::{Direction, PacketKey, ProtocolState};
 
 pub use codec::{
     decode_varint, encode_varint, CodecError, PacketReader, PacketWriter, Position, Uuid,
@@ -25,11 +28,13 @@ pub use frame::{
 };
 pub use nbt::{NbtError, NbtTag, MAX_NBT_DEPTH};
 pub use packets::{
-    offline_uuid, ClientInformation, ConfirmTeleportation, DeathLocation, DisconnectLogin,
-    FinishAck, FinishConfiguration, GameEvent, GameProfile, Handshake, KeepAlive,
+    offline_uuid, used_packet_keys, ClientInformation, ConfirmTeleportation, DeathLocation,
+    DisconnectLogin, FinishAck, FinishConfiguration, GameEvent, GameProfile, Handshake, KeepAlive,
     LoginAcknowledged, LoginPlay, LoginStart, LoginSuccess, NextState, PingRequest,
     PlayerInfoEntry, PlayerInfoUpdate, PongResponse, ProfileProperty, RegistryData, RegistryEntry,
     RegistryTag, SetCenterChunk, SetCompression, SetDefaultSpawnPosition, StatusRequest,
     StatusResponse, SynchronizePlayerPosition, TagRegistry, UpdateTags,
+    CONFIGURATION_PLUGIN_MESSAGE, MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT,
+    MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
 };
 pub use status::StatusInfo;

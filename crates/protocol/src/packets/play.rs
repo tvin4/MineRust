@@ -8,11 +8,36 @@
 
 use crate::codec::{CodecError, PacketReader, PacketWriter, Position, Uuid, MAX_STRING_CHARS};
 use crate::frame::encode_frame;
+use crate::packet_id::{PacketKey, ProtocolState};
 use crate::packets::login::{ProfileProperty, MAX_PROPERTY_NAME_CHARS, MAX_SIGNATURE_CHARS};
 
 /// Maximum locale length in UTF-16 code units (protocol String (16)), same
 /// as in the configuration state.
 const MAX_LOCALE_CHARS: usize = 16;
+
+/// Key of the serverbound Plugin Message packet in the play state. The
+/// channel name is logged and the payload is ignored (M2 has no gameplay).
+pub const PLAY_PLUGIN_MESSAGE: PacketKey =
+    PacketKey::serverbound(ProtocolState::Play, "minecraft:custom_payload", 0x16);
+
+/// Key of the serverbound position packet in the play state (x, y, z).
+pub const MOVE_PLAYER_POS: PacketKey =
+    PacketKey::serverbound(ProtocolState::Play, "minecraft:move_player_pos", 0x1E);
+
+/// Key of the serverbound position + rotation packet in the play state.
+pub const MOVE_PLAYER_POS_ROT: PacketKey =
+    PacketKey::serverbound(ProtocolState::Play, "minecraft:move_player_pos_rot", 0x1F);
+
+/// Key of the serverbound rotation-only packet in the play state.
+pub const MOVE_PLAYER_ROT: PacketKey =
+    PacketKey::serverbound(ProtocolState::Play, "minecraft:move_player_rot", 0x20);
+
+/// Key of the serverbound "still standing" packet in the play state.
+pub const MOVE_PLAYER_STATUS_ONLY: PacketKey = PacketKey::serverbound(
+    ProtocolState::Play,
+    "minecraft:move_player_status_only",
+    0x21,
+);
 
 /// Clientbound Login (play): the first packet of the play state; it defines
 /// the dimension, game mode and rendering parameters the client starts with.
@@ -75,6 +100,10 @@ pub struct DeathLocation {
 impl LoginPlay {
     /// Packet id of Login (play state, clientbound).
     pub const ID: u32 = 0x32;
+
+    /// Key that resolves the Login (play) id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::clientbound(ProtocolState::Play, "minecraft:login", Self::ID);
 
     /// Encodes the payload (packet id excluded).
     pub fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
@@ -193,6 +222,10 @@ impl GameEvent {
     /// Packet id of Game Event (play state, clientbound).
     pub const ID: u32 = 0x27;
 
+    /// Key that resolves the Game Event id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::clientbound(ProtocolState::Play, "minecraft:game_event", Self::ID);
+
     /// The event that must follow every Login (play) so the client closes
     /// its loading screen.
     pub const START_WAITING_FOR_CHUNKS: u8 = 13;
@@ -233,6 +266,13 @@ impl SetCenterChunk {
     /// Packet id of Set Center Chunk (play state, clientbound).
     pub const ID: u32 = 0x60;
 
+    /// Key that resolves the Set Center Chunk id at runtime.
+    pub const KEY: PacketKey = PacketKey::clientbound(
+        ProtocolState::Play,
+        "minecraft:set_chunk_cache_center",
+        Self::ID,
+    );
+
     /// Encodes the payload (packet id excluded).
     pub fn encode_payload(&self) -> Vec<u8> {
         let mut writer = PacketWriter::new();
@@ -272,6 +312,13 @@ pub struct SetDefaultSpawnPosition {
 impl SetDefaultSpawnPosition {
     /// Packet id of Set Default Spawn Position (play state, clientbound).
     pub const ID: u32 = 0x63;
+
+    /// Key that resolves the Set Default Spawn Position id at runtime.
+    pub const KEY: PacketKey = PacketKey::clientbound(
+        ProtocolState::Play,
+        "minecraft:set_default_spawn_position",
+        Self::ID,
+    );
 
     /// Encodes the payload (packet id excluded).
     pub fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
@@ -334,6 +381,13 @@ const PLAYER_INFO_ACTIONS: u8 = 0x01 | 0x04 | 0x08 | 0x10;
 impl PlayerInfoUpdate {
     /// Packet id of Player Info Update (play state, clientbound).
     pub const ID: u32 = 0x47;
+
+    /// Key that resolves the Player Info Update id at runtime.
+    pub const KEY: PacketKey = PacketKey::clientbound(
+        ProtocolState::Play,
+        "minecraft:player_info_update",
+        Self::ID,
+    );
 
     /// Encodes the payload (packet id excluded).
     pub fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
@@ -432,6 +486,17 @@ impl KeepAlive {
     /// Packet id of Keep Alive (play state, serverbound).
     pub const SERVERBOUND_ID: u32 = 0x1C;
 
+    /// Key that resolves the clientbound Keep Alive id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::clientbound(ProtocolState::Play, "minecraft:keep_alive", Self::ID);
+
+    /// Key that resolves the serverbound Keep Alive id at runtime.
+    pub const SERVERBOUND_KEY: PacketKey = PacketKey::serverbound(
+        ProtocolState::Play,
+        "minecraft:keep_alive",
+        Self::SERVERBOUND_ID,
+    );
+
     /// Encodes the payload (packet id excluded).
     pub fn encode_payload(&self) -> Vec<u8> {
         let mut writer = PacketWriter::new();
@@ -473,6 +538,13 @@ pub struct ConfirmTeleportation {
 impl ConfirmTeleportation {
     /// Packet id of Confirm Teleportation (play state, serverbound).
     pub const ID: u32 = 0x00;
+
+    /// Key that resolves the Confirm Teleportation id at runtime.
+    pub const KEY: PacketKey = PacketKey::serverbound(
+        ProtocolState::Play,
+        "minecraft:accept_teleportation",
+        Self::ID,
+    );
 
     /// Encodes the payload (packet id excluded).
     pub fn encode_payload(&self) -> Vec<u8> {
@@ -533,6 +605,10 @@ pub struct SynchronizePlayerPosition {
 impl SynchronizePlayerPosition {
     /// Packet id of Synchronize Player Position (play state, clientbound).
     pub const ID: u32 = 0x49;
+
+    /// Key that resolves the Synchronize Player Position id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::clientbound(ProtocolState::Play, "minecraft:player_position", Self::ID);
 
     /// Encodes the payload (packet id excluded).
     pub fn encode_payload(&self) -> Vec<u8> {

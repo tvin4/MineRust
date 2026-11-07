@@ -96,4 +96,32 @@ pub enum DataError {
         /// Tag where the cycle was detected.
         tag: String,
     },
+
+    /// The packets report file cannot be read.
+    #[error("cannot read packets report {path}: {source}")]
+    ReportRead {
+        /// Path of the report file.
+        path: String,
+        /// Underlying I/O error.
+        source: io::Error,
+    },
+
+    /// The packets report has no entry for a protocol state.
+    #[error("packets report has no `{state}` state")]
+    MissingState {
+        /// Name of the missing state, e.g. `play`.
+        state: String,
+    },
+
+    /// The packets report lacks packets the server needs (version mismatch).
+    #[error(
+        "packets report is missing {count} packet(s) the server needs: {keys}; \
+         regenerate the report for this game version"
+    )]
+    MissingPackets {
+        /// Number of missing keys.
+        count: usize,
+        /// Comma-separated descriptions of the missing keys.
+        keys: String,
+    },
 }
