@@ -15,6 +15,19 @@ pub const MAX_STRING_CHARS: usize = 32767;
 /// A 128-bit UUID as it appears on the wire: 16 bytes, big-endian.
 pub type Uuid = [u8; 16];
 
+/// A block position packed into one 64-bit word: x as a signed 26-bit
+/// integer, then z (26 bits), then y (12 bits) — see the public protocol
+/// documentation (<https://minecraft.wiki/wiki/Java_Edition_protocol>).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Position {
+    /// Block X coordinate.
+    pub x: i32,
+    /// Block Y coordinate.
+    pub y: i32,
+    /// Block Z coordinate.
+    pub z: i32,
+}
+
 /// Errors produced while encoding or decoding protocol data.
 #[derive(Debug, thiserror::Error)]
 pub enum CodecError {
@@ -196,10 +209,38 @@ impl<'a> PacketReader<'a> {
         Ok(u16::from_be_bytes(bytes))
     }
 
+    /// Reads a big-endian `i32`.
+    pub fn read_i32(&mut self) -> Result<i32, CodecError> {
+        let bytes = self.read_array::<4>()?;
+        Ok(i32::from_be_bytes(bytes))
+    }
+
     /// Reads a big-endian `i64`.
     pub fn read_i64(&mut self) -> Result<i64, CodecError> {
         let bytes = self.read_array::<8>()?;
         Ok(i64::from_be_bytes(bytes))
+    }
+
+    /// Reads a big-endian 32-bit float.
+    pub fn read_f32(&mut self) -> Result<f32, CodecError> {
+        let bytes = self.read_array::<4>()?;
+        Ok(f32::from_be_bytes(bytes))
+    }
+
+    /// Reads a big-endian 64-bit float.
+    pub fn read_f64(&mut self) -> Result<f64, CodecError> {
+        let bytes = self.read_array::<8>()?;
+        Ok(f64::from_be_bytes(bytes))
+    }
+
+    /// Reads a packed block position.
+    pub fn read_position(&mut self) -> Result<Position, CodecError> {
+        let packed = self.read_i64()?;
+        Ok(Position {
+            x: (packed >> 38) as i32,
+            y: ((packed << 52) >> 52) as i32,
+            z: ((packed << 26) >> 38) as i32,
+        })
     }
 
     /// Reads a boolean: one byte, non-zero means `true`.
@@ -287,9 +328,32 @@ impl PacketWriter {
         self.buffer.extend_from_slice(&value.to_be_bytes());
     }
 
+    /// Appends a big-endian `i32`.
+    pub fn write_i32(&mut self, value: i32) {
+        self.buffer.extend_from_slice(&value.to_be_bytes());
+    }
+
     /// Appends a big-endian `i64`.
     pub fn write_i64(&mut self, value: i64) {
         self.buffer.extend_from_slice(&value.to_be_bytes());
+    }
+
+    /// Appends a big-endian 32-bit float.
+    pub fn write_f32(&mut self, value: f32) {
+        self.buffer.extend_from_slice(&value.to_be_bytes());
+    }
+
+    /// Appends a big-endian 64-bit float.
+    pub fn write_f64(&mut self, value: f64) {
+        self.buffer.extend_from_slice(&value.to_be_bytes());
+    }
+
+    /// Appends a packed block position.
+    pub fn write_position(&mut self, value: Position) {
+        let packed = ((i64::from(value.x) & 0x3FFFFFF) << 38)
+            | ((i64::from(value.z) & 0x3FFFFFF) << 12)
+            | (i64::from(value.y) & 0xFFF);
+        self.buffer.extend_from_slice(&packed.to_be_bytes());
     }
 
     /// Appends a boolean as a single byte.
@@ -457,6 +521,74 @@ mod tests {
         assert_eq!(reader.read_u16().expect("u16"), 0x1234);
         assert_eq!(reader.read_i64().expect("i64"), -2);
         reader.ensure_empty().expect("no trailing bytes");
+    }
+
+    #[test]
+    fn ints_and_floats_are_big_endian() {
+        let mut writer = PacketWriter::new();
+        writer.write_i32(-2);
+        writer.write_f32(1.5);
+        writer.write_f64(-0.5);
+        assert_eq!(
+            writer.as_bytes(),
+            &[
+                0xFF, 0xFF, 0xFF, 0xFE, // -2
+                0x3F, 0xC0, 0x00, 0x00, // 1.5f
+                0xBF, 0xE0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // -0.5
+            ]
+        );
+
+        let mut reader = PacketReader::new(writer.as_bytes());
+        assert_eq!(reader.read_i32().expect("i32"), -2);
+        assert_eq!(reader.read_f32().expect("f32"), 1.5);
+        assert_eq!(reader.read_f64().expect("f64"), -0.5);
+        reader.ensure_empty().expect("no trailing bytes");
+    }
+
+    #[test]
+    fn positions_pack_x_z_and_y() {
+        // Known packing: x as 26 bits, then z (26), then y (12), big-endian.
+        let mut writer = PacketWriter::new();
+        writer.write_position(Position { x: 1, y: 2, z: 3 });
+        // x=1 occupies bits 38-63 (1 << 38 = 0x40_0000_0000), z=3 bits
+        // 12-37, y=2 the low 12 bits.
+        assert_eq!(
+            writer.as_bytes(),
+            &[0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x30, 0x02]
+        );
+
+        // Example from the public protocol documentation: a 64-bit position
+        // of x = 18357644, z = -20882616, y = 831.
+        let mut writer = PacketWriter::new();
+        writer.write_position(Position {
+            x: 18_357_644,
+            y: 831,
+            z: -20_882_616,
+        });
+        assert_eq!(
+            writer.as_bytes(),
+            &[0x46, 0x07, 0x63, 0x2C, 0x15, 0xB4, 0x83, 0x3F]
+        );
+
+        for position in [
+            Position::default(),
+            Position {
+                x: -1,
+                y: -64,
+                z: 30_000_000,
+            },
+            Position {
+                x: 30_000_000,
+                y: 319,
+                z: -30_000_000,
+            },
+        ] {
+            let mut writer = PacketWriter::new();
+            writer.write_position(position);
+            let mut reader = PacketReader::new(writer.as_bytes());
+            assert_eq!(reader.read_position().expect("position"), position);
+            reader.ensure_empty().expect("no trailing bytes");
+        }
     }
 
     #[test]

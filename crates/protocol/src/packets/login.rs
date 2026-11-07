@@ -12,10 +12,10 @@ use crate::frame::encode_frame;
 const MAX_NAME_CHARS: usize = 16;
 
 /// Maximum length of a profile property name (protocol String (64)).
-const MAX_PROPERTY_NAME_CHARS: usize = 64;
+pub(crate) const MAX_PROPERTY_NAME_CHARS: usize = 64;
 
 /// Maximum length of a profile property signature (protocol String (1024)).
-const MAX_SIGNATURE_CHARS: usize = 1024;
+pub(crate) const MAX_SIGNATURE_CHARS: usize = 1024;
 
 /// Derives the offline-mode player UUID the way the game does: a UUID v3
 /// (MD5) over the UTF-8 bytes of `OfflinePlayer:<name>`, as documented in
