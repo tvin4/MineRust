@@ -14,6 +14,7 @@ protocol = { path = "../protocol" }
 serde.workspace = true
 serde_json.workspace = true
 server = { path = "../server" }
+world = { path = "../world" }
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
