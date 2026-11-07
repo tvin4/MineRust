@@ -65,6 +65,15 @@ pub struct ServerConfig {
     /// the ids are unverified. See `tools/generate-reports.ps1`.
     #[serde(default)]
     pub packets_report: Option<String>,
+    /// Optional path to the data generator's `reports/registries.json`.
+    ///
+    /// When set, the numeric ids of the built-in registries (`block`,
+    /// `item`, `potion`, ...) come from that report, so the server can send
+    /// their tags during configuration; without it only the synchronized
+    /// registries get tags and the client fails to bind dimension types and
+    /// enchantments. See `tools/generate-reports.ps1`.
+    #[serde(default)]
+    pub registries_report: Option<String>,
     /// Optional path to the official vanilla `server.jar` (M3 parity tests).
     ///
     /// Used only by the ignored parity tests of the `parity` crate, never by
@@ -103,6 +112,15 @@ impl ServerConfig {
             .is_some_and(|path| path.trim().is_empty())
         {
             return Err(ConfigError::Invalid("packets_report is empty".to_owned()));
+        }
+        if self
+            .registries_report
+            .as_deref()
+            .is_some_and(|path| path.trim().is_empty())
+        {
+            return Err(ConfigError::Invalid(
+                "registries_report is empty".to_owned(),
+            ));
         }
         if self
             .vanilla_server_jar
@@ -196,6 +214,31 @@ client_jar = "client.jar"
     fn rejects_an_empty_report_path() {
         let text = example_toml()
             + r#"packets_report = " "
+"#;
+        let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+        assert!(matches!(config.validate(), Err(ConfigError::Invalid(_))));
+    }
+
+    #[test]
+    fn registries_report_path_is_optional() {
+        let config: ServerConfig = toml::from_str(&example_toml()).expect("valid toml");
+        assert_eq!(config.registries_report, None);
+
+        let text = example_toml()
+            + r#"registries_report = "generated/reports/registries.json"
+"#;
+        let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+        assert_eq!(
+            config.registries_report.as_deref(),
+            Some("generated/reports/registries.json")
+        );
+        config.validate().expect("valid");
+    }
+
+    #[test]
+    fn rejects_an_empty_registries_report_path() {
+        let text = example_toml()
+            + r#"registries_report = " "
 "#;
         let config: ServerConfig = toml::from_str(&text).expect("valid toml");
         assert!(matches!(config.validate(), Err(ConfigError::Invalid(_))));

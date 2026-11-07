@@ -1,6 +1,6 @@
 //! MineRust server entry point.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
@@ -35,7 +35,11 @@ fn try_main() -> Result<()> {
 
     // Load registries and tags from the user's client jar before binding,
     // so a broken jar path fails fast with a clear error.
-    let game_data = data::load_from_jar(&config.client_jar).with_context(|| {
+    let game_data = data::load_from_jar(
+        &config.client_jar,
+        config.registries_report.as_deref().map(Path::new),
+    )
+    .with_context(|| {
         format!(
             "failed to load game data from client jar {}",
             config.client_jar

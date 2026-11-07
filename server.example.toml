@@ -18,6 +18,13 @@ client_jar = "path/to/client.jar"
 # (documented, unverified) are used and the server logs a warning.
 # packets_report = "path/to/generated/reports/packets.json"
 
+# Optional: reports/registries.json generated from your game copy with
+# `tools\generate-reports.ps1`. When set, the numeric ids of the built-in
+# registries (block, item, potion, ...) come from that report and their
+# tags are sent during configuration; when omitted only the synchronized
+# registries get tags and the client fails to load registries.
+# registries_report = "path/to/generated/reports/registries.json"
+
 # Optional: vanilla server 26.3 installation used by the ignored parity
 # tests (crates/parity): an official server.jar from Mojang's version
 # manifest and the directory it runs in (eula.txt, server.properties,

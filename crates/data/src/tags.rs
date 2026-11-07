@@ -8,8 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
 
-use crate::load::SYNCHRONIZED_REGISTRIES;
-use crate::{DataError, RegistryData, NAMESPACE};
+use crate::{DataError, NAMESPACE};
 
 /// A tag file as it appears in the data pack: an optional `replace` flag
 /// (accepted and ignored — the jar is the single source of tags) and the
@@ -66,37 +65,39 @@ pub(crate) struct RawTag {
 /// `.json` suffix) into the registry directory it belongs to and the tag
 /// name, e.g. `banner_pattern/pattern_item/skull` becomes the directory
 /// `banner_pattern` and the tag `pattern_item/skull`. Returns `None` for
-/// tags of registries that are not synchronized (block, item, ...).
-pub(crate) fn split_tag_path(rest: &str) -> Option<(&'static str, &str)> {
+/// tags of registries outside `tag_dirs` — the synchronized registries plus
+/// the built-in ones the registries report describes (block, item, ...).
+pub(crate) fn split_tag_path<'a>(
+    rest: &'a str,
+    tag_dirs: &'a BTreeSet<String>,
+) -> Option<(&'a str, &'a str)> {
     let (first, remainder) = rest.split_once('/')?;
     if let Some((second, tag)) = remainder.split_once('/') {
         // Two-segment registry directories, e.g. `worldgen/biome`.
         let two = format!("{first}/{second}");
-        if let Some(dir) = SYNCHRONIZED_REGISTRIES.iter().copied().find(|d| *d == two) {
-            return Some((dir, tag));
+        if let Some(dir) = tag_dirs.get(two.as_str()) {
+            return Some((dir.as_str(), tag));
         }
     }
     // One-segment registry directory, e.g. `damage_type`; `remainder` keeps
     // any further nesting as part of the tag name.
-    let dir = SYNCHRONIZED_REGISTRIES
-        .iter()
-        .copied()
-        .find(|d| *d == first)?;
-    Some((dir, remainder))
+    let dir = tag_dirs.get(first)?;
+    Some((dir.as_str(), remainder))
 }
 
 /// Resolves raw tags into numeric entry ids: references are expanded in
-/// place, duplicates removed, missing required references rejected, and
-/// tags that end up empty are dropped.
+/// place, duplicates removed, missing required references rejected. Tags
+/// that end up with no entries are kept — the client binds them as empty
+/// tags (`dialog` sends only those).
 pub(crate) fn resolve(
     raw_tags: BTreeMap<String, BTreeMap<String, RawTag>>,
-    registries: &BTreeMap<String, RegistryData>,
+    entry_ids: &BTreeMap<String, BTreeMap<String, i32>>,
 ) -> Result<BTreeMap<String, BTreeMap<String, Vec<i32>>>, DataError> {
     let mut resolved_all = BTreeMap::new();
     for (registry_id, registry_tags) in raw_tags {
-        // Guaranteed by `collect_tags`, which only groups tags of the
-        // synchronized registries that `load_registry` just loaded.
-        let Some(registry) = registries.get(registry_id.as_str()) else {
+        // Guaranteed by `load_from_zip`, which only groups tags of the
+        // registries `entry_ids` describes.
+        let Some(registry) = entry_ids.get(registry_id.as_str()) else {
             continue;
         };
         let mut memo: BTreeMap<String, Vec<i32>> = BTreeMap::new();
@@ -111,13 +112,9 @@ pub(crate) fn resolve(
                 &mut memo,
                 &mut Vec::new(),
             )?;
-            if !ids.is_empty() {
-                resolved.insert(tag_id.clone(), ids);
-            }
+            resolved.insert(tag_id.clone(), ids);
         }
-        if !resolved.is_empty() {
-            resolved_all.insert(registry_id, resolved);
-        }
+        resolved_all.insert(registry_id, resolved);
     }
     Ok(resolved_all)
 }
@@ -130,7 +127,7 @@ fn resolve_tag(
     tag_id: &str,
     path: &str,
     raw_tags: &BTreeMap<String, RawTag>,
-    registry: &RegistryData,
+    entry_ids: &BTreeMap<String, i32>,
     memo: &mut BTreeMap<String, Vec<i32>>,
     stack: &mut Vec<String>,
 ) -> Result<Vec<i32>, DataError> {
@@ -151,7 +148,7 @@ fn resolve_tag(
         });
     };
     stack.push(tag_id.to_owned());
-    let ids = collect_values(raw, registry_id, registry, raw_tags, memo, stack);
+    let ids = collect_values(raw, registry_id, entry_ids, raw_tags, memo, stack);
     stack.pop();
     let ids = ids?;
     memo.insert(tag_id.to_owned(), ids.clone());
@@ -162,7 +159,7 @@ fn resolve_tag(
 fn collect_values(
     raw: &RawTag,
     registry_id: &str,
-    registry: &RegistryData,
+    entry_ids: &BTreeMap<String, i32>,
     raw_tags: &BTreeMap<String, RawTag>,
     memo: &mut BTreeMap<String, Vec<i32>>,
     stack: &mut Vec<String>,
@@ -178,7 +175,7 @@ fn collect_values(
             text,
             registry_id,
             &raw.path,
-            registry,
+            entry_ids,
             raw_tags,
             memo,
             stack,
@@ -212,18 +209,19 @@ fn resolve_value(
     text: &str,
     registry_id: &str,
     path: &str,
-    registry: &RegistryData,
+    entry_ids: &BTreeMap<String, i32>,
     raw_tags: &BTreeMap<String, RawTag>,
     memo: &mut BTreeMap<String, Vec<i32>>,
     stack: &mut Vec<String>,
 ) -> Result<Vec<i32>, DataError> {
     if let Some(reference) = text.strip_prefix('#') {
         let tag_id = qualify(reference);
-        return resolve_tag(registry_id, &tag_id, path, raw_tags, registry, memo, stack);
+        return resolve_tag(registry_id, &tag_id, path, raw_tags, entry_ids, memo, stack);
     }
     let name = qualify(text);
-    registry
-        .entry_id(&name)
+    entry_ids
+        .get(&name)
+        .copied()
         .map(|id| vec![id])
         .ok_or_else(|| DataError::MissingEntry {
             registry: registry_id.to_owned(),

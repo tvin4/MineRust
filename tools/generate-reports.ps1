@@ -149,6 +149,11 @@ $packets = Join-Path (Join-Path $Output "reports") "packets.json"
 if (-not (Test-Path $packets)) {
     throw "expected report missing: $packets"
 }
+$registries = Join-Path (Join-Path $Output "reports") "registries.json"
+if (-not (Test-Path $registries)) {
+    throw "expected report missing: $registries"
+}
 Write-Host ""
-Write-Host "done. Point server.toml at the report:"
+Write-Host "done. Point server.toml at the reports:"
 Write-Host "  packets_report = `"$($packets -replace '\\','/')`""
+Write-Host "  registries_report = `"$($registries -replace '\\','/')`""

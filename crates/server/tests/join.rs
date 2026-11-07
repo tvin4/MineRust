@@ -32,25 +32,28 @@ const MAX_REGISTRY_PACKETS: usize = 64;
 /// of the overworld is not 0), and one tag resolves to a known id.
 fn fixture_game_data() -> Arc<data::GameData> {
     Arc::new(
-        data::load_from_zip(data::fixtures::jar_with(&[
-            (
-                "data/minecraft/dimension_type/aaa.json",
-                r#"{"piglin_safe": false}"#,
-            ),
-            (
-                "data/minecraft/dimension_type/overworld.json",
-                r#"{"has_skylight": true}"#,
-            ),
-            ("data/minecraft/dimension_type/the_end.json", "{}"),
-            (
-                "data/minecraft/damage_type/fixture.json",
-                r#"{"message_id": "fixture"}"#,
-            ),
-            (
-                "data/minecraft/tags/damage_type/is_fire.json",
-                r#"{"values": ["minecraft:fixture"]}"#,
-            ),
-        ]))
+        data::load_from_zip(
+            data::fixtures::jar_with(&[
+                (
+                    "data/minecraft/dimension_type/aaa.json",
+                    r#"{"piglin_safe": false}"#,
+                ),
+                (
+                    "data/minecraft/dimension_type/overworld.json",
+                    r#"{"has_skylight": true}"#,
+                ),
+                ("data/minecraft/dimension_type/the_end.json", "{}"),
+                (
+                    "data/minecraft/damage_type/fixture.json",
+                    r#"{"message_id": "fixture"}"#,
+                ),
+                (
+                    "data/minecraft/tags/damage_type/is_fire.json",
+                    r#"{"values": ["minecraft:fixture"]}"#,
+                ),
+            ]),
+            None,
+        )
         .expect("fixture jar loads"),
     )
 }

@@ -2,10 +2,12 @@
 //!
 //! To introduce a client to the world the server has to send the
 //! synchronized registries (biomes, damage types, instruments, ...) and the
-//! tags of those registries during the configuration state. None of this
-//! data lives in the repository: it is read from `data/minecraft/` inside
-//! the client jar the server owner points at (the `client_jar` setting of
-//! the server configuration).
+//! tags of all registries the client must bind (`block`, `item`, `dialog`,
+//! ...): the built-in registries take their numeric ids from the data
+//! generator's `reports/registries.json`. None of this data lives in the
+//! repository: it is read from `data/minecraft/` inside the client jar the
+//! server owner points at (the `client_jar` setting of the server
+//! configuration) and from the report (the `registries_report` setting).
 //!
 //! Identifiers and numeric ids follow the public protocol documentation
 //! (<https://minecraft.wiki/wiki/Java_Edition_protocol>): the Registry Data
@@ -16,6 +18,7 @@
 mod error;
 mod load;
 mod packets;
+mod registry_ids;
 mod tags;
 
 #[cfg(any(test, feature = "fixtures"))]
@@ -27,6 +30,7 @@ mod tests;
 pub use error::DataError;
 pub use load::{load_from_jar, load_from_zip, SYNCHRONIZED_REGISTRIES};
 pub use packets::{load_packets_report, packets_from_json, PacketIds};
+pub use registry_ids::{load_registries_report, registries_from_json, RegistryIds};
 
 use std::collections::BTreeMap;
 
@@ -93,8 +97,8 @@ impl GameData {
     }
 
     /// Tags grouped by registry identifier: registry id → tag id → numeric
-    /// ids of the tag's entries. Tags that resolve to no entries are
-    /// omitted.
+    /// ids of the tag's entries. A tag that resolves to no entries is kept
+    /// with an empty list: the client binds it as an empty tag.
     pub fn tags(&self) -> &BTreeMap<String, BTreeMap<String, Vec<i32>>> {
         &self.tags
     }

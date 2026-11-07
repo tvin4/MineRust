@@ -8,14 +8,14 @@ use protocol::NbtTag;
 use crate::fixtures;
 use crate::fixtures::{jar_exactly, jar_with};
 use crate::{
-    load_from_jar, load_from_zip, load_packets_report, packets_from_json, DataError, GameData,
-    PacketIds, SYNCHRONIZED_REGISTRIES,
+    load_from_jar, load_from_zip, load_packets_report, packets_from_json, registries_from_json,
+    DataError, GameData, PacketIds, SYNCHRONIZED_REGISTRIES,
 };
 use protocol::{GameEvent, KeepAlive, StatusResponse};
 
 /// Loads a fixture jar built from `files`.
 fn load(files: &[(&str, &str)]) -> Result<GameData, DataError> {
-    load_from_zip(jar_with(files))
+    load_from_zip(jar_with(files), None)
 }
 
 #[test]
@@ -76,10 +76,10 @@ fn registry_entry_data_is_json_converted_to_nbt() {
 
 #[test]
 fn a_registry_without_entries_is_an_error() {
-    let err = load_from_zip(jar_exactly(&[(
-        "data/minecraft/damage_type/fall.json",
-        "{}",
-    )]))
+    let err = load_from_zip(
+        jar_exactly(&[("data/minecraft/damage_type/fall.json", "{}")]),
+        None,
+    )
     .expect_err("the other registries are missing");
     assert!(matches!(err, DataError::MissingRegistry { .. }), "{err}");
 }
@@ -127,8 +127,96 @@ fn tags_of_unsynchronized_registries_are_ignored() {
         r#"{"values":["minecraft:stone"]}"#,
     )])
     .expect("fixture loads");
-    // `block` is a built-in registry: its tags stay with the client.
+    // Without a registries report `block` stays with the client, which
+    // already knows its tags.
     assert!(data.tags().is_empty(), "{:?}", data.tags());
+}
+
+/// Fixture registries report: `block` gets ids, `villager_trade` does not.
+const BLOCK_REPORT_JSON: &str = r#"{
+  "minecraft:block": {
+    "entries": {
+      "minecraft:stone": { "protocol_id": 7 },
+      "minecraft:oak_log": { "protocol_id": 3 }
+    }
+  }
+}"#;
+
+#[test]
+fn report_registries_get_tags_with_report_ids() {
+    let report = registries_from_json(BLOCK_REPORT_JSON).expect("fixture report parses");
+    let data = load_from_zip(
+        jar_with(&[(
+            "data/minecraft/tags/block/stone_like.json",
+            r#"{"values":["minecraft:stone","minecraft:oak_log"]}"#,
+        )]),
+        Some(&report),
+    )
+    .expect("fixture loads");
+    let tags = &data.tags()["minecraft:block"];
+    // Static ids come from the report, not from any jar entry order.
+    assert_eq!(tags["minecraft:stone_like"], [7, 3]);
+}
+
+#[test]
+fn tag_dirs_the_report_does_not_describe_are_ignored() {
+    let report = registries_from_json(BLOCK_REPORT_JSON).expect("fixture report parses");
+    let data = load_from_zip(
+        jar_with(&[(
+            "data/minecraft/tags/villager_trade/armorer/level_1.json",
+            r#"{"values":["minecraft:emerald"]}"#,
+        )]),
+        Some(&report),
+    )
+    .expect("fixture loads");
+    // Neither synchronized nor in the report: the client owns it alone.
+    assert!(!data.tags().contains_key("minecraft:villager_trade"));
+}
+
+#[test]
+fn synchronized_registries_keep_their_packet_ids_over_report_ids() {
+    // The report invents ids for `damage_type`; the Registry Data packet
+    // redefines them by position, so the packet must win.
+    let report = registries_from_json(
+        r#"{
+          "minecraft:damage_type": {
+            "entries": { "minecraft:fall": { "protocol_id": 99 } }
+          }
+        }"#,
+    )
+    .expect("fixture report parses");
+    let data = load_from_zip(
+        jar_with(&[
+            (
+                "data/minecraft/damage_type/fall.json",
+                r#"{"message_id":"fall"}"#,
+            ),
+            (
+                "data/minecraft/tags/damage_type/is_fall.json",
+                r#"{"values":["minecraft:fall"]}"#,
+            ),
+        ]),
+        Some(&report),
+    )
+    .expect("fixture loads");
+    assert_eq!(
+        data.tags()["minecraft:damage_type"]["minecraft:is_fall"],
+        [0]
+    );
+}
+
+#[test]
+fn empty_tags_of_synchronized_registries_are_kept() {
+    let data = load(&[(
+        "data/minecraft/tags/dialog/quick_actions.json",
+        r#"{"values":[]}"#,
+    )])
+    .expect("fixture loads");
+    // The client reports unbound dialog tags as an error, so the empty
+    // tags of the jar must be sent as they are.
+    let dialog = &data.tags()["minecraft:dialog"];
+    assert!(dialog.contains_key("minecraft:quick_actions"));
+    assert!(dialog["minecraft:quick_actions"].is_empty());
 }
 
 #[test]
@@ -188,8 +276,10 @@ fn missing_optional_references_are_skipped() {
     let registry = data.registry("minecraft:damage_type").expect("exists");
     let fall = registry.entry_id("minecraft:fall").expect("entry");
     assert_eq!(damage_tags["minecraft:maybe"], [fall]);
-    // A tag with no entries left is not sent at all.
-    assert!(!damage_tags.contains_key("minecraft:only_optional"));
+    // Missing optional values are left out; the tag itself is still sent
+    // (empty), so the client binds it against its empty counterpart.
+    assert!(damage_tags.contains_key("minecraft:only_optional"));
+    assert!(damage_tags["minecraft:only_optional"].is_empty());
 }
 
 #[test]
@@ -240,7 +330,10 @@ fn values_are_deduplicated_and_unqualified_names_default_to_minecraft() {
 fn load_the_real_client_jar() {
     let path = std::env::var("MINECRAFT_JAR")
         .expect("MINECRAFT_JAR must point at a client jar to run this test");
-    let data = load_from_jar(path).expect("the jar must load");
+    let report = std::env::var("MINECRAFT_REGISTRIES_REPORT")
+        .ok()
+        .map(std::path::PathBuf::from);
+    let data = load_from_jar(path, report.as_deref()).expect("the jar must load");
     assert_eq!(data.registries().count(), SYNCHRONIZED_REGISTRIES.len());
     for dir in SYNCHRONIZED_REGISTRIES {
         let id = format!("minecraft:{dir}");
@@ -271,6 +364,12 @@ fn load_the_real_client_jar() {
         "minecraft:pattern_item/skull",
     ] {
         assert!(!banner_tags[tag].is_empty(), "{tag}");
+    }
+    // With a registries report the built-in registries are sent too.
+    if report.is_some() {
+        assert!(data.tags().contains_key("minecraft:block"), "block tags");
+        let block_tags = &data.tags()["minecraft:block"];
+        assert!(!block_tags["minecraft:infiniburn_overworld"].is_empty());
     }
 }
 
@@ -339,6 +438,32 @@ fn report_without_a_needed_packet_is_rejected() {
             assert_eq!(count, 1);
             assert!(keys.contains(drop), "{keys}");
         }
+        other => panic!("unexpected result: {other:?}"),
+    }
+}
+
+#[test]
+fn registries_report_parses_protocol_ids() {
+    let ids = registries_from_json(BLOCK_REPORT_JSON).expect("fixture report parses");
+    assert_eq!(ids.len(), 1);
+    let block = ids.get("minecraft:block").expect("block registry");
+    assert_eq!(block.get("minecraft:stone"), Some(&7));
+    assert_eq!(block.get("minecraft:oak_log"), Some(&3));
+    assert!(ids.get("minecraft:item").is_none());
+}
+
+#[test]
+fn registries_report_with_invalid_json_names_the_file() {
+    match registries_from_json("{ not json") {
+        Err(DataError::Json { path, .. }) => assert_eq!(path, "registries report"),
+        other => panic!("unexpected result: {other:?}"),
+    }
+}
+
+#[test]
+fn empty_registries_report_is_rejected() {
+    match registries_from_json("{}") {
+        Err(DataError::EmptyReport { path }) => assert_eq!(path, "registries report"),
         other => panic!("unexpected result: {other:?}"),
     }
 }

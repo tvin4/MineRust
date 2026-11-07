@@ -106,6 +106,23 @@ pub enum DataError {
         source: io::Error,
     },
 
+    /// The registries report file cannot be read.
+    #[error("cannot read registries report {path}: {source}")]
+    RegistriesReportRead {
+        /// Path of the report file.
+        path: String,
+        /// Underlying I/O error.
+        source: io::Error,
+    },
+
+    /// The registries report describes no registries: it is not a
+    /// `reports/registries.json` of this game version.
+    #[error("registries report {path} contains no registries")]
+    EmptyReport {
+        /// Path of the report file.
+        path: String,
+    },
+
     /// The packets report has no entry for a protocol state.
     #[error("packets report has no `{state}` state")]
     MissingState {

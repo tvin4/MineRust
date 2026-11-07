@@ -1,6 +1,6 @@
 //! Reading of registries and tags from the client jar.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{Read, Seek};
 use std::path::Path;
@@ -9,6 +9,7 @@ use protocol::NbtTag;
 use serde_json::Value;
 use zip::ZipArchive;
 
+use crate::registry_ids::{load_registries_report, RegistryIds};
 use crate::tags::{self, RawTag};
 use crate::{DataError, GameData, RegistryData, RegistryEntry, NAMESPACE};
 
@@ -55,19 +56,49 @@ pub(crate) const JAR_DATA_PREFIX: &str = "data/minecraft/";
 pub(crate) const TAG_PREFIX: &str = "data/minecraft/tags/";
 
 /// Loads registries and tags from the client jar at `path`.
-pub fn load_from_jar(path: impl AsRef<Path>) -> Result<GameData, DataError> {
+///
+/// `registries_report` points at the data generator's
+/// `reports/registries.json` (see [`RegistryIds`]); it adds the tags of the
+/// built-in registries (`block`, `item`, ...) with their static protocol
+/// ids. Without it only the synchronized registries get tags.
+pub fn load_from_jar(
+    path: impl AsRef<Path>,
+    registries_report: Option<&Path>,
+) -> Result<GameData, DataError> {
     let path = path.as_ref();
     tracing::info!(jar = %path.display(), "loading game data");
+    let report = match registries_report {
+        Some(report_path) => {
+            let ids = load_registries_report(report_path)?;
+            tracing::info!(
+                path = %report_path.display(),
+                registries = ids.len(),
+                "registries report loaded"
+            );
+            Some(ids)
+        }
+        None => {
+            tracing::warn!(
+                "no registries_report configured: tags of the built-in registries \
+                 (block, item, ...) will not be sent"
+            );
+            None
+        }
+    };
     let file = File::open(path).map_err(|source| DataError::Open {
         path: path.display().to_string(),
         source,
     })?;
-    load_from_zip(file)
+    load_from_zip(file, report.as_ref())
 }
 
 /// Loads registries and tags from an open zip stream — the content of the
-/// client jar.
-pub fn load_from_zip<R: Read + Seek>(reader: R) -> Result<GameData, DataError> {
+/// client jar. `report` adds the id lookup of the built-in registries the
+/// report describes (a fixture test passes `None`).
+pub fn load_from_zip<R: Read + Seek>(
+    reader: R,
+    report: Option<&RegistryIds>,
+) -> Result<GameData, DataError> {
     let mut archive = ZipArchive::new(reader)?;
     let mut names: Vec<String> = archive
         .file_names()
@@ -82,8 +113,55 @@ pub fn load_from_zip<R: Read + Seek>(reader: R) -> Result<GameData, DataError> {
         registries.insert(format!("{NAMESPACE}:{dir}"), RegistryData { entries });
     }
 
-    let raw_tags = collect_tags(&mut archive, &names)?;
-    let tags = tags::resolve(raw_tags, &registries)?;
+    let no_report = RegistryIds::default();
+    let report = report.unwrap_or(&no_report);
+
+    // A jar tag registry is sent if the Registry Data packet synchronizes
+    // it or if the report provides the static ids its tags refer to. That
+    // leaves out registry directories the client owns alone
+    // (`villager_trade`, `worldgen/structure`, ...).
+    let mut tag_dirs: BTreeSet<String> = SYNCHRONIZED_REGISTRIES
+        .iter()
+        .map(|dir| (*dir).to_owned())
+        .collect();
+    for id in report.registry_ids() {
+        let Some(dir) = id
+            .strip_prefix(NAMESPACE)
+            .and_then(|rest| rest.strip_prefix(':'))
+        else {
+            continue;
+        };
+        // Only directories of the jar's `data/minecraft/tags/` tree.
+        if !dir.is_empty() {
+            tag_dirs.insert(dir.to_owned());
+        }
+    }
+
+    let raw_tags = collect_tags(&mut archive, &names, &tag_dirs)?;
+
+    // Numeric ids of every tagged registry: the report's static ids first,
+    // then the positions of the Registry Data packet — a synchronized
+    // registry is redefined by what the server sends, report or not.
+    let mut entry_ids: BTreeMap<String, BTreeMap<String, i32>> = BTreeMap::new();
+    for registry_id in raw_tags.keys() {
+        if let Some(ids) = report.get(registry_id) {
+            entry_ids.insert(registry_id.clone(), ids.clone());
+        }
+    }
+    for dir in SYNCHRONIZED_REGISTRIES {
+        let Some(registry) = registries.get(&format!("{NAMESPACE}:{dir}")) else {
+            // `registries` is filled from this very list above.
+            continue;
+        };
+        let ids = registry
+            .entries()
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| (entry.name.clone(), index as i32))
+            .collect();
+        entry_ids.insert(format!("{NAMESPACE}:{dir}"), ids);
+    }
+    let tags = tags::resolve(raw_tags, &entry_ids)?;
 
     let total: usize = registries
         .values()
@@ -137,12 +215,12 @@ fn load_registry<R: Read + Seek>(
     Ok(entries)
 }
 
-/// Reads every tag file of a synchronized registry; tags of other
-/// registries (block, item, ...) are left to the client, which already
-/// knows them.
+/// Reads every tag file whose registry is in `tag_dirs`; tags of other
+/// registries are left to the client, which already owns them.
 fn collect_tags<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     names: &[String],
+    tag_dirs: &BTreeSet<String>,
 ) -> Result<BTreeMap<String, BTreeMap<String, RawTag>>, DataError> {
     let mut collected: BTreeMap<String, BTreeMap<String, RawTag>> = BTreeMap::new();
     for name in names {
@@ -152,7 +230,7 @@ fn collect_tags<R: Read + Seek>(
         let Some(stem) = rest.strip_suffix(".json") else {
             continue;
         };
-        let Some((dir, tag)) = tags::split_tag_path(stem) else {
+        let Some((dir, tag)) = tags::split_tag_path(stem, tag_dirs) else {
             continue;
         };
         let text = read_text(archive, name)?;
