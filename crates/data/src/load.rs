@@ -14,14 +14,16 @@ use crate::tags::{self, RawTag};
 use crate::{DataError, GameData, RegistryData, RegistryEntry, NAMESPACE};
 
 /// Directories under `data/minecraft/` of the jar whose registries are
-/// synchronized to the client in the Registry Data packet. The list comes
-/// from the public protocol documentation
-/// (<https://minecraft.wiki/wiki/Java_Edition_protocol>); the entries
-/// themselves are read from the user's own copy of the game.
+/// synchronized to the client in the Registry Data packet: exactly the 32
+/// registries a real 26.3 server sends (verified against the vanilla trace
+/// by the `registry_data_parity` test); the entries themselves are read
+/// from the user's own copy of the game.
 pub const SYNCHRONIZED_REGISTRIES: &[&str] = &[
     "banner_pattern",
+    "block_transformer",
     "chat_type",
     "damage_type",
+    "decorated_pot_pattern",
     "dialog",
     "dimension_type",
     "enchantment",
@@ -36,6 +38,7 @@ pub const SYNCHRONIZED_REGISTRIES: &[&str] = &[
     "trim_pattern",
     "world_clock",
     "worldgen/biome",
+    "worldgen/block_state_provider",
     "cat_variant",
     "cat_sound_variant",
     "chicken_variant",
