@@ -12,16 +12,14 @@
   "10": "status.rs",
   "11": "NbtError",
   "12": "main.rs",
-  "13": "AsRef",
-  "14": "Path",
   "15": "encode_frame",
-  "16": "Arc",
-  "17": "PacketKey",
   "18": "frame.rs",
   "19": "vanilla.rs",
   "20": "vanilla_harness.rs",
   "21": "configuration.rs",
   "22": "Uuid",
+  "23": "Client",
+  "24": "Trace",
   "43": "generate-reports.ps1",
   "44": "SOURCES.md — аудит источников данных (M1–M2, по состоянию на пред-M3)"
 }
