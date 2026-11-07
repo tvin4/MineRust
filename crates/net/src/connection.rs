@@ -381,16 +381,14 @@ where
             0
         }
     };
-    let dimension_names: Vec<String> = game_data
-        .registry(DIMENSION_TYPE_REGISTRY)
-        .map(|registry| {
-            registry
-                .entries()
-                .iter()
-                .map(|entry| entry.name.clone())
-                .collect()
-        })
-        .unwrap_or_default();
+    // The dimension list carries the world's dimensions, not the dimension
+    // types of the registry: the vanilla join recording lists exactly the
+    // three dimensions of its own world and omits `minecraft:overworld_caves`,
+    // which the registry does contain.
+    // SOURCE: half-verified (the recording proves "not the registry"; the
+    // world itself arrives with the world template in part 3). Our world is
+    // the overworld alone for now.
+    let dimension_names = vec![OVERWORLD.to_owned()];
 
     let login = LoginPlay {
         entity_id: ENTITY_ID,
@@ -404,7 +402,10 @@ where
         do_limited_crafting: false,
         dimension_type,
         dimension_name: OVERWORLD.to_owned(),
-        hashed_seed: 0, // TODO(M3): hash the world seed once worldgen exists.
+        // TODO(part 3a): take the seed from level.dat and hash it with
+        // `protocol::hashed_seed` (the formula is verified against the
+        // vanilla recording); without a world we send zero.
+        hashed_seed: 0,
         game_mode: 0,
         previous_game_mode: 0,
         is_debug: false,

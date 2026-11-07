@@ -210,6 +210,21 @@ impl LoginPlay {
     }
 }
 
+/// Hashes a world seed the way the `hashed_seed` field of [`LoginPlay`]
+/// carries it: SHA-256 of the seed's 8 little-endian bytes, the first 8
+/// digest bytes read back as a little-endian i64 (written big-endian on the
+/// wire like every fixed-size integer).
+///
+/// SOURCE: parity recording of vanilla 26.3 — verified byte for byte: the
+/// parity world has `level-seed=12345` and the vanilla `minecraft:login`
+/// payload ends with `0x0413_9124_5135_54E1`, which is exactly
+/// `hashed_seed(12345)`.
+pub fn hashed_seed(seed: i64) -> i64 {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(seed.to_le_bytes());
+    i64::from_le_bytes(digest[..8].try_into().unwrap_or([0; 8]))
+}
+
 /// Clientbound Game Event: a one-shot world event. Event 13 ("start waiting
 /// for chunks") is required after Login (play) for the client to leave the
 /// loading screen.
@@ -747,6 +762,17 @@ mod tests {
         let decoded = LoginPlay::decode_payload(&mut reader).expect("decodable");
         assert_eq!(decoded, packet);
         reader.ensure_empty().expect("no trailing bytes");
+    }
+
+    /// The hashed seed formula is read off the vanilla join recording: the
+    /// parity world has `level-seed=12345`, and the vanilla `minecraft:login`
+    /// payload carries exactly `hashed_seed(12345)` as its 8 seed bytes.
+    #[test]
+    fn hashed_seed_matches_the_vanilla_recording() {
+        // Wire bytes of the recording: 04 13 91 24 51 35 54 e1.
+        assert_eq!(hashed_seed(12345), 0x0413_9124_5135_54E1);
+        // The hash must actually depend on the seed.
+        assert_ne!(hashed_seed(12345), hashed_seed(12346));
     }
 
     #[test]

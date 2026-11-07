@@ -195,16 +195,16 @@ async fn full_join_handshake_reaches_play_with_registry_data() {
     send(&mut stream, FinishAck::ID, &FinishAck.encode_payload()).await;
 
     // Join sequence. The dimension type id comes from the registry: the
-    // fixture sorts `minecraft:aaa` first, so the overworld is id 1.
+    // fixture sorts `minecraft:aaa` first, so the overworld is id 1. The
+    // dimension *name list* is the world's dimensions (the vanilla
+    // recording lists its world's three, not the registry's four types),
+    // and this test server's world is the overworld alone.
     let (id, payload) = recv(&mut stream).await;
     assert_eq!(id, LoginPlay::ID, "expected login (play)");
     let mut reader = PacketReader::new(&payload);
     let login = LoginPlay::decode_payload(&mut reader).expect("decodable");
     reader.ensure_empty().expect("no trailing bytes");
-    assert_eq!(
-        login.dimension_names,
-        ["minecraft:aaa", "minecraft:overworld", "minecraft:the_end"]
-    );
+    assert_eq!(login.dimension_names, ["minecraft:overworld"]);
     assert_eq!(login.dimension_type, 1, "overworld id from the registry");
     assert_eq!(login.dimension_name, "minecraft:overworld");
     assert_eq!(login.entity_id, 1);

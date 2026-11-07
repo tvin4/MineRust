@@ -169,7 +169,9 @@ const NORMALIZED_ID: i32 = 0;
 ///   clientbound, `minecraft:accept_teleportation` serverbound) and entity
 ///   id (`minecraft:add_entity`, `minecraft:teleport_entity`): each is the
 ///   payload's first VarInt and is replaced by [`NORMALIZED_ID`] throughout
-///   the recording, one value for the whole connection.
+///   the recording, one value for the whole connection. The entity id of
+///   `minecraft:login` is the same kind of counter and is replaced by
+///   [`NORMALIZED_ID`] as the payload's first 4 bytes (big-endian i32).
 /// * `minecraft:login_finished` — the session UUID (last 16 bytes): the
 ///   vanilla server draws a fresh random version-4 UUID per connection, so
 ///   the value carries no parity information; the tail is zeroed.
@@ -186,6 +188,7 @@ pub fn normalize(entry: &TraceEntry) -> Vec<u8> {
     match entry.name.as_deref() {
         Some("minecraft:intention") => normalize_port(&raw).unwrap_or(raw),
         Some("minecraft:login_finished") => normalize_session_uuid(&raw),
+        Some("minecraft:login") => normalize_first_i32(&raw),
         Some("minecraft:player_position")
         | Some("minecraft:accept_teleportation")
         | Some("minecraft:add_entity")
@@ -219,6 +222,21 @@ fn normalize_session_uuid(raw: &[u8]) -> Vec<u8> {
     let mut out = raw.to_vec();
     let tail = out.len() - 16;
     out[tail..].fill(0);
+    out
+}
+
+/// Replaces the entity id at the head of a `minecraft:login` payload
+/// (4 bytes, big-endian i32) with [`NORMALIZED_ID`].
+///
+/// Each server allocates its connection's entity id from its own counter
+/// (the recording shows 4 from vanilla and 1 from ours), so the number
+/// carries no parity information; everything behind it is compared.
+fn normalize_first_i32(raw: &[u8]) -> Vec<u8> {
+    if raw.len() < 4 {
+        return raw.to_vec();
+    }
+    let mut out = raw.to_vec();
+    out[..4].copy_from_slice(&NORMALIZED_ID.to_be_bytes());
     out
 }
 
@@ -552,6 +570,39 @@ mod tests {
             diff_traces(&vanilla, &ours).payloads.len(),
             1,
             "the payload prefix is real data"
+        );
+    }
+
+    /// The entity id of `minecraft:login` is allocated per connection; the
+    /// fields behind it (flags, distances, seed) are real content.
+    #[test]
+    fn login_entity_id_is_normalised_but_the_tail_is_not() {
+        let make = |entity: i32, tail: &[u8]| {
+            let mut payload = entity.to_be_bytes().to_vec();
+            payload.extend_from_slice(tail);
+            trace(
+                "server",
+                vec![entry(
+                    TraceState::Play,
+                    TraceDirection::Clientbound,
+                    0x32,
+                    Some("minecraft:login"),
+                    &payload,
+                )],
+            )
+        };
+        let vanilla = make(4, &[0x00, 0x0A, 0x0A]);
+        let ours = make(1, &[0x00, 0x0A, 0x0A]);
+        assert!(
+            diff_traces(&vanilla, &ours).is_identical(),
+            "the per-connection entity id must not count"
+        );
+
+        let ours = make(4, &[0x00, 0x0C, 0x0A]);
+        assert_eq!(
+            diff_traces(&vanilla, &ours).payloads.len(),
+            1,
+            "view distance behind the id is real data"
         );
     }
 
