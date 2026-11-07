@@ -51,6 +51,30 @@ pub enum EnvError {
         /// Expected template directory.
         path: PathBuf,
     },
+    /// The vanilla `server.properties` could not be read.
+    #[error("cannot read vanilla server.properties at {path}: {source}")]
+    PropertiesRead {
+        /// `server.properties` path.
+        path: PathBuf,
+        /// Underlying I/O error.
+        #[source]
+        source: std::io::Error,
+    },
+    /// `server-port` is missing or not a number.
+    #[error("server-port not found or invalid in {path}")]
+    BadPort {
+        /// `server.properties` path.
+        path: PathBuf,
+    },
+    /// The configured packets report could not be loaded or verified.
+    #[error("cannot load packets report {path}: {source}")]
+    Report {
+        /// Report path that failed.
+        path: String,
+        /// Underlying data error.
+        #[source]
+        source: Box<data::DataError>,
+    },
 }
 
 /// Everything the parity tests need to talk to the real vanilla server.
@@ -64,6 +88,61 @@ pub struct ParityEnv {
     pub vanilla_dir: PathBuf,
     /// `world-template` directory with a frozen survival world (seed 12345).
     pub world_template: PathBuf,
+}
+
+/// Environment variable with the packets report, as used by the data tests.
+pub const PACKETS_REPORT_VAR: &str = "MINECRAFT_PACKETS_REPORT";
+
+impl ParityEnv {
+    /// The port vanilla listens on, read from its `server.properties`.
+    pub fn vanilla_port(&self) -> Result<u16, EnvError> {
+        let path = self.vanilla_dir.join("server.properties");
+        let text = std::fs::read_to_string(&path).map_err(|source| EnvError::PropertiesRead {
+            path: path.clone(),
+            source,
+        })?;
+        parse_server_port(&text).ok_or(EnvError::BadPort { path })
+    }
+
+    /// The packet ids every side of a trace is keyed by.
+    ///
+    /// Uses the configured packets report (or `$MINECRAFT_PACKETS_REPORT`
+    /// when the config field is empty) and fails if it does not cover our
+    /// packet keys; without any report the compiled, report-verified
+    /// defaults are used.
+    pub fn packet_ids(&self) -> Result<data::PacketIds, EnvError> {
+        if let Some(path) = self
+            .config
+            .packets_report
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var(PACKETS_REPORT_VAR).ok().map(PathBuf::from))
+        {
+            let display = path.display().to_string();
+            let ids = data::load_packets_report(&path).map_err(|source| EnvError::Report {
+                path: display.clone(),
+                source: Box::new(source),
+            })?;
+            ids.verify(protocol::used_packet_keys())
+                .map_err(|source| EnvError::Report {
+                    path: display,
+                    source: Box::new(source),
+                })?;
+            return Ok(ids);
+        }
+        tracing::warn!("parity: no packets report configured, using compiled packet ids");
+        Ok(data::PacketIds::compiled())
+    }
+}
+
+/// Extracts `server-port` from `server.properties` text.
+fn parse_server_port(text: &str) -> Option<u16> {
+    text.lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix("server-port="))
+        .and_then(|value| value.trim().parse().ok())
 }
 
 /// Locates `server.toml`: `$MINECRAFT_SERVER_TOML` or two levels above this
@@ -140,25 +219,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn server_toml_defaults_to_the_workspace_root() {
-        let path = server_toml_path();
-        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-        assert_eq!(path, manifest.join("..").join("..").join("server.toml"));
+    fn server_port_is_read_from_the_properties_text() {
+        let text = "# comment\nlevel-seed=12345\nserver-port=25566\nview-distance=10\n";
+        assert_eq!(parse_server_port(text), Some(25566));
+        assert_eq!(
+            parse_server_port("server-port = 25565\n"),
+            None,
+            "no spaces"
+        );
+        assert_eq!(parse_server_port("level-seed=1\n"), None, "missing key");
+        assert_eq!(parse_server_port("server-port=abc\n"), None, "not a number");
     }
 
     #[test]
-    fn the_env_var_overrides_the_config_path() {
-        // Env vars are process-global; the assertion still holds because the
-        // only thing we check is that the variable wins.
+    fn server_toml_path_defaults_to_the_workspace_root_and_honours_the_env() {
+        // One sequential test: env vars are process-global, so a second
+        // test changing the same variable could race this one.
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let default = manifest.join("..").join("..").join("server.toml");
+
         let var = SERVER_TOML_VAR;
         let previous = std::env::var(var).ok();
+        std::env::remove_var(var);
+        let path_without_env = server_toml_path();
+
         std::env::set_var(var, "custom/server.toml");
-        let path = server_toml_path();
-        if let Some(previous) = previous {
-            std::env::set_var(var, previous);
-        } else {
-            std::env::remove_var(var);
+        let path_with_env = server_toml_path();
+
+        match previous {
+            Some(previous) => std::env::set_var(var, previous),
+            None => std::env::remove_var(var),
         }
-        assert_eq!(path, PathBuf::from("custom/server.toml"));
+
+        assert_eq!(path_without_env, default);
+        assert_eq!(path_with_env, PathBuf::from("custom/server.toml"));
     }
 }

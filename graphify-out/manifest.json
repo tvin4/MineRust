@@ -188,5 +188,25 @@
     "mtime": 1794054988.9598005,
     "ast_hash": "31335b4cffaae8feb81e1f014265a3c7",
     "semantic_hash": ""
+  },
+  "crates/parity/src/env.rs": {
+    "mtime": 1794057665.6723309,
+    "ast_hash": "a8a213b00cc03ca2ac2da3c6cc8305af",
+    "semantic_hash": ""
+  },
+  "crates/parity/src/lib.rs": {
+    "mtime": 1794057545.7851126,
+    "ast_hash": "f1229d451f80d6b4c65bb41660422844",
+    "semantic_hash": ""
+  },
+  "crates/parity/src/vanilla.rs": {
+    "mtime": 1794057595.5418088,
+    "ast_hash": "0b35bb922e593a7a19e1e894bbae1974",
+    "semantic_hash": ""
+  },
+  "crates/parity/tests/vanilla_harness.rs": {
+    "mtime": 1794057545.7901134,
+    "ast_hash": "c572a04a5d048cd84202d0b861b881f4",
+    "semantic_hash": ""
   }
 }

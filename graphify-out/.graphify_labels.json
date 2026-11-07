@@ -18,6 +18,8 @@
   "16": "Arc",
   "17": "PacketKey",
   "18": "frame.rs",
+  "19": "vanilla.rs",
+  "20": "vanilla_harness.rs",
   "21": "configuration.rs",
   "22": "Uuid",
   "43": "generate-reports.ps1",

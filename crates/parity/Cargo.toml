@@ -7,6 +7,12 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+data = { path = "../data" }
+flate2.workspace = true
+net = { path = "../net" }
+protocol = { path = "../protocol" }
+serde.workspace = true
+serde_json.workspace = true
 server = { path = "../server" }
 thiserror.workspace = true
 tokio.workspace = true

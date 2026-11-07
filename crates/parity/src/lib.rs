@@ -16,8 +16,14 @@
 //! Skipping is graceful: without `vanilla_server_jar`/`vanilla_server_dir`
 //! in `server.toml` the tests print the configuration error and return.
 
+mod client;
 mod env;
+mod trace;
 mod vanilla;
 
-pub use env::{load_parity_env, EnvError, ParityEnv, SERVER_TOML_VAR};
+pub use client::{Client, ClientError, Step};
+pub use env::{load_parity_env, EnvError, ParityEnv, PACKETS_REPORT_VAR, SERVER_TOML_VAR};
+pub use trace::{
+    from_hex, to_hex, HexError, Trace, TraceDirection, TraceEntry, TraceIoError, TraceState,
+};
 pub use vanilla::{copy_dir_all, Vanilla, VanillaError};

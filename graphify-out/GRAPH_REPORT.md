@@ -1,16 +1,16 @@
 # Graph Report - MineRust  (2026-11-07)
 
 ## Corpus Check
-- 37 files · ~32,666 words
+- 41 files · ~34,459 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 634 nodes · 1585 edges · 23 communities (20 shown, 3 thin omitted)
+- 671 nodes · 1654 edges · 25 communities (22 shown, 3 thin omitted)
 - Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 86 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `f0267dd2`
+- Built from commit: `f17cb818`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -33,6 +33,7 @@
 - Arc
 - PacketKey
 - frame.rs
+- vanilla.rs
 - configuration.rs
 - Uuid
 - SOURCES.md — аудит источников данных (M1–M2, по состоянию на пред-M3)
@@ -64,7 +65,7 @@
 ## Import Cycles
 - None detected.
 
-## Communities (23 total, 3 thin omitted)
+## Communities (25 total, 3 thin omitted)
 
 ### Community 0 - "ARCHITECTURE.md — многопоточный Minecraft на Rust"
 Cohesion: 0.18
@@ -96,15 +97,15 @@ Nodes (12): all_next_states_roundtrip(), Handshake, handshake_roundtrips_through
 
 ### Community 8 - "config.rs"
 Cohesion: 0.10
-Nodes (40): Arc, AsRef, ConfigError, example_toml(), load_config(), parses_a_valid_config(), parses_vanilla_paths(), rejects_an_empty_client_jar_path() (+32 more)
+Nodes (39): Arc, AsRef, ConfigError, example_toml(), load_config(), parses_a_valid_config(), parses_vanilla_paths(), rejects_an_empty_client_jar_path() (+31 more)
 
 ### Community 9 - "login.rs"
 Cohesion: 0.12
 Nodes (23): disconnect_reason_carries_a_json_text_component(), DisconnectLogin, GameProfile, login_acknowledged_has_no_fields(), login_start_rejects_an_oversized_name(), login_start_roundtrips_name_and_uuid(), login_success_places_the_session_id_last(), login_success_roundtrips_a_profile_with_properties() (+15 more)
 
 ### Community 10 - "status.rs"
-Cohesion: 0.19
-Nodes (20): handshake(), read_until_close(), recv(), recv_frame(), Arc, TcpStream, Vec, send() (+12 more)
+Cohesion: 0.11
+Nodes (30): GameData, RegistryData, RegistryEntry, BTreeMap, NbtTag, Option, String, Vec (+22 more)
 
 ### Community 11 - "NbtError"
 Cohesion: 0.13
@@ -123,8 +124,12 @@ Cohesion: 0.14
 Nodes (14): packets_report_json(), String, describe_shows_state_direction_and_name(), Direction, every_state_and_direction_has_a_distinct_index(), keys_of_the_same_packet_in_two_directions_differ(), PacketKey, ProtocolState (+6 more)
 
 ### Community 18 - "frame.rs"
-Cohesion: 0.06
-Nodes (57): GameData, RegistryData, RegistryEntry, BTreeMap, NbtTag, Option, String, Vec (+49 more)
+Cohesion: 0.07
+Nodes (47): load_packets_report(), PacketIds, parse_report(), ProtocolId, ReportFile, AsRef, Option, Path (+39 more)
+
+### Community 19 - "vanilla.rs"
+Cohesion: 0.11
+Nodes (29): Box, Child, ConfigError, EnvError, load_parity_env(), ParityEnv, PathBuf, Result (+21 more)
 
 ### Community 21 - "configuration.rs"
 Cohesion: 0.09
@@ -147,11 +152,11 @@ Nodes (8): SOURCES.md — аудит источников данных (M1–M2,
 _Questions this graph is uniquely positioned to answer:_
 
 - **Why does `CodecError` connect `CodecError` to `ARCHITECTURE.md — многопоточный Minecraft на Rust`, `lib.rs`, `handshake.rs`, `login.rs`, `frame.rs`, `configuration.rs`, `Uuid`?**
-  _High betweenness centrality (0.378) - this node is a cross-community bridge._
+  _High betweenness centrality (0.366) - this node is a cross-community bridge._
 - **Why does `NbtError` connect `lib.rs` to `MineRust`, `NbtError`, `CodecError`?**
-  _High betweenness centrality (0.278) - this node is a cross-community bridge._
-- **Why does `DataError` connect `NbtError` to `frame.rs`, `lib.rs`, `encode_frame`?**
-  _High betweenness centrality (0.170) - this node is a cross-community bridge._
+  _High betweenness centrality (0.260) - this node is a cross-community bridge._
+- **Why does `serve()` connect `frame.rs` to `config.rs`, `status.rs`?**
+  _High betweenness centrality (0.185) - this node is a cross-community bridge._
 - **Are the 25 inferred relationships involving `encode_frame()` (e.g. with `write_frame()` and `encode_varint()`) actually correct?**
   _`encode_frame()` has 25 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 18 inferred relationships involving `split_frame()` (e.g. with `decode_varint()` and `client_information_roundtrips_every_field()`) actually correct?**
