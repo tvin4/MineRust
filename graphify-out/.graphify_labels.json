@@ -10,5 +10,10 @@
   "8": "config.rs",
   "9": ".to_json",
   "10": "status.rs",
-  "12": "main.rs"
+  "11": "NbtError",
+  "12": "main.rs",
+  "14": "login.rs",
+  "15": "encode_frame",
+  "21": "configuration.rs",
+  "22": "Uuid"
 }
