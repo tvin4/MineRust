@@ -1,0 +1,13 @@
+[package]
+name = "parity"
+description = "Parity testing against the official vanilla server (M3)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+server = { path = "../server" }
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
