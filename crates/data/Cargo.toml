@@ -13,3 +13,8 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 zip = { workspace = true }
+
+[features]
+# Test-only helpers that build fixture jars in memory. Enabled by the
+# integration tests of other crates; never enabled by normal builds.
+fixtures = []

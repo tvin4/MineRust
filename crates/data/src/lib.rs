@@ -17,6 +17,9 @@ mod error;
 mod load;
 mod tags;
 
+#[cfg(any(test, feature = "fixtures"))]
+pub mod fixtures;
+
 #[cfg(test)]
 mod tests;
 

@@ -27,4 +27,5 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
+data = { path = "../data", features = ["fixtures"] }
 serde_json = { workspace = true }
