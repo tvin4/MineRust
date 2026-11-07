@@ -7,6 +7,11 @@
 //! numbers become float or double, arrays become byte/int/long arrays when
 //! their elements share such a type and a list otherwise, and `null` has no
 //! NBT representation.
+//!
+//! One documented edge case is handled differently: the wiki leaves arrays
+//! that mix float with double unconvertible, but the game data contains
+//! them (enchantment lookup values), so they are widened into a list of
+//! double — the protocol codecs read a homogeneous list back either way.
 
 use std::collections::BTreeMap;
 
@@ -89,7 +94,20 @@ fn array_to_tag(items: &[Value]) -> Result<NbtTag, NbtError> {
         3 => Ok(NbtTag::IntArray(collect_ints(tags)?)),
         4 => Ok(NbtTag::LongArray(collect_longs(tags)?)),
         other if tags.iter().all(|tag| tag.type_id() == other) => Ok(NbtTag::List(tags)),
+        // Float and double elements in one array (see the module docs):
+        // widen the floats so the list stays homogeneous.
+        _ if tags.iter().all(|tag| matches!(tag.type_id(), 5 | 6)) => {
+            Ok(NbtTag::List(tags.into_iter().map(widen_float).collect()))
+        }
         _ => Err(NbtError::MixedJsonArray),
+    }
+}
+
+/// Widens a float tag to a double tag; other tags pass through unchanged.
+fn widen_float(tag: NbtTag) -> NbtTag {
+    match tag {
+        NbtTag::Float(value) => NbtTag::Double(f64::from(value)),
+        other => other,
     }
 }
 
@@ -239,13 +257,37 @@ mod tests {
 
     #[test]
     fn arrays_with_mixed_element_types_are_rejected() {
-        // 0 and 1 convert to byte but 128 to short.
+        // 0 and 1 convert to byte but 128 to short: an integer mix has no
+        // homogeneous NBT representation and no promotion rule.
         let err = NbtTag::from_json(&json!([0, 1, 128])).expect_err("mixed");
         assert!(matches!(err, NbtError::MixedJsonArray));
 
-        // 0.5 converts to float but 0.6 to double.
-        let err = NbtTag::from_json(&json!([0.5, 0.6])).expect_err("mixed");
+        // A byte and a double in one array stay rejected as well.
+        let err = NbtTag::from_json(&json!([0.0, 0.1])).expect_err("mixed");
         assert!(matches!(err, NbtError::MixedJsonArray));
+    }
+
+    #[test]
+    fn mixed_float_and_double_arrays_become_double_lists() {
+        // The wiki calls such arrays non-convertible, but the game data
+        // contains them (enchantment lookup values like [1.2, 1.75, 2.2]);
+        // the protocol codecs read a homogeneous list back, so floats are
+        // promoted to doubles instead of failing the whole load.
+        let value = json!([1.2, 1.75, 2.2]);
+        assert_eq!(
+            NbtTag::from_json(&value).expect("convertible"),
+            NbtTag::List(vec![
+                NbtTag::Double(1.2),
+                NbtTag::Double(1.75),
+                NbtTag::Double(2.2),
+            ])
+        );
+        // A list that is already all doubles stays as it is.
+        let value = json!([0.5, 0.6]);
+        assert_eq!(
+            NbtTag::from_json(&value).expect("convertible"),
+            NbtTag::List(vec![NbtTag::Double(0.5), NbtTag::Double(0.6)])
+        );
     }
 
     #[test]
