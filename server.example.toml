@@ -12,6 +12,12 @@ max_players = 20
 # Path to the client jar of your game installation.
 client_jar = "path/to/client.jar"
 
+# Optional: reports/packets.json generated from your game copy with
+# `tools\generate-reports.ps1`. When set, every packet id is taken from
+# that report and verified at startup; when omitted the compiled defaults
+# (documented, unverified) are used and the server logs a warning.
+# packets_report = "path/to/generated/reports/packets.json"
+
 # Placeholders — replace with the real values from your game installation.
 protocol_version = 0
 version_name = "unknown"

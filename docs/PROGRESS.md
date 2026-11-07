@@ -99,13 +99,50 @@ protocol_version=777 / version_name="26.3" из `version.json` клиентск�
 код готов (offline login без шифрования, Variant A без Known Packs,
 без сжатия); ручная проверка в игре — за владельцем (см. «Что дальше»).
 
+### Пред-M3 аудит источников данных (выполнен)
+
+- [x] `docs/SOURCES.md`: аудит всех пакетов, констант и поведений M1–M2 —
+      источник (jar / генератор / вики / догадка) и статус проверки
+      (авто отчёт / auto fixture / jar / живой клиент / не проверено).
+      Главный вывод: все 31/31 ID пакетов совпадают с реальным
+      `reports/packets.json` 26.3, живой клиент пока не подтверждал ничего.
+- [x] Пункт 2: ID пакетов берутся из отчёта генератора. `protocol`:
+      `PacketKey` (state, direction, имя, компилируемый дефолт) + `KEY`-константы
+      у всех пакетов, `used_packet_keys()` (31 ключ). `data`:
+      `load_packets_report`/`packets_from_json`/`PacketIds` (ошибки
+      `ReportRead`/`MissingState`/`MissingPackets`). Конфиг:
+      опциональное `packets_report` (валидация, загрузка до бинда порта,
+      `verify()` = fail-fast), без него — совпали компилируемые дефолты в
+      лог warn. `net::serve` несёт `Arc<PacketIds>`, все сравнения/записи —
+      `ids.id(KEY)`, локальные ID-константы удалены.
+      Отчёт в репозиторий не коммитится (env/путь конфига).
+- [x] Тесты сверки: юнит (fallback, override, отсутствие состояния/пакета) +
+      ignored `compiled_packet_ids_match_the_real_report` (env
+      `MINECRAFT_PACKETS_REPORT`) + ignored по `MINECRAFT_JAR`; интеграционный
+      `status_response_comes_from_the_packets_report` доказывает, что сервер
+      шлёт ID из отчёта (overridden `StatusResponse`).
+      Всего тестов: 132 (было 114).
+- [x] Пункт 3: `// SOURCE: wiki, unverified` на непроверенных местах
+      (фрейм/строковые лимиты, VarInt, offline UUID, порядок джоина,
+      event 13, тайминги, view/sea level, маска player-info, адрес handshake).
+- [x] Пункт 4: в `AGENTS.md` — порядок источников истины
+      (jar/генератор → парити → вики как подсказка).
+- [x] Пункт 5: план крейта `parity` в `docs/SOURCES.md`; предложение —
+      первым шагом внутри M3.
+- [x] `tools/generate-reports.ps1` — сбор classpath из версионного json
+      лаунчера, @argfile, запуск `net.minecraft.data.Main --reports`
+      (проверено на машине владельца: 43 entry, отчёт сверен).
+
 ## Что дальше
 
 - Ручная проверка M2 владельцем: `cargo run -p server` с `client_jar` в
   `server.toml`, вход клиентом 26.3 — мир должен открыться без вылета
-  (пока пустой: чанки нет, `TODO` до M3).
+  (пока пустой: чанки нет, `TODO` до M3). Рекомендуется сразу сгенерировать
+  отчёт (`tools\generate-reports.ps1`) и добавить `packets_report` в
+  `server.toml` — тогда ID берутся из игры, а не с вики.
 - M3: чтение ванильного мира, отправка чанков — условие успеха: игрок видит
-  мир из ванильного сохранения.
+  мир из ванильного сохранения. **Первый шаг M3** — каркас крейта `parity`
+  (см. `docs/SOURCES.md`, раздел «План: крейт parity»).
 - M4+: сжатие (Set Compression), когда Registry Data/чанки перестанут
   влезать в лимит фрейма; кик по неответу keep-alive.
 
@@ -117,6 +154,13 @@ protocol_version=777 / version_name="26.3" из `version.json` клиентск�
 - `hashed_seed` Login (play) = 0 до появления worldgen (`TODO`).
 - Детали протокола 26.3 не выдумываются: всё берётся из генератора данных
   и публичной документации протокола; недостающее помечать `TODO`.
+  Теперь правило усилено: вики — только подсказка, непроверенное помечается
+  `// SOURCE: wiki, unverified`, см. `AGENTS.md` и `docs/SOURCES.md`.
+- Без `packets_report` в конфиге ID пакетов — дефолты из вики (неверифицированные
+  количественно правы для 26.3, но не закреплены на CI): сервер при старте
+  пишет warn; парити-тесты (план в `docs/SOURCES.md`) закроют пункт 2.
+- Живым клиентом 26.3 пока не подтверждено ничего (ручная проверка M2 за
+  владельцем) — это самый крупный открытый пункт по источникам.
 - `protocol_version`/`version_name` и путь к клиентскому jar из игры
   хранятся только в локальном gitignored `server.toml` владельца; в
   репозитории лежит `server.example.toml` с плейсхолдерами (0 / "unknown").
