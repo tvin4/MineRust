@@ -77,13 +77,51 @@ fn chunk_payloads(trace: &Value) -> Vec<(i32, i32, Vec<u8>)> {
 /// Stored model of the chunk at `FIRST`, read from `region_dir` (the
 /// `dimensions/minecraft/overworld/region` directory of a world copy).
 pub fn stored_chunk(region_dir: &Path) -> Chunk {
-    let region = region_dir.join("dimensions/minecraft/overworld/region/r.0.-1.mca");
-    let stored: StoredChunk = world::load_region(&region)
-        .expect("region holding the spawn chunk")
+    stored_chunk_at(region_dir, FIRST.0, FIRST.1).expect("stored chunk of the first batch")
+}
+
+/// Stored model of one chunk of a world copy: the region file is picked by
+/// the chunk coordinates, the chunk itself by `x`, `z`.
+pub fn stored_chunk_at(region_dir: &Path, x: i32, z: i32) -> Option<Chunk> {
+    let region = region_dir.join("dimensions/minecraft/overworld/region");
+    let file = region.join(format!("r.{}.{}.mca", x >> 5, z >> 5));
+    let stored: StoredChunk = world::load_region(&file)
+        .ok()?
         .into_iter()
-        .find(|chunk| (chunk.x, chunk.z) == FIRST)
-        .expect("stored chunk in the region");
-    Chunk::from_stored(&stored).expect("model")
+        .find(|chunk| (chunk.x, chunk.z) == (x, z))?;
+    Chunk::from_stored(&stored).ok()
+}
+
+/// Palette names of one stored section, in palette order. The template
+/// stores plain strings and `{ "id": ..., "properties": {...} }` compounds.
+pub fn palette_names(section: &world::Section) -> Vec<String> {
+    use protocol::NbtTag;
+    let Some(NbtTag::Compound(states)) = &section.block_states else {
+        return Vec::new();
+    };
+    let Some(NbtTag::List(palette)) = states.get("palette") else {
+        return Vec::new();
+    };
+    palette
+        .iter()
+        .filter_map(|entry| match entry {
+            NbtTag::String(name) => Some(name.clone()),
+            NbtTag::Compound(fields) => {
+                ["id", "Name", ""]
+                    .iter()
+                    .find_map(|key| match fields.get(*key) {
+                        Some(NbtTag::String(name)) => Some(name.clone()),
+                        _ => None,
+                    })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// A big-endian `u16` read from `bytes` at `at`.
+pub fn be_u16(bytes: &[u8], at: usize) -> Option<u16> {
+    Some(u16::from_be_bytes(bytes.get(at..at + 2)?.try_into().ok()?))
 }
 
 /// A VarInt read from `bytes` at `at`; `None` when it runs past the end.
