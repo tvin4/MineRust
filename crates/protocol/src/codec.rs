@@ -95,6 +95,11 @@ pub enum CodecError {
     /// An NBT value could not be decoded.
     #[error("invalid NBT: {0}")]
     Nbt(#[from] crate::nbt::NbtError),
+    /// A chunk payload broke a structural rule the recorded format follows
+    /// (palette bounds, data length, light masks vs arrays). The rules come
+    /// from the vanilla payloads, not from a specification.
+    #[error("invalid chunk payload: {0}")]
+    InvalidChunk(&'static str),
 }
 
 /// Encodes `value` into `out` using the Minecraft VarInt encoding.
@@ -261,6 +266,35 @@ impl<'a> PacketReader<'a> {
         self.read_array::<16>()
     }
 
+    /// Reads exactly `len` bytes without interpreting them and advances past
+    /// them. Used where the format itself carries the length (section blobs,
+    /// light arrays) and the content is framed by a nested reader.
+    pub fn read_bytes(&mut self, len: usize) -> Result<&'a [u8], CodecError> {
+        let end = self
+            .position
+            .checked_add(len)
+            .ok_or(CodecError::UnexpectedEof)?;
+        let bytes = self
+            .data
+            .get(self.position..end)
+            .ok_or(CodecError::UnexpectedEof)?;
+        self.position = end;
+        Ok(bytes)
+    }
+
+    /// Reads one network NBT record as raw bytes (the `00` byte standing for
+    /// an empty root included) and advances past it. The record is checked to
+    /// parse, but kept verbatim: a codec that re-encodes a value may change
+    /// bytes the sender chose, and chunk parity compares bytes.
+    pub fn read_nbt_bytes(&mut self) -> Result<&'a [u8], CodecError> {
+        let rest = self
+            .data
+            .get(self.position..)
+            .ok_or(CodecError::UnexpectedEof)?;
+        let len = crate::nbt::NbtTag::network_record_len(rest)?;
+        self.read_bytes(len)
+    }
+
     /// Reads a network NBT value (type byte plus payload, no root name) and
     /// advances past the bytes it consumed.
     pub fn read_nbt(&mut self) -> Result<crate::nbt::NbtTag, CodecError> {
@@ -372,6 +406,11 @@ impl PacketWriter {
     /// Appends a 16-byte UUID.
     pub fn write_uuid(&mut self, value: Uuid) {
         self.buffer.extend_from_slice(&value);
+    }
+
+    /// Appends pre-encoded bytes (a length-prefixed blob, a light array).
+    pub fn write_bytes(&mut self, bytes: &[u8]) {
+        self.buffer.extend_from_slice(bytes);
     }
 
     /// Appends a network NBT value (type byte plus payload, no root name).
@@ -604,6 +643,39 @@ mod tests {
         let reader = PacketReader::new(&[0x01, 0x02]);
         let err = reader.ensure_empty().expect_err("trailing");
         assert!(matches!(err, CodecError::TrailingBytes { remaining: 2 }));
+    }
+
+    #[test]
+    fn raw_bytes_roundtrip_through_the_cursor() {
+        let payload = [0x00, 0x0A, 0xFF, 0x10];
+        let mut reader = PacketReader::new(&payload);
+        assert_eq!(reader.read_bytes(3).expect("slice"), &payload[..3]);
+        assert_eq!(reader.read_bytes(1).expect("slice"), &payload[3..]);
+        reader.ensure_empty().expect("no trailing bytes");
+
+        let err = reader.read_bytes(1).expect_err("past the end");
+        assert!(matches!(err, CodecError::UnexpectedEof), "{err}");
+
+        let mut writer = PacketWriter::new();
+        writer.write_bytes(&payload);
+        writer.write_u8(7);
+        assert_eq!(
+            writer.as_bytes(),
+            &[0x00, 0x0A, 0xFF, 0x10, 0x07],
+            "raw bytes are appended verbatim"
+        );
+    }
+
+    #[test]
+    fn nbt_bytes_keep_the_empty_root_record_verbatim() {
+        // A block entity with an empty compound is a single end-tag byte;
+        // it must stay one byte and stay untouched.
+        let payload = [0x00, 0x2A];
+        let mut reader = PacketReader::new(&payload);
+        let record = reader.read_nbt_bytes().expect("empty root record");
+        assert_eq!(record, &[0x00]);
+        assert_eq!(reader.read_u8().expect("next byte"), 0x2A);
+        reader.ensure_empty().expect("no trailing bytes");
     }
 
     #[test]

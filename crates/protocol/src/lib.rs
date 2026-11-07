@@ -28,14 +28,16 @@ pub use frame::{
 };
 pub use nbt::{NbtError, NbtTag, MAX_NBT_DEPTH};
 pub use packets::{
-    hashed_seed, offline_uuid, used_packet_keys, ClientInformation, ConfirmTeleportation,
-    DeathLocation, DisconnectLogin, FinishAck, FinishConfiguration, GameEvent, GameProfile,
-    Handshake, KeepAlive, LoginAcknowledged, LoginPlay, LoginStart, LoginSuccess, NextState,
-    PingRequest, PlayerInfoEntry, PlayerInfoUpdate, PongResponse, ProfileProperty, RegistryData,
-    RegistryEntry, RegistryTag, SetCenterChunk, SetCompression, SetDefaultSpawnPosition,
-    StatusRequest, StatusResponse, SynchronizePlayerPosition, TagRegistry, UpdateTags,
-    CONFIGURATION_CLIENTBOUND_PLUGIN_MESSAGE, CONFIGURATION_PLUGIN_MESSAGE, MOVE_PLAYER_POS,
-    MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT, MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
-    SELECT_KNOWN_PACKS, SELECT_KNOWN_PACKS_SERVERBOUND, UPDATE_ENABLED_FEATURES,
+    hashed_seed, offline_uuid, set_bits, used_packet_keys, BlockEntity, ChunkBatchFinished,
+    ChunkBatchStart, ChunkSection, ClientInformation, ConfirmTeleportation, DeathLocation,
+    DisconnectLogin, FinishAck, FinishConfiguration, GameEvent, GameProfile, Handshake,
+    HeightmapRecord, KeepAlive, LevelChunkWithLight, LightData, LoginAcknowledged, LoginPlay,
+    LoginStart, LoginSuccess, NextState, PaletteContainer, PingRequest, PlayerInfoEntry,
+    PlayerInfoUpdate, PongResponse, ProfileProperty, RegistryData, RegistryEntry, RegistryTag,
+    SetCenterChunk, SetCompression, SetDefaultSpawnPosition, StatusRequest, StatusResponse,
+    SynchronizePlayerPosition, TagRegistry, UpdateTags, CONFIGURATION_CLIENTBOUND_PLUGIN_MESSAGE,
+    CONFIGURATION_PLUGIN_MESSAGE, MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT,
+    MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE, SELECT_KNOWN_PACKS,
+    SELECT_KNOWN_PACKS_SERVERBOUND, UPDATE_ENABLED_FEATURES,
 };
 pub use status::StatusInfo;

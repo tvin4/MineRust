@@ -10,12 +10,18 @@
 //! (see `docs/SOURCES.md`). Individual unknowns carry their own
 //! `// SOURCE: wiki, unverified` markers.
 
+mod chunk;
+mod chunk_payload;
 mod configuration;
 mod handshake;
 mod login;
 mod play;
 mod status;
 
+pub use chunk::{ChunkBatchFinished, ChunkBatchStart, LevelChunkWithLight};
+pub use chunk_payload::{
+    set_bits, BlockEntity, ChunkSection, HeightmapRecord, LightData, PaletteContainer,
+};
 pub use configuration::{
     ClientInformation, FinishAck, FinishConfiguration, RegistryData, RegistryEntry, RegistryTag,
     TagRegistry, UpdateTags, CONFIGURATION_CLIENTBOUND_PLUGIN_MESSAGE,
@@ -77,6 +83,9 @@ pub fn used_packet_keys() -> &'static [PacketKey] {
         GameEvent::KEY,
         SynchronizePlayerPosition::KEY,
         KeepAlive::KEY,
+        LevelChunkWithLight::KEY,
+        ChunkBatchStart::KEY,
+        ChunkBatchFinished::KEY,
         // play, serverbound
         ConfirmTeleportation::KEY,
         KeepAlive::SERVERBOUND_KEY,

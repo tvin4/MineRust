@@ -18,6 +18,18 @@ impl NbtTag {
         let tag = cursor.read_value(0)?;
         Ok((tag, cursor.position))
     }
+
+    /// Byte length of one network NBT record without decoding it into a
+    /// value. The wire writes a lone `TAG_End` byte when a record carries an
+    /// empty compound (block entities of a chunk payload do this), and that
+    /// byte is not a decodable value on its own.
+    pub(crate) fn network_record_len(bytes: &[u8]) -> Result<usize, NbtError> {
+        match bytes.first() {
+            None => Err(NbtError::UnexpectedEof),
+            Some(0x00) => Ok(1),
+            Some(_) => Self::decode_network(bytes).map(|(_, consumed)| consumed),
+        }
+    }
 }
 
 /// Read cursor over a byte slice with the primitive reads NBT needs.
@@ -258,6 +270,29 @@ mod tests {
         let (decoded, consumed) = NbtTag::decode_network(&bytes).expect("decodable");
         assert_eq!(consumed, bytes.len() - 1);
         assert_eq!(decoded, sample_tag());
+    }
+
+    #[test]
+    fn record_length_covers_the_empty_root_record() {
+        // A block entity with an empty compound is one TAG_End byte: the
+        // length is known even though the byte alone is not a value.
+        assert_eq!(NbtTag::network_record_len(&[0x00]).expect("end byte"), 1);
+        assert_eq!(
+            NbtTag::network_record_len(&[0x00, 0x07]).expect("end byte"),
+            1,
+            "the record stops at the end tag"
+        );
+
+        // A real record is the same span `decode_network` consumes.
+        let bytes = sample_tag().to_network_bytes().expect("encodable");
+        let len = NbtTag::network_record_len(&bytes).expect("record length");
+        assert_eq!(len, bytes.len());
+
+        assert!(NbtTag::network_record_len(&[]).is_err(), "empty input");
+        assert!(
+            NbtTag::network_record_len(&[0x0A, 0x08]).is_err(),
+            "compound cut short"
+        );
     }
 
     #[test]
