@@ -159,6 +159,11 @@ async fn record_join(
 }
 
 /// Starts our own server in-process on an ephemeral port.
+///
+/// The game data is loaded through the same path the real server uses
+/// (client jar + registry report), so the trace records the very packets a
+/// running server sends — an in-memory default would record zero registry
+/// packets and fake a 32-vs-0 discrepancy in the report.
 async fn start_ours(
     env: &ParityEnv,
     ids: Arc<PacketIds>,
@@ -168,12 +173,12 @@ async fn start_ours(
         .expect("bind ephemeral");
     let addr = listener.local_addr().expect("local addr");
     let status = Arc::new(server::status_info(&env.config));
-    let join = tokio::spawn(net::serve(
-        listener,
-        status,
-        Arc::new(data::GameData::default()),
-        ids,
-    ));
+    let game_data = data::load_from_jar(
+        &env.config.client_jar,
+        env.config.registries_report.as_deref().map(Path::new),
+    )
+    .expect("game data from the jar");
+    let join = tokio::spawn(net::serve(listener, status, Arc::new(game_data), ids));
     (addr, join.abort_handle())
 }
 

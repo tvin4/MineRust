@@ -116,6 +116,28 @@ impl PacketIds {
         self.lookup(key).unwrap_or(key.default_id)
     }
 
+    /// Reverse id lookup for trace labels: `(state index, direction index,
+    /// protocol id)` → resource location.
+    ///
+    /// The parity traces record raw numeric ids; a report gives every
+    /// recorded packet a readable name (and lets the diff normalise
+    /// per-connection ids such as teleport/entity ids, which are only
+    /// identifiable by name). Compiled mode has no names to offer.
+    pub fn names_by_id(&self) -> HashMap<(u8, u8, u32), String> {
+        let mut names = HashMap::new();
+        for (state_index, state) in self.states.iter().enumerate() {
+            for (direction_index, direction) in state.directions.iter().enumerate() {
+                for (name, id) in direction {
+                    names.insert(
+                        (state_index as u8, direction_index as u8, *id),
+                        name.clone(),
+                    );
+                }
+            }
+        }
+        names
+    }
+
     /// Checks that the loaded report contains every key.
     ///
     /// In compiled mode (no report) every key is missing, so this is only

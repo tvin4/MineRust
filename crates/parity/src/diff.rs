@@ -149,6 +149,14 @@ fn group(entries: &[TraceEntry]) -> BTreeMap<PacketKey, Vec<&TraceEntry>> {
     groups
 }
 
+/// Single value every per-connection counter is normalised to.
+///
+/// Entity ids and teleport ids are allocated per connection on both sides
+/// and would therefore always differ between the recordings: within one
+/// recorded connection they are replaced by this one value everywhere, so
+/// only real content differences reach the comparison.
+const NORMALIZED_ID: i32 = 0;
+
 /// Spoils the random parts of one recorded payload so that only real
 /// differences remain in the byte comparison.
 ///
@@ -157,11 +165,14 @@ fn group(entries: &[TraceEntry]) -> BTreeMap<PacketKey, Vec<&TraceEntry>> {
 /// * `minecraft:intention` — the port: vanilla is always reached on the
 ///   `server-port` of `server.properties`, our in-process server binds an
 ///   ephemeral port, so the port carries no parity information.
-/// * `minecraft:player_position` — the teleport id increments per
-///   connection on both sides; it is the first VarInt of the payload.
+/// * Per-connection counters — teleport id (`minecraft:player_position`
+///   clientbound, `minecraft:accept_teleportation` serverbound) and entity
+///   id (`minecraft:add_entity`, `minecraft:teleport_entity`): each is the
+///   payload's first VarInt and is replaced by [`NORMALIZED_ID`] throughout
+///   the recording, one value for the whole connection.
 ///
-/// Everything else (names, UUIDs, coordinates, entity ids) is deliberately
-/// **not** normalised: differences there are what the owner has to see.
+/// Everything else (names, UUIDs, coordinates) is deliberately **not**
+/// normalised: differences there are what the owner has to see.
 pub fn normalize(entry: &TraceEntry) -> Vec<u8> {
     let raw = match from_hex(&entry.payload) {
         Ok(bytes) => bytes,
@@ -171,7 +182,10 @@ pub fn normalize(entry: &TraceEntry) -> Vec<u8> {
     };
     match entry.name.as_deref() {
         Some("minecraft:intention") => normalize_port(&raw).unwrap_or(raw),
-        Some("minecraft:player_position") => normalize_first_varint(&raw),
+        Some("minecraft:player_position")
+        | Some("minecraft:accept_teleportation")
+        | Some("minecraft:add_entity")
+        | Some("minecraft:teleport_entity") => normalize_first_varint(&raw),
         _ => raw,
     }
 }
@@ -187,12 +201,13 @@ fn normalize_port(raw: &[u8]) -> Option<Vec<u8>> {
     handshake.encode_payload().ok()
 }
 
-/// Replaces the first VarInt of `raw` with zero bytes.
+/// Replaces the first VarInt of `raw` (a teleport or entity id) with
+/// [`NORMALIZED_ID`].
 fn normalize_first_varint(raw: &[u8]) -> Vec<u8> {
     match protocol::decode_varint(raw) {
         Ok((_, consumed)) => {
-            let mut out = Vec::with_capacity(raw.len() - consumed + 1);
-            out.push(0x00);
+            let mut out = Vec::with_capacity(raw.len() - consumed + 2);
+            protocol::encode_varint(NORMALIZED_ID, &mut out);
             out.extend_from_slice(&raw[consumed..]);
             out
         }
@@ -434,6 +449,52 @@ mod tests {
         assert!(same_coords.is_identical(), "teleport id must not count");
         let other_coords = diff_traces(&make(7, 1.0), &make(7, 2.0));
         assert_eq!(other_coords.payloads.len(), 1, "coordinates are real data");
+    }
+
+    /// Entity ids and teleport ids are allocated per connection: with the
+    /// normalisation both sides of any recording collapse to one value, so
+    /// only the payload's actual content is compared.
+    #[test]
+    fn per_connection_ids_collapse_to_one_value() {
+        let make = |name: &str, first_id: i32, tail: &[u8]| {
+            let mut payload = Vec::new();
+            protocol::encode_varint(first_id, &mut payload);
+            payload.extend_from_slice(tail);
+            trace(
+                "server",
+                vec![entry(
+                    TraceState::Play,
+                    TraceDirection::Clientbound,
+                    0x01,
+                    Some(name),
+                    &payload,
+                )],
+            )
+        };
+        // Same content, different ids as allocated by two different servers.
+        let vanilla = make("minecraft:add_entity", 17, &[0x11, 0x22]);
+        let ours = make("minecraft:add_entity", 42, &[0x11, 0x22]);
+        assert!(
+            diff_traces(&vanilla, &ours).is_identical(),
+            "entity id must not count"
+        );
+
+        // The teleport id in either direction normalises the same way.
+        let vanilla = make("minecraft:teleport_entity", 1, &[0x01]);
+        let ours = make("minecraft:teleport_entity", 9, &[0x01]);
+        assert!(
+            diff_traces(&vanilla, &ours).is_identical(),
+            "teleport id must not count"
+        );
+
+        // Real content behind the id is still compared.
+        let vanilla = make("minecraft:add_entity", 17, &[0x11, 0x22]);
+        let ours = make("minecraft:add_entity", 17, &[0x11, 0x23]);
+        assert_eq!(
+            diff_traces(&vanilla, &ours).payloads.len(),
+            1,
+            "payload content is real data"
+        );
     }
 
     #[test]

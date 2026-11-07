@@ -6,7 +6,10 @@
 # Do not commit real values to the repository.
 
 listen = "0.0.0.0:25565"
-motd = "A MineRust server"
+# Matches the vanilla `motd` (server.properties) so the status parity test
+# compares like with like; view/simulation distance in the code are 10 as
+# in the vanilla defaults.
+motd = "A Minecraft Server"
 max_players = 20
 
 # Path to the client jar of your game installation.

@@ -161,7 +161,12 @@ pub struct Client {
     threshold: Option<i32>,
     ids: Arc<PacketIds>,
     /// Reverse map for readable names in the trace: (state, direction, id).
-    names: HashMap<(u8, u8, u32), &'static str>,
+    ///
+    /// Built from the packets report when one is configured (every packet
+    /// of the recording gets a name, which both reports and the diff's id
+    /// normalisation rely on); without a report only the compiled packet
+    /// keys are labelled.
+    names: HashMap<(u8, u8, u32), String>,
     trace: Trace,
     /// Packets already satisfied for wait steps: waits check the recorded
     /// tail first, so packets read by a previous (possibly timed-out) step
@@ -184,17 +189,25 @@ impl Client {
             source,
         })?;
 
-        let mut names = HashMap::new();
-        for key in protocol::used_packet_keys() {
-            names.insert(
-                (
-                    key.state.index() as u8,
-                    key.direction.index() as u8,
-                    ids.id(*key),
-                ),
-                key.name,
-            );
-        }
+        // A report gives names to every traceable packet; without one only
+        // the compiled keys are known (the trace then keeps raw ids).
+        let names = if ids.is_empty() {
+            protocol::used_packet_keys()
+                .iter()
+                .map(|key| {
+                    (
+                        (
+                            key.state.index() as u8,
+                            key.direction.index() as u8,
+                            ids.id(*key),
+                        ),
+                        (*key.name).to_owned(),
+                    )
+                })
+                .collect()
+        } else {
+            ids.names_by_id()
+        };
 
         Ok(Self {
             stream,
@@ -274,7 +287,7 @@ impl Client {
         let key = (self.state.index() as u8, direction.index() as u8, id);
         if let Some(name) = self.names.get(&key) {
             if let Some(entry) = self.trace.packets.last_mut() {
-                entry.name = Some((*name).to_owned());
+                entry.name = Some(name.clone());
             }
         }
     }
