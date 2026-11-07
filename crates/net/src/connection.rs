@@ -232,7 +232,12 @@ where
             name: start.name.clone(),
             properties: Vec::new(),
         },
-        session_id: uuid,
+        // A fresh random session UUID: the vanilla server draws a new one
+        // per connection (two recorded join slices end login_finished with
+        // two different version-4 UUIDs, while the first 41 bytes are the
+        // same on both sides).
+        // SOURCE: parity recording of vanilla 26.3 (behaviour-level).
+        session_id: random_session_uuid()?,
     };
     write_frame(
         writer,
@@ -587,4 +592,36 @@ fn unix_millis() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| i64::try_from(elapsed.as_millis()).unwrap_or_default())
         .unwrap_or_default()
+}
+
+/// A random version-4 UUID for one connection's session id.
+///
+/// The vanilla 26.3 server sends a fresh random UUID in the tail of every
+/// `minecraft:login_finished` recording (version nibble 4, RFC 4122
+/// variant, changing between runs), so we draw our own per connection.
+// SOURCE: parity recording of vanilla 26.3 (behaviour-level, two runs).
+fn random_session_uuid() -> Result<[u8; 16], ConnectionError> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).map_err(|err| ConnectionError::Entropy(err.to_string()))?;
+    bytes[6] = (bytes[6] & 0x0F) | 0x40; // version 4
+    bytes[8] = (bytes[8] & 0x3F) | 0x80; // RFC 4122 variant
+    Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The session UUID must look like the vanilla one: version 4, RFC 4122
+    /// variant, and never the same between two connections.
+    #[test]
+    fn random_session_uuid_is_a_fresh_version_four_id() {
+        let first = random_session_uuid().expect("entropy available");
+        let second = random_session_uuid().expect("entropy available");
+        assert_ne!(first, second, "must not repeat within a run");
+        assert_eq!(first[6] >> 4, 4, "version nibble must be 4");
+        assert_eq!(first[8] & 0xC0, 0x80, "RFC 4122 variant bits");
+        assert_eq!(second[6] >> 4, 4, "version nibble must be 4");
+        assert_eq!(second[8] & 0xC0, 0x80, "RFC 4122 variant bits");
+    }
 }

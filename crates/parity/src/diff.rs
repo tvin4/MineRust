@@ -170,9 +170,12 @@ const NORMALIZED_ID: i32 = 0;
 ///   id (`minecraft:add_entity`, `minecraft:teleport_entity`): each is the
 ///   payload's first VarInt and is replaced by [`NORMALIZED_ID`] throughout
 ///   the recording, one value for the whole connection.
+/// * `minecraft:login_finished` — the session UUID (last 16 bytes): the
+///   vanilla server draws a fresh random version-4 UUID per connection, so
+///   the value carries no parity information; the tail is zeroed.
 ///
-/// Everything else (names, UUIDs, coordinates) is deliberately **not**
-/// normalised: differences there are what the owner has to see.
+/// Everything else (names, coordinates, profile UUIDs) is deliberately
+/// **not** normalised: differences there are what the owner has to see.
 pub fn normalize(entry: &TraceEntry) -> Vec<u8> {
     let raw = match from_hex(&entry.payload) {
         Ok(bytes) => bytes,
@@ -182,6 +185,7 @@ pub fn normalize(entry: &TraceEntry) -> Vec<u8> {
     };
     match entry.name.as_deref() {
         Some("minecraft:intention") => normalize_port(&raw).unwrap_or(raw),
+        Some("minecraft:login_finished") => normalize_session_uuid(&raw),
         Some("minecraft:player_position")
         | Some("minecraft:accept_teleportation")
         | Some("minecraft:add_entity")
@@ -199,6 +203,23 @@ fn normalize_port(raw: &[u8]) -> Option<Vec<u8>> {
     }
     handshake.server_port = 0;
     handshake.encode_payload().ok()
+}
+
+/// Replaces the trailing 16 bytes of a `login_finished` payload (the
+/// session UUID) with zeros.
+///
+/// The vanilla server draws a fresh random version-4 UUID per connection:
+/// two recordings of the same scripted join share the first 41 bytes and
+/// differ in the last 16, so the tail is per-connection randomness like
+/// the handshake port, not a parity fact.
+fn normalize_session_uuid(raw: &[u8]) -> Vec<u8> {
+    if raw.len() < 16 {
+        return raw.to_vec();
+    }
+    let mut out = raw.to_vec();
+    let tail = out.len() - 16;
+    out[tail..].fill(0);
+    out
 }
 
 /// Replaces the first VarInt of `raw` (a teleport or entity id) with
@@ -494,6 +515,43 @@ mod tests {
             diff_traces(&vanilla, &ours).payloads.len(),
             1,
             "payload content is real data"
+        );
+    }
+
+    /// The random session UUID at the tail of login_finished carries no
+    /// parity information; anything else in the payload still counts.
+    #[test]
+    fn login_finished_session_uuid_is_normalised() {
+        let make = |tail: [u8; 16], prefix: &[u8]| {
+            let mut payload = prefix.to_vec();
+            payload.extend_from_slice(&tail);
+            trace(
+                "server",
+                vec![entry(
+                    TraceState::Login,
+                    TraceDirection::Clientbound,
+                    0x02,
+                    Some("minecraft:login_finished"),
+                    &payload,
+                )],
+            )
+        };
+        let prefix = [0xFF, 0x10, 0x70, 0xC9, 0xAA, 0xBB];
+        let vanilla = make([0x4d; 16], &prefix);
+        let ours = make([0x0a; 16], &prefix);
+        assert!(
+            diff_traces(&vanilla, &ours).is_identical(),
+            "the random tail must not count"
+        );
+
+        // A difference before the tail (e.g. the profile UUID) still counts.
+        let mut other = prefix.to_vec();
+        other[5] = 0xCC;
+        let ours = make([0x4d; 16], &other);
+        assert_eq!(
+            diff_traces(&vanilla, &ours).payloads.len(),
+            1,
+            "the payload prefix is real data"
         );
     }
 

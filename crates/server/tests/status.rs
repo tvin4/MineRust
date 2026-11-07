@@ -157,7 +157,10 @@ async fn offline_login_joins_the_play_state() {
     reader.ensure_empty().expect("no trailing bytes");
     assert_eq!(success.profile.name, name);
     assert_eq!(success.profile.uuid, protocol::offline_uuid(name));
-    assert_eq!(success.session_id, success.profile.uuid);
+    // Vanilla draws a fresh random (version 4) session UUID per
+    // connection; it never repeats the profile UUID.
+    assert_ne!(success.session_id, success.profile.uuid);
+    assert_eq!(success.session_id[6] >> 4, 4, "session uuid must be v4");
     assert!(success.profile.properties.is_empty());
 
     // Login Acknowledged -> configuration. With empty game data the server

@@ -23,6 +23,11 @@ pub enum ConnectionError {
     /// timeout (the play state itself is not subject to a global timeout).
     #[error("timed out before reaching play state")]
     TimedOut,
+    /// The operating system could not provide random bytes for the
+    /// per-session UUID of Login Success (`getrandom::Error` has a `Display`
+    /// but intentionally does not implement `std::error::Error`).
+    #[error("no system entropy for the session uuid: {0}")]
+    Entropy(String),
 }
 
 impl ConnectionError {

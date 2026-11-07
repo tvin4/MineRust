@@ -8,6 +8,7 @@ description = "Tokio networking layer for the MineRust server"
 
 [dependencies]
 data = { path = "../data" }
+getrandom = { workspace = true }
 protocol = { path = "../protocol" }
 thiserror = { workspace = true }
 tokio = { workspace = true }
