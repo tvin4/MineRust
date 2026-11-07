@@ -77,8 +77,11 @@ fn login_play_fields_match_the_vanilla_recording() {
         return;
     };
 
-    // The vanilla values, read field by field off the recording.
-    assert_eq!(vanilla.entity_id, 4, "entity id of the vanilla connection");
+    // The vanilla values, read field by field off the recording. The
+    // entity id is a per-connection counter and differs between runs
+    // (4 and 5 were both observed), so only its sign is checked here;
+    // it is normalised in the diff.
+    assert!(vanilla.entity_id > 0, "vanilla allocates a real entity id");
     assert!(!vanilla.hardcore);
     let mut names = vanilla.dimension_names.clone();
     names.sort();
