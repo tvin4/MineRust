@@ -5,6 +5,9 @@
 //! Set Default Spawn Position, Player Info Update, Set Center Chunk, Game
 //! Event and Synchronize Player Position. Field layouts follow the public
 //! protocol documentation (<https://minecraft.wiki/wiki/Java_Edition_protocol>).
+//!
+//! SOURCE: wiki, unverified — the sequence and the fields come from the
+//! documented protocol; no vanilla server has compared them yet.
 
 use crate::codec::{CodecError, PacketReader, PacketWriter, Position, Uuid, MAX_STRING_CHARS};
 use crate::frame::encode_frame;
@@ -228,6 +231,8 @@ impl GameEvent {
 
     /// The event that must follow every Login (play) so the client closes
     /// its loading screen.
+    // SOURCE: wiki, unverified: event numbering is documented, not read
+    // from game data.
     pub const START_WAITING_FOR_CHUNKS: u8 = 13;
 
     /// Encodes the payload (packet id excluded).
@@ -376,6 +381,8 @@ pub struct PlayerInfoUpdate {
 
 /// Action mask of [`PlayerInfoUpdate`]: Add Player | Update Game Mode |
 /// Update Listed | Update Latency, in wire order.
+// SOURCE: wiki, unverified: the mask bits are documented, not read from the
+// game data and not compared against vanilla.
 const PLAYER_INFO_ACTIONS: u8 = 0x01 | 0x04 | 0x08 | 0x10;
 
 impl PlayerInfoUpdate {

@@ -6,6 +6,8 @@
 //! builds on top of them.
 
 /// Maximum number of bytes a single VarInt may occupy.
+// SOURCE: wiki, unverified: VarInt encodings are documented; a real client
+// only proves them when it accepts our frames.
 pub const MAX_VARINT_BYTES: usize = 5;
 
 /// General protocol limit for protocol strings: maximum number of UTF-16 code

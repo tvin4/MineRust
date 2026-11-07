@@ -3,6 +3,12 @@
 //!
 //! Packet ids and field layouts follow the public protocol documentation
 //! (<https://minecraft.wiki/wiki/Java_Edition_protocol>).
+//!
+//! SOURCE: wiki, unverified — every compiled default id and field layout
+//! starts here as a wiki value; it becomes verified only when the packets
+//! report of the game (`reports/packets.json`) or a parity test confirms it
+//! (see `docs/SOURCES.md`). Individual unknowns carry their own
+//! `// SOURCE: wiki, unverified` markers.
 
 mod configuration;
 mod handshake;

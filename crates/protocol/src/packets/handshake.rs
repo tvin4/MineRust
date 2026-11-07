@@ -8,6 +8,8 @@ use crate::packet_id::{PacketKey, ProtocolState};
 ///
 /// This is a server-side bound on untrusted input; the protocol itself defines
 /// the field as a context-limited string.
+// SOURCE: wiki, unverified: the 255-char bound is our server-side cap, not
+// a value read from the game.
 pub const MAX_SERVER_ADDRESS_CHARS: usize = 255;
 
 /// Target state requested by the client after the handshake.

@@ -23,7 +23,10 @@ pub(crate) const MAX_SIGNATURE_CHARS: usize = 1024;
 /// the public protocol documentation
 /// (<https://minecraft.wiki/wiki/Java_Edition_protocol>). The protocol
 /// permits any UUID in Login Success; using the documented derivation keeps
-/// ids stable across restarts and matches the vanilla server.
+/// ids stable across restarts. It is checked only by tests against itself,
+/// never against a vanilla server.
+// SOURCE: wiki, unverified (see docs/SOURCES.md; the parity crate is meant
+// to confirm this against the real server).
 pub fn offline_uuid(name: &str) -> Uuid {
     let mut hash = md5::compute(format!("OfflinePlayer:{name}"));
     // RFC 4122 version 3 and variant 0b10, exactly as the game's

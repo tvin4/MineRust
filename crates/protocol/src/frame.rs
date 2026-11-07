@@ -9,6 +9,8 @@ use crate::codec::{decode_varint, encode_varint, CodecError, PacketReader};
 ///
 /// From the protocol documentation: packets cannot be larger than `2^21 - 1`
 /// (2097151) bytes, the maximum representable by a 3-byte VarInt.
+// SOURCE: wiki, unverified: the cap is documented, never compared against a
+// vanilla server's behaviour (the parity crate covers it).
 pub const MAX_FRAME_LEN: usize = 2097151;
 
 /// Maximum encoded size of the length field itself, in bytes.

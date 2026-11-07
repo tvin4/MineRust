@@ -25,6 +25,8 @@ use crate::frame::{read_frame, write_frame};
 /// Maximum time a connection may spend before reaching the play state
 /// (handshake, status, login and configuration). Once in play there is no
 /// global timeout: a joined client is kept alive by keep-alives instead.
+// SOURCE: wiki, unverified (the timeout/keep-alive numbers are our own,
+// matching the wiki's suggested intervals; only a live client proves them).
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Identifier of the dimension the player joins.
@@ -37,9 +39,11 @@ const DIMENSION_TYPE_REGISTRY: &str = "minecraft:dimension_type";
 const ENTITY_ID: i32 = 1;
 
 /// Render and simulation distance sent in Login (play), in chunks.
+// SOURCE: wiki, unverified: vanilla values, not read from the game data.
 const VIEW_DISTANCE: i32 = 10;
 
 /// Sea level sent in Login (play).
+// SOURCE: wiki, unverified: vanilla value, not read from the game data.
 const SEA_LEVEL: i32 = 63;
 
 /// Spawn block of the empty world; the player teleports to its centre.
@@ -47,9 +51,13 @@ const SPAWN: Position = Position { x: 8, y: 64, z: 8 };
 
 /// Teleport id of the initial join teleport; the client must confirm it
 /// before movement packets are taken seriously.
+// SOURCE: wiki, unverified: the id numbering and the confirmation rule are
+// documented, never compared against a vanilla server.
 const JOIN_TELEPORT_ID: i32 = 1;
 
 /// How often the server asks the client for a keep-alive response in play.
+// SOURCE: wiki, unverified (documented interval, exercised only by tests
+// and by the parity crate once it exists).
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Accepts connections forever, spawning one task per connection.
@@ -353,6 +361,8 @@ where
 /// plugin messages, movement) are logged and ignored.
 ///
 /// Unlike the states before it, play runs without a global timeout.
+// SOURCE: wiki, unverified: the join order and field values are documented,
+// never compared with a vanilla server (see docs/SOURCES.md).
 async fn play_state<R, W>(
     reader: R,
     mut writer: W,
@@ -465,6 +475,8 @@ where
     .await?;
 
     // Without event 13 the client stays on its loading screen.
+    // SOURCE: wiki, unverified: the event id and the "close the loading
+    // screen" effect were observed as documented, not compared to vanilla.
     let event = GameEvent {
         event: GameEvent::START_WAITING_FOR_CHUNKS,
         value: 0.0,
