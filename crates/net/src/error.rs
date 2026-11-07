@@ -19,6 +19,10 @@ pub enum ConnectionError {
         /// Name of the connection state where the packet arrived.
         state: &'static str,
     },
+    /// The connection did not reach the play state within the handshake
+    /// timeout (the play state itself is not subject to a global timeout).
+    #[error("timed out before reaching play state")]
+    TimedOut,
 }
 
 impl ConnectionError {

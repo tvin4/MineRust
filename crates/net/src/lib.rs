@@ -1,5 +1,6 @@
 //! Tokio networking layer: accepts TCP connections and drives the
-//! handshake → status state machine used by the server list ping.
+//! handshake → status, login, configuration and play state machines used
+//! by the server list ping and by a player joining the world.
 //!
 //! The crate is transport-only: the contents of the status response are
 //! decided by the caller (see the `server` crate).

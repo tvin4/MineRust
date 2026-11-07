@@ -1,6 +1,6 @@
 //! Integration test: a client performs the full server list ping against a
 //! real server started on an ephemeral port, and a second test walks the
-//! offline login into the configuration state.
+//! offline login all the way into the play state.
 //!
 //! All protocol values here are fictional test data, not real game values.
 
@@ -8,9 +8,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use protocol::{
-    ClientInformation, FinishAck, FinishConfiguration, Handshake, LoginAcknowledged, LoginStart,
-    LoginSuccess, NextState, PingRequest, PongResponse, StatusInfo, StatusRequest, StatusResponse,
-    UpdateTags,
+    ClientInformation, ConfirmTeleportation, FinishAck, FinishConfiguration, GameEvent, Handshake,
+    LoginAcknowledged, LoginPlay, LoginStart, LoginSuccess, NextState, PingRequest,
+    PlayerInfoUpdate, PongResponse, SetCenterChunk, SetDefaultSpawnPosition, StatusInfo,
+    StatusRequest, StatusResponse, SynchronizePlayerPosition, UpdateTags,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -187,7 +188,7 @@ async fn status_can_be_queried_repeatedly_on_one_connection() {
 }
 
 #[tokio::test]
-async fn offline_login_reaches_the_configuration_state() {
+async fn offline_login_joins_the_play_state() {
     let addr = start_server().await;
     let mut stream = TcpStream::connect(addr).await.expect("connect");
 
@@ -248,9 +249,8 @@ async fn offline_login_reaches_the_configuration_state() {
     FinishConfiguration::decode_payload(&mut reader).expect("decodable");
     reader.ensure_empty().expect("no trailing bytes");
 
-    // Client Information is accepted, then Finish Acknowledged ends the
-    // configuration state (the play state arrives in M2 step 5, so the
-    // server closes the connection here).
+    // Client Information is accepted, then Finish Acknowledged switches
+    // the connection to play.
     let info = ClientInformation {
         locale: "en_GB".to_owned(),
         view_distance: 8,
@@ -270,6 +270,99 @@ async fn offline_login_reaches_the_configuration_state() {
     .await;
     send(&mut stream, FinishAck::ID, &FinishAck.encode_payload()).await;
 
+    // Join sequence: Login, spawn point, tab list entry, chunk center,
+    // "start waiting for chunks" and the initial teleport. The test server
+    // runs with empty game data, so the dimension type falls back to id 0.
+    let (id, payload) = recv(&mut stream).await;
+    assert_eq!(id, LoginPlay::ID, "expected login (play)");
+    let mut reader = protocol::PacketReader::new(&payload);
+    let login = LoginPlay::decode_payload(&mut reader).expect("decodable");
+    reader.ensure_empty().expect("no trailing bytes");
+    assert_eq!(login.entity_id, 1);
+    assert!(!login.hardcore);
+    assert_eq!(login.max_players, TEST_MAX_PLAYERS);
+    assert_eq!(login.view_distance, 10);
+    assert_eq!(login.simulation_distance, 10);
+    assert_eq!(login.dimension_type, 0);
+    assert_eq!(login.dimension_name, "minecraft:overworld");
+    assert_eq!(login.game_mode, 0);
+    assert_eq!(login.sea_level, 63);
+    assert!(!login.online_mode);
+    assert!(!login.enforces_secure_chat);
+    assert!(login.death_location.is_none());
+
+    let (id, payload) = recv(&mut stream).await;
+    assert_eq!(id, SetDefaultSpawnPosition::ID, "expected spawn position");
+    let mut reader = protocol::PacketReader::new(&payload);
+    let spawn = SetDefaultSpawnPosition::decode_payload(&mut reader).expect("decodable");
+    reader.ensure_empty().expect("no trailing bytes");
+    assert_eq!(spawn.dimension, "minecraft:overworld");
+    assert_eq!(spawn.position, protocol::Position { x: 8, y: 64, z: 8 });
+
+    let (id, payload) = recv(&mut stream).await;
+    assert_eq!(id, PlayerInfoUpdate::ID, "expected player info");
+    let mut reader = protocol::PacketReader::new(&payload);
+    let player_info = PlayerInfoUpdate::decode_payload(&mut reader).expect("decodable");
+    reader.ensure_empty().expect("no trailing bytes");
+    assert_eq!(player_info.players.len(), 1);
+    assert_eq!(player_info.players[0].name, name);
+    assert_eq!(player_info.players[0].uuid, protocol::offline_uuid(name));
+    assert!(player_info.players[0].listed);
+
+    let (id, payload) = recv(&mut stream).await;
+    assert_eq!(id, SetCenterChunk::ID, "expected chunk center");
+    let mut reader = protocol::PacketReader::new(&payload);
+    let center = SetCenterChunk::decode_payload(&mut reader).expect("decodable");
+    reader.ensure_empty().expect("no trailing bytes");
+    assert_eq!((center.chunk_x, center.chunk_z), (0, 0));
+
+    let (id, payload) = recv(&mut stream).await;
+    assert_eq!(id, GameEvent::ID, "expected game event");
+    let mut reader = protocol::PacketReader::new(&payload);
+    let event = GameEvent::decode_payload(&mut reader).expect("decodable");
+    reader.ensure_empty().expect("no trailing bytes");
+    assert_eq!(event.event, 13, "must start waiting for chunks");
+
+    let (id, payload) = recv(&mut stream).await;
+    assert_eq!(id, SynchronizePlayerPosition::ID, "expected teleport");
+    let mut reader = protocol::PacketReader::new(&payload);
+    let teleport = SynchronizePlayerPosition::decode_payload(&mut reader).expect("decodable");
+    reader.ensure_empty().expect("no trailing bytes");
+    assert_eq!(teleport.teleport_id, 1);
+    assert_eq!((teleport.x, teleport.y, teleport.z), (8.5, 64.0, 8.5));
+    assert_eq!(teleport.flags, 0);
+
+    // Serverbound play packets that carry no gameplay in M2 are accepted:
+    // the teleport confirmation, updated settings and a plugin message.
+    let confirm = ConfirmTeleportation {
+        teleport_id: 1,
+        x: 8.5,
+        y: 64.0,
+        z: 8.5,
+        yaw: 0.0,
+        pitch: 0.0,
+    };
+    send(
+        &mut stream,
+        ConfirmTeleportation::ID,
+        &confirm.encode_payload(),
+    )
+    .await;
+    send(
+        &mut stream,
+        0x0E,
+        &info.encode_payload().expect("encodable"),
+    )
+    .await;
+    let mut plugin = protocol::PacketWriter::new();
+    plugin
+        .write_string("minecraft:register", protocol::MAX_STRING_CHARS)
+        .expect("channel");
+    send(&mut stream, 0x16, plugin.as_bytes()).await;
+
+    // Closing the client's write side ends the play state; the server then
+    // drops the connection.
+    stream.shutdown().await.expect("shutdown write");
     let read = read_until_close(&mut stream).await;
     assert_eq!(read, 0, "server should close the connection");
 }
