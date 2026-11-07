@@ -86,6 +86,12 @@ pub enum CodecError {
     /// A handshake requested an unknown next state.
     #[error("invalid handshake next state {0}")]
     InvalidNextState(i32),
+    /// A packet carried an optional section this codec does not model.
+    #[error("unsupported optional {context}")]
+    Unsupported {
+        /// Which section could not be decoded.
+        context: &'static str,
+    },
     /// An NBT value could not be decoded.
     #[error("invalid NBT: {0}")]
     Nbt(#[from] crate::nbt::NbtError),

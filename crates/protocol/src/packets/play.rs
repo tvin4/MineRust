@@ -385,20 +385,40 @@ pub struct PlayerInfoEntry {
 
 /// Clientbound Player Info Update: adds players to the tab list.
 ///
-/// This server always sends the "Add Player", "Update Game Mode", "Update
-/// Listed" and "Update Latency" actions for every entry, which is the
-/// combination the vanilla server uses when a player joins.
+/// The mask and per-player layout are the vanilla join recording's; see
+/// [`PLAYER_INFO_ACTIONS`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PlayerInfoUpdate {
     /// Players to add or update.
     pub players: Vec<PlayerInfoEntry>,
 }
 
-/// Action mask of [`PlayerInfoUpdate`]: Add Player | Update Game Mode |
-/// Update Listed | Update Latency, in wire order.
-// SOURCE: wiki, unverified: the mask bits are documented, not read from the
-// game data and not compared against vanilla.
-const PLAYER_INFO_ACTIONS: u8 = 0x01 | 0x04 | 0x08 | 0x10;
+/// Action mask of [`PlayerInfoUpdate`]: all eight actions, as the vanilla
+/// recording sends the joining player (`join-vanilla.json`, packet #56).
+///
+/// Wire layout, observed byte for byte: `mask (u8)`, `count (VarInt)`,
+/// `count` UUIDs, then per player the data of every set action in bit
+/// order:
+///
+/// 1. add player — name + properties;
+/// 2. initialize chat — one byte, `0x00` (no session in an offline join);
+/// 3. update game mode — VarInt;
+/// 4. update listed — bool;
+/// 5. update latency — VarInt;
+/// 6. update display name — optional, `0x00` (absent);
+/// 7. update chat session — one byte, `0x00` (absent);
+/// 8. (26.3) a single byte, `0x01` on join.
+///
+/// The identity/order of the first seven actions and the values above come
+/// from the recording; the meaning of the eighth action is not verified.
+// SOURCE: parity recording of vanilla 26.3 (byte layout observed); the
+// eighth action is unverified and only reproduced as recorded.
+const PLAYER_INFO_ACTIONS: u8 = 0xFF;
+
+/// Payload byte of the eighth (unverified) player info action on join, as
+/// recorded; see [`PLAYER_INFO_ACTIONS`].
+// SOURCE: parity recording of vanilla 26.3, one observed value.
+const PLAYER_INFO_LAST_ACTION: u8 = 0x01;
 
 impl PlayerInfoUpdate {
     /// Packet id of Player Info Update (play state, clientbound).
@@ -433,9 +453,15 @@ impl PlayerInfoUpdate {
                     None => writer.write_bool(false),
                 }
             }
+            // The seven documented actions plus the eighth byte, in the
+            // bit order of the vanilla recording (see PLAYER_INFO_ACTIONS).
+            writer.write_bool(false); // initialize chat: no session
             writer.write_varint(player.game_mode);
             writer.write_bool(player.listed);
             writer.write_varint(player.latency);
+            writer.write_bool(false); // display name: absent
+            writer.write_bool(false); // chat session: absent
+            writer.write_u8(PLAYER_INFO_LAST_ACTION); // as recorded
         }
         Ok(writer.into_bytes())
     }
@@ -472,9 +498,27 @@ impl PlayerInfoUpdate {
                     signature,
                 });
             }
+            // Actions 2..=8 of the recording's layout; only the shapes the
+            // recording shows (absent optional sections) are modelled.
+            if reader.read_bool()? {
+                return Err(CodecError::Unsupported {
+                    context: "initialized chat session",
+                });
+            }
             let game_mode = reader.read_varint()?;
             let listed = reader.read_bool()?;
             let latency = reader.read_varint()?;
+            if reader.read_bool()? {
+                return Err(CodecError::Unsupported {
+                    context: "player info display name",
+                });
+            }
+            if reader.read_bool()? {
+                return Err(CodecError::Unsupported {
+                    context: "player info chat session",
+                });
+            }
+            reader.read_u8()?;
             players.push(PlayerInfoEntry {
                 uuid,
                 name,
