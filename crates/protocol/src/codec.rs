@@ -71,6 +71,9 @@ pub enum CodecError {
     /// A handshake requested an unknown next state.
     #[error("invalid handshake next state {0}")]
     InvalidNextState(i32),
+    /// An NBT value could not be decoded.
+    #[error("invalid NBT: {0}")]
+    Nbt(#[from] crate::nbt::NbtError),
 }
 
 /// Encodes `value` into `out` using the Minecraft VarInt encoding.
@@ -177,6 +180,16 @@ impl<'a> PacketReader<'a> {
         Ok(text.to_owned())
     }
 
+    /// Reads a single unsigned byte.
+    pub fn read_u8(&mut self) -> Result<u8, CodecError> {
+        Ok(self.read_array::<1>()?[0])
+    }
+
+    /// Reads a single signed byte.
+    pub fn read_i8(&mut self) -> Result<i8, CodecError> {
+        Ok(self.read_u8()? as i8)
+    }
+
     /// Reads a big-endian `u16`.
     pub fn read_u16(&mut self) -> Result<u16, CodecError> {
         let bytes = self.read_array::<2>()?;
@@ -197,6 +210,14 @@ impl<'a> PacketReader<'a> {
     /// Reads a 16-byte UUID.
     pub fn read_uuid(&mut self) -> Result<Uuid, CodecError> {
         self.read_array::<16>()
+    }
+
+    /// Reads a network NBT value (type byte plus payload, no root name) and
+    /// advances past the bytes it consumed.
+    pub fn read_nbt(&mut self) -> Result<crate::nbt::NbtTag, CodecError> {
+        let (tag, consumed) = crate::nbt::NbtTag::decode_network(&self.data[self.position..])?;
+        self.position += consumed;
+        Ok(tag)
     }
 
     /// Reads exactly `N` bytes.
@@ -251,6 +272,16 @@ impl PacketWriter {
         Ok(())
     }
 
+    /// Appends an unsigned byte.
+    pub fn write_u8(&mut self, value: u8) {
+        self.buffer.push(value);
+    }
+
+    /// Appends a signed byte.
+    pub fn write_i8(&mut self, value: i8) {
+        self.buffer.push(value as u8);
+    }
+
     /// Appends a big-endian `u16`.
     pub fn write_u16(&mut self, value: u16) {
         self.buffer.extend_from_slice(&value.to_be_bytes());
@@ -269,6 +300,12 @@ impl PacketWriter {
     /// Appends a 16-byte UUID.
     pub fn write_uuid(&mut self, value: Uuid) {
         self.buffer.extend_from_slice(&value);
+    }
+
+    /// Appends a network NBT value (type byte plus payload, no root name).
+    pub fn write_nbt(&mut self, tag: &crate::nbt::NbtTag) -> Result<(), CodecError> {
+        tag.encode_network(&mut self.buffer)?;
+        Ok(())
     }
 
     /// Returns the written bytes without consuming the writer.
@@ -427,5 +464,28 @@ mod tests {
         let reader = PacketReader::new(&[0x01, 0x02]);
         let err = reader.ensure_empty().expect_err("trailing");
         assert!(matches!(err, CodecError::TrailingBytes { remaining: 2 }));
+    }
+
+    #[test]
+    fn nbt_roundtrips_through_the_packet_cursor() {
+        use crate::nbt::NbtTag;
+        use std::collections::BTreeMap;
+
+        let tag = NbtTag::Compound(BTreeMap::from([
+            ("height".to_owned(), NbtTag::Short(384)),
+            ("name".to_owned(), NbtTag::String("overworld".to_owned())),
+        ]));
+
+        let mut writer = PacketWriter::new();
+        writer.write_bool(true);
+        writer.write_nbt(&tag).expect("encodable");
+        writer.write_u8(7);
+        assert_eq!(writer.as_bytes().last(), Some(&7));
+
+        let mut reader = PacketReader::new(writer.as_bytes());
+        assert!(reader.read_bool().expect("bool"));
+        assert_eq!(reader.read_nbt().expect("nbt"), tag);
+        assert_eq!(reader.read_u8().expect("u8"), 7);
+        reader.ensure_empty().expect("no trailing bytes");
     }
 }

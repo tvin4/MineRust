@@ -25,8 +25,9 @@ pub use frame::{
 };
 pub use nbt::{NbtError, NbtTag, MAX_NBT_DEPTH};
 pub use packets::{
-    DisconnectLogin, GameProfile, Handshake, LoginAcknowledged, LoginStart, LoginSuccess,
-    NextState, PingRequest, PongResponse, ProfileProperty, SetCompression, StatusRequest,
-    StatusResponse,
+    ClientInformation, DisconnectLogin, FinishAck, FinishConfiguration, GameProfile, Handshake,
+    LoginAcknowledged, LoginStart, LoginSuccess, NextState, PingRequest, PongResponse,
+    ProfileProperty, RegistryData, RegistryEntry, RegistryTag, SetCompression, StatusRequest,
+    StatusResponse, TagRegistry, UpdateTags,
 };
 pub use status::StatusInfo;
