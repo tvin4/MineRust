@@ -235,6 +235,42 @@ fn count_info_lines(logged: &str) {
         "MEASURE logs: {n} info lines over two joins, {per_chunk} of them per-chunk",
         n = lines.len()
     );
+    report_sub_batches(logged);
+}
+
+/// Part A 5: how the burst of each join was really framed — the
+/// `sub_batches` of the summary line and the size of every flush behind
+/// it (`chunk_count=<n> ... finished`). Printed like every other
+/// `MEASURE` of this test, never asserted: the figures are what the owner
+/// compares against the vanilla trace (first flush 9, the tail cut to the
+/// client's pace).
+fn report_sub_batches(logged: &str) {
+    let mut flushes: Vec<i32> = Vec::new();
+    let mut frames: Vec<i32> = Vec::new();
+    for line in logged.lines() {
+        if line.contains("chunk_batch_finished sent") {
+            if let Some(count) = logged_number(line, "chunk_count=") {
+                flushes.push(count);
+            }
+        } else if line.contains("chunk batch sent") {
+            if let Some(count) = logged_number(line, "sub_batches=") {
+                frames.push(count);
+            }
+        }
+    }
+    let total: i32 = flushes.iter().sum();
+    eprintln!(
+        "MEASURE burst framing: {frames:?} summaries, {} flushes {flushes:?} ({total} chunks)",
+        flushes.len()
+    );
+}
+
+/// The integer right behind `key` in a tracing line (`chunk_count=9`),
+/// whatever else the line carries.
+fn logged_number(line: &str, key: &str) -> Option<i32> {
+    let rest = line.split(key).nth(1)?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
 }
 
 /// Payload bytes of one chunk packet; the coordinate prefix is the first
@@ -298,6 +334,10 @@ async fn our_server_serves_the_world_of_the_live_check() {
     let sink = Arc::clone(&logged);
     let _log_guard = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
+        // No colours in the in-memory buffer: the ANSI codes the pretty
+        // format wraps every field name in would hide the `chunk_count=`
+        // and `sub_batches=` keys the MEASURE lines read back.
+        .with_ansi(false)
         .with_writer(move || LogSink(Arc::clone(&sink)))
         .finish()
         .set_default();

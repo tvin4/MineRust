@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use protocol::{
-    GameEvent, LoginPlay, PacketKey, PlayerInfoUpdate, SetCenterChunk, SetDefaultSpawnPosition,
-    SynchronizePlayerPosition,
+    ChunkBatchFinished, ChunkBatchStart, GameEvent, LoginPlay, PacketKey, PlayerInfoUpdate,
+    SetCenterChunk, SetDefaultSpawnPosition, SynchronizePlayerPosition,
 };
 use tokio::io::{AsyncWriteExt, BufReader};
 
@@ -56,6 +56,19 @@ fn one_payload() -> LevelChunkWithLight {
     }
 }
 
+/// World source serving one fixed fixture batch: the play loop gets the
+/// same chunks on every read without touching a disk.
+struct FixedSource {
+    /// The batch, shared between the pool worker and the test.
+    chunks: Arc<Vec<LevelChunkWithLight>>,
+}
+
+impl crate::loader::ChunkSource for FixedSource {
+    fn load_batch(&self) -> Result<Arc<Vec<LevelChunkWithLight>>, LoadError> {
+        Ok(Arc::clone(&self.chunks))
+    }
+}
+
 /// Reads the next frame from the client side and splits id and payload.
 async fn next_packet<R>(reader: &mut R) -> (u32, Vec<u8>)
 where
@@ -79,6 +92,41 @@ where
         .read_bytes(split.remaining())
         .map_err(|err| err.to_string())?;
     Ok((id, payload.to_vec()))
+}
+
+/// Reads one whole sub-batch (`chunk_batch_start` ... `finished`) from
+/// `reader` and returns how many chunk payloads sat in between.
+async fn read_flush<R>(reader: &mut R, ids: &PacketIds) -> i32
+where
+    R: AsyncRead + Unpin,
+{
+    let (id, _) = next_packet(reader).await;
+    assert_eq!(
+        id,
+        ids.id(ChunkBatchStart::KEY),
+        "a flush opens with its start marker"
+    );
+    let mut count = 0_i32;
+    loop {
+        let (id, payload) = next_packet(reader).await;
+        if id == ids.id(LevelChunkWithLight::KEY) {
+            count += 1;
+            continue;
+        }
+        assert_eq!(
+            id,
+            ids.id(ChunkBatchFinished::KEY),
+            "a flush closes with finished"
+        );
+        let finished =
+            ChunkBatchFinished::decode_payload(&mut protocol::PacketReader::new(&payload))
+                .expect("decodable");
+        assert_eq!(
+            finished.chunk_count, count,
+            "the finished count equals the payloads in between"
+        );
+        return count;
+    }
 }
 
 /// The status document every test connection is started with.
@@ -217,7 +265,16 @@ async fn a_confirmed_pace_splits_a_burst_into_tick_sized_sub_batches() {
             .collect();
         // Centre 0,0 keeps every chunk of this fixture in view: radius 10
         // covers x 0..2 and z -2 without a single chunk being filtered out.
-        write_chunk_batch(&mut server_write, &ids_in_task, &chunks, &pace, 0, 0, 10).await
+        write_chunk_batch(
+            &mut server_write,
+            &ids_in_task,
+            Arc::new(chunks),
+            &pace,
+            0,
+            0,
+            10,
+        )
+        .await
     });
 
     let mut client = BufReader::new(client);
@@ -277,7 +334,16 @@ async fn chunks_outside_the_send_radius_are_not_sent() {
             })
             .collect();
         chunks.push(one_payload());
-        write_chunk_batch(&mut server_write, &ids_in_task, &chunks, &pace, 0, 0, 8).await
+        write_chunk_batch(
+            &mut server_write,
+            &ids_in_task,
+            Arc::new(chunks),
+            &pace,
+            0,
+            0,
+            8,
+        )
+        .await
     });
 
     let mut client = BufReader::new(client);
@@ -426,6 +492,127 @@ async fn the_pace_answer_keeps_the_connection_open() {
         Ok(Ok((id, _))) => panic!("unexpected server packet 0x{id:X} after the pace"),
         Ok(Err(err)) => panic!("the pace answer broke the connection: {err}"),
         Err(_) => {} // open and silent, exactly as it should be
+    }
+
+    drop(client);
+    drop(client_write);
+    let result = tokio::time::timeout(Duration::from_secs(5), joined)
+        .await
+        .expect("play state must finish")
+        .expect("play task must not panic");
+    match result {
+        Ok(()) => {}
+        Err(err) if err.is_client_disconnect() => {}
+        other => panic!("play ended with {other:?}"),
+    }
+}
+
+/// Part A 5: the join burst replays the vanilla trace's flush sequence on
+/// our wire — 20 chunks open with a flush of exactly 9 (the 3x3 square
+/// around the centre, centre first), the client's `chunk_batch_received`
+/// (8.0, the number the recorded vanilla ack carries) paces the rest into
+/// one flush of 8 and one of 3, the tail one game tick behind: `[9, 8, 3]`
+/// over the same `[9, 8, 8, 3, ...]` rule of
+/// `target/parity/chunk-batch-vanilla.json` on 72 chunks.
+///
+/// Real time: the speed of the waits (immediate behind the answer, one
+/// tick before the last flush) is the very thing under test.
+#[tokio::test]
+async fn the_first_flush_is_nine_then_the_vanilla_paced_tail() {
+    let ids = Arc::new(PacketIds::compiled());
+    // Twenty chunks around the empty world's cache centre (0, 0): the
+    // five-by-four cell x -2..2, z -1..2 inside radius 8.
+    let chunks: Vec<LevelChunkWithLight> = (-2..=2)
+        .flat_map(|chunk_x| (-1..=2).map(move |chunk_z| (chunk_x, chunk_z)))
+        .map(|(chunk_x, chunk_z)| LevelChunkWithLight {
+            chunk_x,
+            chunk_z,
+            ..one_payload()
+        })
+        .collect();
+    assert_eq!(chunks.len(), 20, "the fixture batch");
+    let loader = Loader::spawn(Arc::new(FixedSource {
+        chunks: Arc::new(chunks),
+    }))
+    .expect("pool threads");
+
+    let (client, server) = tokio::io::duplex(1 << 20);
+    let (client_read, mut client_write) = tokio::io::split(client);
+    let (server_read, server_write) = tokio::io::split(server);
+    let ids_in_task = Arc::clone(&ids);
+    let joined = tokio::spawn(async move {
+        let game_data = GameData::default();
+        let status = test_status();
+        let client = Client {
+            player_name: "Steve".to_owned(),
+            view_distance: Some(8),
+        };
+        play_state(
+            server_read,
+            server_write,
+            &game_data,
+            &status,
+            &client,
+            &ids_in_task,
+            World {
+                loader: Some(loader),
+                info: WorldInfo::default(),
+            },
+        )
+        .await
+    });
+
+    let mut client = BufReader::new(client_read);
+    for key in join_keys() {
+        let (id, _) = next_packet(&mut client).await;
+        assert_eq!(id, ids.id(key), "join sequence packet");
+    }
+
+    // Flush 1: the opening of the recorded vanilla burst — nine chunks,
+    // the 3x3 square the distance rule puts first.
+    let first = read_flush(&mut client, &ids).await;
+    assert_eq!(first, 9, "the first flush is the vanilla 3x3 square");
+
+    // The answer a vanilla client sends right behind that first finished
+    // marker: eight chunks per tick — this stops the guard wait and sizes
+    // the tail.
+    let ack = ChunkBatchReceived {
+        chunks_per_tick: 8.0,
+    };
+    let frame = protocol::encode_frame(ids.id(ChunkBatchReceived::KEY), &ack.encode_payload())
+        .expect("encodable pace answer");
+    client_write.write_all(&frame).await.expect("sent");
+    client_write.flush().await.expect("flushed");
+    let answered = std::time::Instant::now();
+
+    // Flush 2: right behind the answer, at the named rate — 11 chunks
+    // left, eight go now.
+    let second = read_flush(&mut client, &ids).await;
+    assert_eq!(second, 8, "the tail starts at the client's own rate");
+    let waited = answered.elapsed();
+    assert!(
+        waited < Duration::from_millis(500),
+        "the answer must stop the guard wait at once, took {waited:?}"
+    );
+
+    // Flush 3: the last three, one game tick after the previous flush.
+    let third = read_flush(&mut client, &ids).await;
+    assert_eq!(third, 3, "the rest in one last flush");
+    let gap = answered.elapsed();
+    assert!(
+        gap >= Duration::from_millis(50),
+        "one game tick between the paced flushes, only {gap:?} since the answer"
+    );
+    assert_eq!(first + second + third, 20, "every fixture chunk went out");
+
+    // The burst is complete: no fourth flush appears while the guard of
+    // the pace answer would still be running.
+    let extra =
+        tokio::time::timeout(Duration::from_millis(300), try_next_packet(&mut client)).await;
+    match extra {
+        Ok(Ok((id, _))) => panic!("unexpected packet 0x{id:X} after the burst"),
+        Ok(Err(err)) => panic!("the connection broke after the burst: {err}"),
+        Err(_) => {} // silent, the whole burst is on the wire
     }
 
     drop(client);

@@ -1,6 +1,7 @@
 //! The play state: the join sequence, the keep-alive loop and the chunk
 //! batches of the world.
 
+mod batch;
 mod chunk_pace;
 mod join;
 mod keep_alive;
@@ -8,14 +9,16 @@ mod keep_alive;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+use batch::{sort_by_distance, write_chunk_batch};
+use batch::{wait_turn, PendingBatch};
 use chunk_pace::ChunkPace;
 
 use data::{GameData, PacketIds};
 use protocol::{
-    decode_frame, ChunkBatchFinished, ChunkBatchReceived, ChunkBatchStart, ClientInformation,
-    ConfirmTeleportation, KeepAlive, LevelChunkWithLight, Position, ProtocolState, StatusInfo,
-    MAX_STRING_CHARS, MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT,
-    MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
+    decode_frame, ChunkBatchReceived, ClientInformation, ConfirmTeleportation, KeepAlive,
+    LevelChunkWithLight, Position, ProtocolState, StatusInfo, MAX_STRING_CHARS, MOVE_PLAYER_POS,
+    MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT, MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
 };
 use std::sync::Arc;
 
@@ -223,9 +226,17 @@ where
     let mut keep_alive =
         tokio::time::interval_at(Instant::now() + KEEP_ALIVE_INTERVAL, KEEP_ALIVE_INTERVAL);
     let mut watch = KeepAliveWatch::default();
-    // Step 3.3d: no pace until the client names one — the join burst is
-    // sent whole, as the vanilla recording frames it.
+    // Step 3.3d: no pace until the client names one — the burst opens
+    // with its first flush instead of going out whole (batch module: the
+    // recorded vanilla burst is 9 of 72 chunks before the answer).
     let mut pace = ChunkPace::default();
+    // The burst on its way: written one sub-batch per turn of this loop,
+    // never inside one branch — the reader stays serviceable between two
+    // sub-batches, so a keep-alive is answered and the pace answer lands
+    // while the burst is still going (the sub_batches=1 symptom: writing
+    // the whole burst in the loading branch folded the read side into the
+    // write, and `chunk_batch_received` arrived only after it).
+    let mut pending: Option<PendingBatch> = None;
     loop {
         tokio::select! {
             // The client must answer the outstanding keep-alive in time,
@@ -251,11 +262,25 @@ where
                 match result {
                     Ok(Ok(chunks)) => {
                         info!(found = chunks.len(), "world read finished, chunks found");
-                        write_chunk_batch(&mut writer, ids, &chunks, &pace, center_x, center_z, radius)
-                            .await?;
+                        pending = Some(PendingBatch::new(chunks, center_x, center_z, radius));
                     }
                     Ok(Err(err)) => warn!(%err, "world read failed, no chunks sent"),
                     Err(err) => warn!(%err, "chunk loader dropped the reply"),
+                }
+            }
+            // One sub-batch of the burst — the first flush right away, the
+            // paced tail one game tick after the previous one, and after
+            // the first flush only once the pace answer (or its guard
+            // deadline) is in.
+            turn = wait_turn(pending.as_ref().map(PendingBatch::stage)), if pending.is_some() => {
+                let Some(batch) = pending.as_mut() else {
+                    // The arm is guarded by `is_some()`; keep the branch
+                    // exhaustive instead of an unreachable assumption.
+                    continue;
+                };
+                debug_assert!(turn.is_some(), "a pending burst always has a stage");
+                if batch.send_next(&mut writer, ids, &pace).await? {
+                    pending = None;
                 }
             }
             frame = frame_rx.recv() => {
@@ -299,6 +324,12 @@ where
                             "chunk_batch_received: pace chosen by the client"
                         );
                         pace.ack(ack.chunks_per_tick);
+                        // A burst waiting for exactly this answer starts
+                        // its tail at once (the vanilla trace sends the
+                        // second flush right behind the first answer).
+                        if let Some(batch) = pending.as_mut() {
+                            batch.on_paced();
+                        }
                     }
                     id if id == ids.id(ClientInformation::PLAY_KEY) => {
                         let info = ClientInformation::decode_payload(&mut payload)?;
@@ -354,183 +385,6 @@ async fn batch_reply(
         Some(pending) => pending.await,
         None => std::future::pending().await,
     }
-}
-
-/// Sends one chunk burst as the recording frames it: `chunk_batch_start`,
-/// one `level_chunk_with_light` per payload, `chunk_batch_finished` with
-/// the number of chunks in between.
-///
-/// With a pace the client confirmed (step 3.3d) the burst is cut into
-/// sub-batches of that size, each framed identically and sent one game
-/// tick apart; without one the burst goes out in a single piece, as the
-/// recording shows it. An empty read keeps its empty start/finished pair.
-/// Inside one burst the order is from the player's chunk outwards
-/// ([`sort_by_distance`]).
-///
-/// SOURCE: parity trace of vanilla 26.3 — one start marker, nine payloads
-/// and a finished marker whose VarInt equals the payload count (walked by
-/// the parity test `blob_walk`; the recorded order of the burst itself).
-async fn write_chunk_batch<W>(
-    writer: &mut W,
-    ids: &PacketIds,
-    chunks: &[LevelChunkWithLight],
-    pace: &ChunkPace,
-    center_x: i32,
-    center_z: i32,
-    radius: i32,
-) -> Result<(), ConnectionError>
-where
-    W: AsyncWrite + Unpin,
-{
-    // The send gate (part A, 6): only chunks of the ready rule (the loader
-    // already refused the rest) *inside* the radius go out. The client
-    // drops a chunk outside its own view square, so sending one wastes a
-    // payload and desynchronises the count of the batch framing. The
-    // shared batch is borrowed piece by piece — no payload is ever copied
-    // to reach the wire (part A 2, the cache).
-    let mut selected: Vec<&LevelChunkWithLight> = chunks
-        .iter()
-        .filter(|chunk| !outside_view(chunk.chunk_x, chunk.chunk_z, center_x, center_z, radius))
-        .collect();
-    // Send order (part A 2): the player's chunk first, then outwards.
-    sort_by_distance(&mut selected, center_x, center_z);
-    let outside = chunks.len() - selected.len();
-    if outside > 0 {
-        info!(
-            radius,
-            center_x,
-            center_z,
-            outside,
-            inside = selected.len(),
-            "chunks outside the send radius are not sent"
-        );
-    }
-    let per_batch = pace
-        .sub_batch_size(selected.len())
-        .unwrap_or_else(|| selected.len().max(1));
-    let mut left = selected.into_iter();
-    let mut total = 0_i32;
-    let mut batches = 0_u32;
-    loop {
-        let group: Vec<&LevelChunkWithLight> = left.by_ref().take(per_batch).collect();
-        if group.is_empty() {
-            if batches == 0 {
-                // An empty read still frames its own (empty) batch.
-                write_sub_batch(writer, ids, &[], center_x, center_z).await?;
-            }
-            info!(
-                chunk_count = total,
-                sub_batches = batches.max(1),
-                "chunk batch sent"
-            );
-            return Ok(());
-        }
-        if batches > 0 {
-            // One sub-batch per game tick of the client's own pace; the
-            // pause only holds this branch — the keep-alive interval and
-            // the deadline tick of their own tasks meanwhile.
-            tokio::time::sleep(chunk_pace::TICK).await;
-        }
-        total += write_sub_batch(writer, ids, &group, center_x, center_z).await?;
-        batches += 1;
-    }
-}
-
-/// Writes one `chunk_batch_start` … `chunk_batch_finished` pair around
-/// `chunks`, with the finished count equal to what was sent in between.
-///
-/// Every chunk is logged at debug with its coordinates and payload size —
-/// info keeps only the batch summaries (`chunk_batch_finished sent`), so
-/// one join's worth of bursts does not print a line per payload at the
-/// default level (part A 2/3: 289 chunks were 289 info lines each). The
-/// batch reaching here was already cut to the send radius by
-/// [`write_chunk_batch`] (part A, 6), so every chunk fits the view square
-/// around `center` the join announced.
-async fn write_sub_batch<W>(
-    writer: &mut W,
-    ids: &PacketIds,
-    chunks: &[&LevelChunkWithLight],
-    center_x: i32,
-    center_z: i32,
-) -> Result<i32, ConnectionError>
-where
-    W: AsyncWrite + Unpin,
-{
-    debug!(center_x, center_z, "chunk_batch_start sent");
-    write_tracked(
-        writer,
-        ProtocolState::Play,
-        ids.id(ChunkBatchStart::KEY),
-        &ChunkBatchStart.encode_payload(),
-    )
-    .await?;
-    let mut chunk_count = 0_i32;
-    for chunk in chunks {
-        let payload = chunk.encode_payload()?;
-        debug!(
-            chunk_x = chunk.chunk_x,
-            chunk_z = chunk.chunk_z,
-            size = payload.len(),
-            "level_chunk_with_light sent"
-        );
-        write_tracked(
-            writer,
-            ProtocolState::Play,
-            ids.id(LevelChunkWithLight::KEY),
-            &payload,
-        )
-        .await?;
-        chunk_count += 1;
-    }
-    let finished = ChunkBatchFinished { chunk_count };
-    write_tracked(
-        writer,
-        ProtocolState::Play,
-        ids.id(ChunkBatchFinished::KEY),
-        &finished.encode_payload(),
-    )
-    .await?;
-    info!(chunk_count, "chunk_batch_finished sent");
-    Ok(chunk_count)
-}
-
-/// Whether a chunk lies outside the square of `radius` around `center`
-/// (the cache centre the join announced in Set Center Chunk).
-fn outside_view(chunk_x: i32, chunk_z: i32, center_x: i32, center_z: i32, radius: i32) -> bool {
-    (chunk_x - center_x).abs() > radius || (chunk_z - center_z).abs() > radius
-}
-
-/// Puts a burst in the order the client must receive it: the player's own
-/// chunk first and then by growing squared chunk distance, ties broken by
-/// `(chunk_x, chunk_z)` so one world of ready chunks always sends the same
-/// sequence.
-///
-/// SOURCE: our vanilla 26.3 traces on template v2. In
-/// `target/parity/chunk-batch-vanilla.json` every one of the 11 flushes of
-/// the 72 recorded chunks has a *non-decreasing* squared distance from the
-/// join centre (6, -2), and the first flush is exactly the 3x3 square
-/// around it (9 chunks, centre first, then the four orthogonal neighbours,
-/// then the four corners). `target/parity/join-vanilla.v2runB.json` carries
-/// the same nine chunks in the same byte order. The whole trace shows
-/// five distance regressions, all of them on a flush boundary: a flush
-/// sorts the chunks it already has while the rest are still loading — so
-/// what one burst can copy is the distance order inside a flush, not a
-/// global order across flushes. Vanilla's order *within* one distance (its
-/// first four neighbours go N, E, W, S) is stable across runs but its key
-/// is never visible on the wire, and the traces do not cover a tie deeper
-/// than the 3x3 — hence the coordinate tie-break above, which reproduces
-/// the observed grouping (centre, four neighbours, four corners) with a
-/// rule of our own.
-fn sort_by_distance(chunks: &mut [&LevelChunkWithLight], center_x: i32, center_z: i32) {
-    chunks.sort_unstable_by_key(|chunk| {
-        let delta_x = i64::from(chunk.chunk_x - center_x);
-        let delta_z = i64::from(chunk.chunk_z - center_z);
-        (
-            delta_x * delta_x + delta_z * delta_z,
-            chunk.chunk_x,
-            chunk.chunk_z,
-        )
-    });
 }
 
 /// The radius this connection sends chunks in (the owner's rule, part A 6):

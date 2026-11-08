@@ -53,6 +53,12 @@ impl ChunkPace {
         }
     }
 
+    /// Whether the client has confirmed a pace yet (`None` until the
+    /// first `chunk_batch_received` arrives).
+    pub(super) fn known(&self) -> bool {
+        self.wanted.is_some()
+    }
+
     /// How many chunks of a `burst`-sized burst go out per sub-batch;
     /// `None` means "one piece" (no answer yet, or the whole burst fits
     /// into one tick).
