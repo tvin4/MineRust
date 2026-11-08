@@ -280,7 +280,9 @@ fn our_payloads(env: &ParityEnv) -> Option<Vec<LevelChunkWithLight>> {
         Arc::new(WireTables::new(blocks, registries, Arc::new(game_data))),
     );
     match world.load_batch() {
-        Ok(chunks) => Some(chunks),
+        // The source hands its batch out behind a shared `Arc` (part A 2);
+        // this report walks a plain `Vec` once per run, off any hot path.
+        Ok(chunks) => Some(chunks.as_ref().clone()),
         Err(error) => {
             eprintln!("SKIP: the template world cannot be converted: {error}");
             None

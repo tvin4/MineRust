@@ -172,6 +172,16 @@ pub struct Client {
     /// tail first, so packets read by a previous (possibly timed-out) step
     /// are never lost or read twice.
     read_pos: usize,
+    /// When the connection attempt started: the base of every
+    /// [`Self::arrivals`] timestamp (captured before the TCP connect, so
+    /// the span being measured covers the connect itself).
+    opened: std::time::Instant,
+    /// Elapsed [`Self::opened`] when each packet arrived: `(id, elapsed)`
+    /// of the packets received so far, in arrival order. Deliberately kept
+    /// out of the [`Trace`]: a timestamp in the JSON would break byte and
+    /// field comparisons against vanilla, while a test can still ask how
+    /// long taking the recording took (part A 2, first and last chunk).
+    arrivals: Vec<(u32, Duration)>,
 }
 
 impl Client {
@@ -181,6 +191,7 @@ impl Client {
         addr: SocketAddr,
         ids: Arc<PacketIds>,
     ) -> Result<Self, ClientError> {
+        let opened = std::time::Instant::now();
         let stream = TcpStream::connect(addr)
             .await
             .map_err(|source| ClientError::Connect { addr, source })?;
@@ -217,7 +228,15 @@ impl Client {
             names,
             trace: Trace::new(target),
             read_pos: 0,
+            opened,
+            arrivals: Vec::new(),
         })
+    }
+
+    /// The moment each packet arrived: `(packet id, elapsed since the
+    /// connection attempt started)`, in arrival order.
+    pub fn arrivals(&self) -> &[(u32, Duration)] {
+        &self.arrivals
     }
 
     /// Runs the whole script in order.
@@ -404,6 +423,7 @@ impl Client {
             split_packet(&body).map_err(|source| ClientError::Malformed { state, source })?;
 
         self.record(Direction::Clientbound, id, &payload);
+        self.arrivals.push((id, self.opened.elapsed()));
         self.apply_set_compression(id, &payload)?;
         // Transport level, like compression: a real client acknowledges
         // play keep-alives, and without an acknowledgement vanilla drops an

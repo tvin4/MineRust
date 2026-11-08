@@ -8,7 +8,7 @@
 //! here is shared mutably with a connection.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use data::{BlockStates, GameData, RegistryIds};
 use net::loader::LoadError;
@@ -80,6 +80,17 @@ pub struct TemplateWorld {
     data_version: i32,
     /// Id lookups of the wire conversion.
     refs: Arc<WireTables>,
+    /// The whole batch of ready payloads, built once and then shared by
+    /// every connection (`Arc`, first build wins the `OnceLock` slot).
+    ///
+    /// The reader used to re-read every region file and re-encode every
+    /// chunk on each job: the owner's log showed `world batch built
+    /// sent=729` once at the warm-up and again on every join (~2.4 s of
+    /// work). The cache turns every later job into an `Arc` clone: an
+    /// immutable batch with no `Mutex` anywhere on the join path or in the
+    /// tick (docs/DECISIONS.md rule: a new lock needs a written reason —
+    /// this is the lock-free side of the answer instead).
+    ready: OnceLock<Arc<Vec<LevelChunkWithLight>>>,
 }
 
 impl TemplateWorld {
@@ -90,6 +101,7 @@ impl TemplateWorld {
             region_dir,
             data_version,
             refs,
+            ready: OnceLock::new(),
         }
     }
 
@@ -128,14 +140,29 @@ impl TemplateWorld {
         let payload = chunk.level_chunk(self.refs.as_ref())?;
         Ok(Some(payload))
     }
-}
 
-impl net::ChunkSource for TemplateWorld {
-    /// Every chunk of the save that passes the ready rule, converted to a
-    /// wire payload. Region files are read as they are listed: one broken
+    /// The shared batch: the first caller reads the world and stores it,
+    /// every later caller only clones the `Arc`. No `Mutex` stands between
+    /// a connection and a payload — the hand-over is `OnceLock`, and two
+    /// racing first readers cost one wasted build at most, only while the
+    /// cache is still empty (the warm-up fills it before any port binds).
+    fn ready_batch(&self) -> Result<Arc<Vec<LevelChunkWithLight>>, LoadError> {
+        if let Some(cached) = self.ready.get() {
+            return Ok(Arc::clone(cached));
+        }
+        let built = Arc::new(self.build_batch()?);
+        Ok(Arc::clone(self.ready.get_or_init(|| built)))
+    }
+
+    /// Reads every region file once and converts the chunks that pass the
+    /// ready rule. Region files are read as they are listed: one broken
     /// file fails the whole batch with its path in the error (a malformed
     /// world is a read error, never a hole in the terrain).
-    fn load_batch(&self) -> Result<Vec<LevelChunkWithLight>, LoadError> {
+    ///
+    /// The `world batch built` summary belongs here and only here: it used
+    /// to print on every join — around 2.4 s of reading and encoding that
+    /// this cache now does once at warm-up.
+    fn build_batch(&self) -> Result<Vec<LevelChunkWithLight>, LoadError> {
         let files = self.region_files()?;
         let mut payload = Vec::new();
         let mut refused = 0_usize;
@@ -152,5 +179,53 @@ impl net::ChunkSource for TemplateWorld {
             refused, self.data_version, "world batch built"
         );
         Ok(payload)
+    }
+}
+
+impl net::ChunkSource for TemplateWorld {
+    /// Every ready chunk of the save as a wire payload behind the shared
+    /// `Arc`: the first call builds the batch (the warm-up owns it), later
+    /// calls return the same immutable batch out of [`Self::ready_batch`].
+    /// A join clones the pointer — never the payloads.
+    fn load_batch(&self) -> Result<Arc<Vec<LevelChunkWithLight>>, LoadError> {
+        self.ready_batch()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use net::ChunkSource as _;
+
+    /// Part A 2: the first read owns the disk, every later read is served
+    /// from the immutable cache. The proof is the missing directory — a
+    /// rebuild would fail with an I/O error here, the cached batch does
+    /// not notice that the world it came from is gone.
+    #[test]
+    fn the_batch_is_built_once_and_then_served_from_the_cache() {
+        let region_dir = std::env::temp_dir().join("minerust-batch-cache");
+        let _ = std::fs::remove_dir_all(&region_dir);
+        std::fs::create_dir_all(&region_dir).expect("region dir");
+        let world = TemplateWorld::new(
+            region_dir.clone(),
+            5023,
+            Arc::new(WireTables::new(
+                BlockStates::default(),
+                RegistryIds::default(),
+                Arc::new(GameData::default()),
+            )),
+        );
+
+        let first = world.load_batch().expect("first read of the empty save");
+        assert!(first.is_empty(), "an empty region holds no chunks");
+
+        // The disk goes away: without the cache this would be an error.
+        std::fs::remove_dir_all(&region_dir).expect("region dir removed");
+        let second = world.load_batch().expect("second read from the cache");
+        assert_eq!(second.len(), first.len(), "the very same batch");
+
+        let cached = world.ready.get().expect("the batch was stored");
+        assert_eq!(cached.len(), first.len(), "the cache holds the batch");
+        let _ = std::fs::remove_dir_all(&region_dir);
     }
 }

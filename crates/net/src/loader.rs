@@ -32,8 +32,12 @@ pub type LoadError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// call per batch, never on a connection task.
 pub trait ChunkSource: Send + Sync + 'static {
     /// Wire payloads of every chunk the world can send right now, in send
-    /// order. A failing read reports the data problem instead of a default.
-    fn load_batch(&self) -> Result<Vec<LevelChunkWithLight>, LoadError>;
+    /// order, behind a shared `Arc` — the batch of a template world is
+    /// built once and every join receives the same immutable batch, so a
+    /// connection only ever clones the pointer (part A 2, the cache), not
+    /// the payloads. A failing read reports the data problem instead of a
+    /// default.
+    fn load_batch(&self) -> Result<Arc<Vec<LevelChunkWithLight>>, LoadError>;
 }
 
 /// The whole loader pool has gone away (shut down or panicked earlier).
@@ -44,7 +48,7 @@ pub struct LoaderShutDown;
 /// One unit of world work: the reply channel a batch arrives on.
 struct Job {
     /// Where the built batch (or its error) is delivered.
-    reply: oneshot::Sender<Result<Vec<LevelChunkWithLight>, LoadError>>,
+    reply: oneshot::Sender<Result<Arc<Vec<LevelChunkWithLight>>, LoadError>>,
 }
 
 /// Blocking workers in the pool (spawn_blocking threads, one queue each).
@@ -112,7 +116,7 @@ impl Loader {
     /// backpressure the pool exists for.
     pub async fn load_batch(
         &self,
-    ) -> Result<oneshot::Receiver<Result<Vec<LevelChunkWithLight>, LoadError>>, LoaderShutDown>
+    ) -> Result<oneshot::Receiver<Result<Arc<Vec<LevelChunkWithLight>>, LoadError>>, LoaderShutDown>
     {
         let index = self.inner.next.fetch_add(1, Ordering::Relaxed) % self.inner.queues.len();
         let (reply, received) = oneshot::channel();
@@ -141,11 +145,11 @@ mod tests {
     }
 
     impl ChunkSource for EchoSource {
-        fn load_batch(&self) -> Result<Vec<LevelChunkWithLight>, LoadError> {
+        fn load_batch(&self) -> Result<Arc<Vec<LevelChunkWithLight>>, LoadError> {
             let thread = std::thread::current();
             let name = thread.name().unwrap_or("<unnamed>").to_owned();
             self.seen.lock().expect("test lock uncontended").push(name);
-            Ok((0..self.count).map(test_chunk).collect())
+            Ok(Arc::new((0..self.count).map(test_chunk).collect()))
         }
     }
 

@@ -136,6 +136,11 @@ async fn record_self_session(
     // partial recording: the assertions below report what really arrived
     // instead of hiding it behind one generic client error.
     let outcome = client.run(&steps).await;
+    report_chunk_arrivals(
+        "first join",
+        client.arrivals(),
+        ids.id(LevelChunkWithLight::KEY),
+    );
     let trace = client.into_trace();
     trace
         .save(&out_dir().join("self-session.json"))
@@ -147,6 +152,52 @@ async fn record_self_session(
         eprintln!("script stopped early: {error}");
     }
     trace
+}
+
+/// The part A 2 measurement of one connection: the span from the connect
+/// attempt to the first and to the last `level_chunk_with_light` on the
+/// wire, printed as `MEASURE ...`. A parity test never asserts these — it
+/// must stay green while the number itself improves — but the owner asked
+/// for before/after figures, so both runs of this test print the same
+/// line to compare against (release build: ignored, `--nocapture`).
+fn report_chunk_arrivals(tag: &str, arrivals: &[(u32, Duration)], chunk_id: u32) {
+    let at: Vec<Duration> = arrivals
+        .iter()
+        .filter(|(id, _)| *id == chunk_id)
+        .map(|(_, elapsed)| *elapsed)
+        .collect();
+    match (at.first(), at.last()) {
+        (Some(first), Some(last)) => eprintln!(
+            "MEASURE {tag}: connect -> first chunk {} ms, connect -> last chunk {} ms ({} chunks)",
+            first.as_millis(),
+            last.as_millis(),
+            at.len()
+        ),
+        _ => eprintln!("MEASURE {tag}: no chunk arrived"),
+    }
+}
+
+/// A second join of the same world inside one process: the measurement
+/// the world batch cache exists for. The first join reads the save (that
+/// read is what still shows in its own span above); every join after it
+/// — including this one — must be served from the shared immutable batch
+/// without touching the region files again.
+async fn measure_second_join(env: &ParityEnv, ids: Arc<data::PacketIds>, addr: SocketAddr) {
+    let mut steps = join_steps(env, &ids, addr.port());
+    steps.push(Step::wait(
+        ids.id(protocol::ChunkBatchStart::KEY),
+        BATCH_WAIT,
+    ));
+    steps.push(Step::quiet(Duration::from_secs(2), Duration::from_secs(60)));
+    let mut client = Client::connect("self-second", addr, Arc::clone(&ids))
+        .await
+        .expect("second connect to our own server");
+    let _ = client.run(&steps).await; // only the timing is of interest here
+    report_chunk_arrivals(
+        "second join",
+        client.arrivals(),
+        ids.id(LevelChunkWithLight::KEY),
+    );
 }
 
 /// Payload bytes of one chunk packet; the coordinate prefix is the first
@@ -208,6 +259,9 @@ async fn our_server_serves_the_world_of_the_live_check() {
     let (addr, abort) = start_with_world(&env, Arc::clone(&ids)).await;
     guard.abort = Some(abort);
     let trace = record_self_session(&env, Arc::clone(&ids), addr).await;
+    // Part A 2: the same join once more, in the same process, so the cache
+    // (or the absence of one) is what the second MEASURE line compares.
+    measure_second_join(&env, Arc::clone(&ids), addr).await;
     drop(guard);
 
     // -- The four expectations of step 5 ----------------------------------

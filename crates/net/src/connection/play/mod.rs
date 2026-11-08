@@ -17,6 +17,8 @@ use protocol::{
     MAX_STRING_CHARS, MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT,
     MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
 };
+use std::sync::Arc;
+
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
@@ -231,7 +233,7 @@ where
                 match result {
                     Ok(Ok(chunks)) => {
                         info!(found = chunks.len(), "world read finished, chunks found");
-                        write_chunk_batch(&mut writer, ids, chunks, &pace, center_x, center_z, radius)
+                        write_chunk_batch(&mut writer, ids, &chunks, &pace, center_x, center_z, radius)
                             .await?;
                     }
                     Ok(Err(err)) => warn!(%err, "world read failed, no chunks sent"),
@@ -316,14 +318,20 @@ where
     }
 }
 
+/// The one-shot answer of the loader pool: the shared batch of ready
+/// payloads or the error of its read. Both sides of the pool move the same
+/// `Arc<Vec<...>>` (part A 2 — a connection clones the pointer, never the
+/// payloads), so the branches name one type instead of the full nesting.
+type BatchReply = Result<Arc<Vec<LevelChunkWithLight>>, LoadError>;
+
 /// Waits for the loader's reply on its one-shot channel.
 ///
 /// While nothing is queued the receiver is `None` and this future never
 /// resolves — the `select!` arm is guarded by the same option, this only
 /// keeps the branch non-empty (the same shape as `wait_for_deadline`).
 async fn batch_reply(
-    loading: &mut Option<oneshot::Receiver<Result<Vec<LevelChunkWithLight>, LoadError>>>,
-) -> Result<Result<Vec<LevelChunkWithLight>, LoadError>, oneshot::error::RecvError> {
+    loading: &mut Option<oneshot::Receiver<BatchReply>>,
+) -> Result<BatchReply, oneshot::error::RecvError> {
     match loading {
         Some(pending) => pending.await,
         None => std::future::pending().await,
@@ -347,7 +355,7 @@ async fn batch_reply(
 async fn write_chunk_batch<W>(
     writer: &mut W,
     ids: &PacketIds,
-    mut chunks: Vec<LevelChunkWithLight>,
+    chunks: &[LevelChunkWithLight],
     pace: &ChunkPace,
     center_x: i32,
     center_z: i32,
@@ -359,34 +367,38 @@ where
     // The send gate (part A, 6): only chunks of the ready rule (the loader
     // already refused the rest) *inside* the radius go out. The client
     // drops a chunk outside its own view square, so sending one wastes a
-    // payload and desynchronises the count of the batch framing.
-    let before = chunks.len();
-    chunks.retain(|chunk| !outside_view(chunk.chunk_x, chunk.chunk_z, center_x, center_z, radius));
+    // payload and desynchronises the count of the batch framing. The
+    // shared batch is borrowed piece by piece — no payload is ever copied
+    // to reach the wire (part A 2, the cache).
+    let mut selected: Vec<&LevelChunkWithLight> = chunks
+        .iter()
+        .filter(|chunk| !outside_view(chunk.chunk_x, chunk.chunk_z, center_x, center_z, radius))
+        .collect();
     // Send order (part A 2): the player's chunk first, then outwards.
-    sort_by_distance(&mut chunks, center_x, center_z);
-    let outside = before - chunks.len();
+    sort_by_distance(&mut selected, center_x, center_z);
+    let outside = chunks.len() - selected.len();
     if outside > 0 {
         info!(
             radius,
             center_x,
             center_z,
             outside,
-            inside = chunks.len(),
+            inside = selected.len(),
             "chunks outside the send radius are not sent"
         );
     }
     let per_batch = pace
-        .sub_batch_size(chunks.len())
-        .unwrap_or_else(|| chunks.len().max(1));
-    let mut left = chunks.into_iter();
+        .sub_batch_size(selected.len())
+        .unwrap_or_else(|| selected.len().max(1));
+    let mut left = selected.into_iter();
     let mut total = 0_i32;
     let mut batches = 0_u32;
     loop {
-        let group: Vec<_> = left.by_ref().take(per_batch).collect();
+        let group: Vec<&LevelChunkWithLight> = left.by_ref().take(per_batch).collect();
         if group.is_empty() {
             if batches == 0 {
                 // An empty read still frames its own (empty) batch.
-                write_sub_batch(writer, ids, Vec::new(), center_x, center_z).await?;
+                write_sub_batch(writer, ids, &[], center_x, center_z).await?;
             }
             info!(
                 chunk_count = total,
@@ -401,7 +413,7 @@ where
             // the deadline tick of their own tasks meanwhile.
             tokio::time::sleep(chunk_pace::TICK).await;
         }
-        total += write_sub_batch(writer, ids, group, center_x, center_z).await?;
+        total += write_sub_batch(writer, ids, &group, center_x, center_z).await?;
         batches += 1;
     }
 }
@@ -416,7 +428,7 @@ where
 async fn write_sub_batch<W>(
     writer: &mut W,
     ids: &PacketIds,
-    chunks: Vec<LevelChunkWithLight>,
+    chunks: &[&LevelChunkWithLight],
     center_x: i32,
     center_z: i32,
 ) -> Result<i32, ConnectionError>
@@ -488,7 +500,7 @@ fn outside_view(chunk_x: i32, chunk_z: i32, center_x: i32, center_z: i32, radius
 /// than the 3x3 — hence the coordinate tie-break above, which reproduces
 /// the observed grouping (centre, four neighbours, four corners) with a
 /// rule of our own.
-fn sort_by_distance(chunks: &mut [LevelChunkWithLight], center_x: i32, center_z: i32) {
+fn sort_by_distance(chunks: &mut [&LevelChunkWithLight], center_x: i32, center_z: i32) {
     chunks.sort_unstable_by_key(|chunk| {
         let delta_x = i64::from(chunk.chunk_x - center_x);
         let delta_z = i64::from(chunk.chunk_z - center_z);

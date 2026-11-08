@@ -21,11 +21,11 @@ struct GatedSource {
 }
 
 impl crate::loader::ChunkSource for GatedSource {
-    fn load_batch(&self) -> Result<Vec<LevelChunkWithLight>, LoadError> {
+    fn load_batch(&self) -> Result<Arc<Vec<LevelChunkWithLight>>, LoadError> {
         // This is the whole point of the pool: the slow world read
         // parks on a pool worker thread, not on the connection.
         self.release.wait();
-        Ok(vec![one_payload()])
+        Ok(Arc::new(vec![one_payload()]))
     }
 }
 
@@ -217,7 +217,7 @@ async fn a_confirmed_pace_splits_a_burst_into_tick_sized_sub_batches() {
             .collect();
         // Centre 0,0 keeps every chunk of this fixture in view: radius 10
         // covers x 0..2 and z -2 without a single chunk being filtered out.
-        write_chunk_batch(&mut server_write, &ids_in_task, chunks, &pace, 0, 0, 10).await
+        write_chunk_batch(&mut server_write, &ids_in_task, &chunks, &pace, 0, 0, 10).await
     });
 
     let mut client = BufReader::new(client);
@@ -277,7 +277,7 @@ async fn chunks_outside_the_send_radius_are_not_sent() {
             })
             .collect();
         chunks.push(one_payload());
-        write_chunk_batch(&mut server_write, &ids_in_task, chunks, &pace, 0, 0, 8).await
+        write_chunk_batch(&mut server_write, &ids_in_task, &chunks, &pace, 0, 0, 8).await
     });
 
     let mut client = BufReader::new(client);
@@ -317,7 +317,7 @@ async fn chunks_outside_the_send_radius_are_not_sent() {
 /// corner (-2, -10), the same far corner the recording started with.
 #[test]
 fn the_burst_goes_out_from_the_centre_to_the_far_corners() {
-    let mut chunks: Vec<_> = (-10..=6)
+    let square: Vec<LevelChunkWithLight> = (-10..=6)
         .flat_map(|chunk_z| (-2..=14).map(move |chunk_x| (chunk_x, chunk_z)))
         .map(|(chunk_x, chunk_z)| LevelChunkWithLight {
             chunk_x,
@@ -325,6 +325,7 @@ fn the_burst_goes_out_from_the_centre_to_the_far_corners() {
             ..one_payload()
         })
         .collect();
+    let mut chunks: Vec<&LevelChunkWithLight> = square.iter().collect();
 
     sort_by_distance(&mut chunks, 6, -2);
 
