@@ -126,12 +126,16 @@ async fn reading_the_world_never_defers_the_keep_alive() {
     let joined = tokio::spawn(async move {
         let game_data = GameData::default();
         let status = test_status();
+        let client = Client {
+            player_name: "Steve".to_owned(),
+            view_distance: Some(8),
+        };
         play_state(
             server_read,
             server_write,
             &game_data,
             &status,
-            "Steve",
+            &client,
             &ids_in_task,
             World {
                 loader: Some(loader),
@@ -211,9 +215,9 @@ async fn a_confirmed_pace_splits_a_burst_into_tick_sized_sub_batches() {
                 ..one_payload()
             })
             .collect();
-        // Centre 0,0 keeps every chunk of this fixture in view (the
-        // radius check of the diagnostics log stays silent here).
-        write_chunk_batch(&mut server_write, &ids_in_task, chunks, &pace, 0, 0).await
+        // Centre 0,0 keeps every chunk of this fixture in view: radius 10
+        // covers x 0..2 and z -2 without a single chunk being filtered out.
+        write_chunk_batch(&mut server_write, &ids_in_task, chunks, &pace, 0, 0, 10).await
     });
 
     let mut client = BufReader::new(client);
@@ -253,6 +257,57 @@ async fn a_confirmed_pace_splits_a_burst_into_tick_sized_sub_batches() {
     );
 }
 
+/// Part A, 6: chunks outside the send radius of the connection never reach
+/// the wire, and the batch framing counts only what was really sent — four
+/// fixture chunks in, the two outside radius 8 of centre (0, 0) dropped.
+#[tokio::test]
+async fn chunks_outside_the_send_radius_are_not_sent() {
+    let ids = Arc::new(PacketIds::compiled());
+    let (client, server) = tokio::io::duplex(1 << 20);
+    let (_server_read, mut server_write) = tokio::io::split(server);
+    let ids_in_task = Arc::clone(&ids);
+    let written = tokio::spawn(async move {
+        let pace = ChunkPace::default();
+        // (0, -2) and (6, -2) inside radius 8, (20, -2) and (40, -2) out.
+        let mut chunks: Vec<_> = [0, 20, 40]
+            .into_iter()
+            .map(|chunk_x| LevelChunkWithLight {
+                chunk_x,
+                ..one_payload()
+            })
+            .collect();
+        chunks.push(one_payload());
+        write_chunk_batch(&mut server_write, &ids_in_task, chunks, &pace, 0, 0, 8).await
+    });
+
+    let mut client = BufReader::new(client);
+    let (id, _) = next_packet(&mut client).await;
+    assert_eq!(id, ids.id(ChunkBatchStart::KEY), "batch start");
+    let mut sent = 0;
+    loop {
+        let (id, payload) = next_packet(&mut client).await;
+        if id == ids.id(LevelChunkWithLight::KEY) {
+            sent += 1;
+            continue;
+        }
+        assert_eq!(id, ids.id(ChunkBatchFinished::KEY), "batch finished");
+        let finished =
+            ChunkBatchFinished::decode_payload(&mut protocol::PacketReader::new(&payload))
+                .expect("decodable");
+        assert_eq!(sent, 2, "only the in-radius chunks");
+        assert_eq!(
+            finished.chunk_count, 2,
+            "the finished count is filtered too"
+        );
+        break;
+    }
+    tokio::time::timeout(Duration::from_secs(5), written)
+        .await
+        .expect("the batch must finish writing")
+        .expect("write task must not panic")
+        .expect("written without error");
+}
+
 /// Step 3.3d in the loop: the connection decodes the client's pace
 /// answer and stays open without answering it (a composition the loop
 /// cannot read would end the connection right here, and the next read
@@ -266,12 +321,16 @@ async fn the_pace_answer_keeps_the_connection_open() {
     let joined = tokio::spawn(async move {
         let game_data = GameData::default();
         let status = test_status();
+        let client = Client {
+            player_name: "Steve".to_owned(),
+            view_distance: None,
+        };
         play_state(
             server_read,
             server_write,
             &game_data,
             &status,
-            "Steve",
+            &client,
             &ids_in_task,
             World {
                 loader: None,

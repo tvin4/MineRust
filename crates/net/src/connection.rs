@@ -26,6 +26,20 @@ use crate::loader::Loader;
 
 pub use play::WorldInfo;
 
+/// What login and configuration learned about the client before play
+/// starts: the name of Login Start and the view distance the client asked
+/// for in configuration (`None` when it sent no `client_information`).
+///
+/// Grouped into one argument so the play loop stays readable — the name
+/// drives the join sequence, the view distance caps the chunk radius.
+#[derive(Debug)]
+pub(super) struct Client {
+    /// Player name of Login Start.
+    pub(super) player_name: String,
+    /// View distance of the last `client_information`, in chunks.
+    pub(super) view_distance: Option<i32>,
+}
+
 /// Maximum time a connection may spend before reaching the play state
 /// (handshake, status, login and configuration). Once in play there is no
 /// global timeout: a joined client is kept alive by keep-alives instead.
@@ -117,7 +131,7 @@ async fn handle_connection(
             with_timeout(status_state(&mut reader, &mut writer, &status, ids)).await
         }
         NextState::Login => {
-            let player_name = with_timeout(login::login_state(
+            let client = with_timeout(login::login_state(
                 &mut reader,
                 &mut writer,
                 &game_data,
@@ -129,7 +143,7 @@ async fn handle_connection(
                 writer,
                 &game_data,
                 &status,
-                &player_name,
+                &client,
                 ids,
                 play::World {
                     loader,

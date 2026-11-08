@@ -16,6 +16,11 @@ use crate::frame::{read_tracked, write_tracked};
 /// the client confirms with Login Acknowledged to reach configuration,
 /// which must be completed before the player name is returned.
 ///
+/// Returns what play needs of both states (a [`super::Client`]): the name
+/// and the view distance the client asked for in configuration — the play
+/// loop turns them into the radius it sends chunks in,
+/// `min(client request, server maximum)`.
+///
 /// Runs under the pre-play timeout; see
 /// [`super::handle_connection`].
 pub(super) async fn login_state<R, W>(
@@ -23,7 +28,7 @@ pub(super) async fn login_state<R, W>(
     writer: &mut W,
     game_data: &GameData,
     ids: &PacketIds,
-) -> Result<String, ConnectionError>
+) -> Result<super::Client, ConnectionError>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
@@ -76,19 +81,26 @@ where
     payload.ensure_empty()?;
     debug!("login acknowledged, entering configuration");
 
-    configuration_state(reader, writer, game_data, ids).await?;
-    Ok(start.name)
+    let view_distance = configuration_state(reader, writer, game_data, ids).await?;
+    Ok(super::Client {
+        player_name: start.name,
+        view_distance,
+    })
 }
 
 /// Serves the configuration state: sends every synchronized registry, the
 /// tags and Finish Configuration, then waits for the client's Finish
 /// Acknowledged; afterwards the connection moves on to play.
+///
+/// Returns the view distance of the last `client_information` the client
+/// sent (`None` when it sent none at all) — the value the play loop caps
+/// its chunk sending with.
 async fn configuration_state<R, W>(
     reader: &mut R,
     writer: &mut W,
     game_data: &GameData,
     ids: &PacketIds,
-) -> Result<(), ConnectionError>
+) -> Result<Option<i32>, ConnectionError>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
@@ -136,6 +148,9 @@ where
         "configuration data sent"
     );
 
+    // The last requested view distance: configuration normally carries one
+    // `client_information` right at its start, then nothing.
+    let mut view_distance = None;
     loop {
         let body = read_tracked(reader, ProtocolState::Configuration).await?;
         let (packet_id, mut payload) = decode_frame(&body)?;
@@ -143,6 +158,7 @@ where
             id if id == ids.id(ClientInformation::KEY) => {
                 let info = ClientInformation::decode_payload(&mut payload)?;
                 payload.ensure_empty()?;
+                view_distance = Some(i32::from(info.view_distance));
                 debug!(
                     locale = %info.locale,
                     view_distance = info.view_distance,
@@ -157,8 +173,8 @@ where
             id if id == ids.id(FinishAck::KEY) => {
                 FinishAck::decode_payload(&mut payload)?;
                 payload.ensure_empty()?;
-                debug!("configuration acknowledged, entering play");
-                return Ok(());
+                debug!(?view_distance, "configuration acknowledged, entering play");
+                return Ok(view_distance);
             }
             id => {
                 return Err(ConnectionError::UnexpectedPacket {

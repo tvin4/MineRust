@@ -26,6 +26,8 @@ use crate::error::ConnectionError;
 use crate::frame::{read_tracked, write_tracked};
 use crate::loader::{LoadError, Loader};
 
+use super::Client;
+
 use keep_alive::{keep_alive_millis, wait_for_deadline, KeepAliveWatch, KEEP_ALIVE_INTERVAL};
 
 /// Identifier of the dimension the player joins.
@@ -37,8 +39,12 @@ const DIMENSION_TYPE_REGISTRY: &str = "minecraft:dimension_type";
 /// Entity id assigned to the single player of a connection.
 const ENTITY_ID: i32 = 1;
 
-/// Render and simulation distance sent in Login (play), in chunks.
-// SOURCE: wiki, unverified: vanilla values, not read from the game data.
+/// View distance the server announces in Login (play) **and the largest
+/// radius it ever sends**: the radius of a connection is the client's own
+/// request capped by this server maximum (`send_radius`), so Login never
+/// promises more than the server is willing to send.
+// SOURCE: wiki, unverified: the vanilla value is 10 (read from the login
+// recording by the parity test `login_fields`, it is not in the game data).
 const VIEW_DISTANCE: i32 = 10;
 
 /// Sea level sent in Login (play).
@@ -113,7 +119,7 @@ pub(super) async fn play_state<R, W>(
     mut writer: W,
     game_data: &GameData,
     status: &StatusInfo,
-    player_name: &str,
+    client: &Client,
     ids: &PacketIds,
     world: World,
 ) -> Result<(), ConnectionError>
@@ -121,6 +127,16 @@ where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
 {
+    let player_name = client.player_name.as_str();
+    // Chunks go out inside this radius only: what the client asked for in
+    // configuration, never more than Login (play) announced (part A, 6).
+    let radius = send_radius(client.view_distance);
+    info!(
+        client_view_distance = ?client.view_distance,
+        radius,
+        player = %player_name,
+        "chunk send radius chosen"
+    );
     // Packet 1..6 of the join (module documentation) — recorded packet by
     // packet by the session trace as they go out.
     join::send_join(
@@ -215,7 +231,7 @@ where
                 match result {
                     Ok(Ok(chunks)) => {
                         info!(found = chunks.len(), "world read finished, chunks found");
-                        write_chunk_batch(&mut writer, ids, chunks, &pace, center_x, center_z)
+                        write_chunk_batch(&mut writer, ids, chunks, &pace, center_x, center_z, radius)
                             .await?;
                     }
                     Ok(Err(err)) => warn!(%err, "world read failed, no chunks sent"),
@@ -329,14 +345,32 @@ async fn batch_reply(
 async fn write_chunk_batch<W>(
     writer: &mut W,
     ids: &PacketIds,
-    chunks: Vec<LevelChunkWithLight>,
+    mut chunks: Vec<LevelChunkWithLight>,
     pace: &ChunkPace,
     center_x: i32,
     center_z: i32,
+    radius: i32,
 ) -> Result<(), ConnectionError>
 where
     W: AsyncWrite + Unpin,
 {
+    // The send gate (part A, 6): only chunks of the ready rule (the loader
+    // already refused the rest) *inside* the radius go out. The client
+    // drops a chunk outside its own view square, so sending one wastes a
+    // payload and desynchronises the count of the batch framing.
+    let before = chunks.len();
+    chunks.retain(|chunk| !outside_view(chunk.chunk_x, chunk.chunk_z, center_x, center_z, radius));
+    let outside = before - chunks.len();
+    if outside > 0 {
+        info!(
+            radius,
+            center_x,
+            center_z,
+            outside,
+            inside = chunks.len(),
+            "chunks outside the send radius are not sent"
+        );
+    }
     let per_batch = pace
         .sub_batch_size(chunks.len())
         .unwrap_or_else(|| chunks.len().max(1));
@@ -371,10 +405,10 @@ where
 /// Writes one `chunk_batch_start` … `chunk_batch_finished` pair around
 /// `chunks`, with the finished count equal to what was sent in between.
 ///
-/// Every chunk is logged with its coordinates and payload size, and one
-/// outside the view square around `center` (as the join announced it) is
-/// warned about: the client does not know such a chunk and drops it — the
-/// live check reads exactly this from the log.
+/// Every chunk is logged with its coordinates and payload size; the batch
+/// reaching here was already cut to the send radius by
+/// [`write_chunk_batch`] (part A, 6), so every chunk fits the view square
+/// around `center` the join announced.
 async fn write_sub_batch<W>(
     writer: &mut W,
     ids: &PacketIds,
@@ -396,16 +430,6 @@ where
     let mut chunk_count = 0_i32;
     for chunk in chunks {
         let payload = chunk.encode_payload()?;
-        if outside_view(chunk.chunk_x, chunk.chunk_z, center_x, center_z) {
-            warn!(
-                chunk_x = chunk.chunk_x,
-                chunk_z = chunk.chunk_z,
-                center_x,
-                center_z,
-                view_distance = VIEW_DISTANCE,
-                "chunk outside the cache centre/radius: the client does not know it"
-            );
-        }
         info!(
             chunk_x = chunk.chunk_x,
             chunk_z = chunk.chunk_z,
@@ -433,8 +457,38 @@ where
     Ok(chunk_count)
 }
 
-/// Whether a chunk lies outside the square of view-distance side the client
-/// keeps loaded around `center` (as announced by Set Center Chunk).
-fn outside_view(chunk_x: i32, chunk_z: i32, center_x: i32, center_z: i32) -> bool {
-    (chunk_x - center_x).abs() > VIEW_DISTANCE || (chunk_z - center_z).abs() > VIEW_DISTANCE
+/// Whether a chunk lies outside the square of `radius` around `center`
+/// (the cache centre the join announced in Set Center Chunk).
+fn outside_view(chunk_x: i32, chunk_z: i32, center_x: i32, center_z: i32, radius: i32) -> bool {
+    (chunk_x - center_x).abs() > radius || (chunk_z - center_z).abs() > radius
+}
+
+/// The radius this connection sends chunks in (the owner's rule, part A 6):
+/// the view distance the client asked for in configuration, capped by the
+/// maximum Login (play) announced. A client that asked for nothing — or
+/// for something impossible (a negative or absurdly large value) — gets
+/// the maximum the server announced, never less than nothing and never
+/// more than [`VIEW_DISTANCE`].
+fn send_radius(client_view_distance: Option<i32>) -> i32 {
+    client_view_distance.map_or(VIEW_DISTANCE, |requested| requested.clamp(0, VIEW_DISTANCE))
+}
+
+#[cfg(test)]
+mod send_radius_tests {
+    use super::send_radius;
+
+    #[test]
+    fn the_radius_is_the_client_request_capped_by_the_server_maximum() {
+        assert_eq!(send_radius(Some(8)), 8, "the bot's own request");
+        assert_eq!(send_radius(Some(10)), 10, "the announced maximum");
+        assert_eq!(send_radius(Some(16)), 10, "a larger request is capped");
+        assert_eq!(send_radius(Some(32)), 10, "the client maximum is capped");
+    }
+
+    #[test]
+    fn a_missing_or_impossible_request_falls_back_safely() {
+        assert_eq!(send_radius(None), 10, "no request: the announced maximum");
+        assert_eq!(send_radius(Some(0)), 0, "never below what the client asks");
+        assert_eq!(send_radius(Some(-5)), 0, "an absurd request clamps down");
+    }
 }
