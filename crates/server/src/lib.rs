@@ -160,7 +160,11 @@ pub fn build_world(
         hashed_seed: protocol::hashed_seed(settings.seed),
     };
     let blocks = match config.blocks_report.as_deref() {
-        Some(path) => BlockStates::load(path)?,
+        Some(path) => {
+            let blocks = BlockStates::load(path)?;
+            tracing::info!(path, states = blocks.len(), "blocks report loaded");
+            blocks
+        }
         None => {
             tracing::warn!("no blocks_report: chunk palettes cannot be resolved to state ids");
             BlockStates::default()
