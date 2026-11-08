@@ -49,6 +49,52 @@ pub enum RunError {
     /// The configured world does not have the shape a save has.
     #[error("invalid world_dir: {0}")]
     InvalidWorld(String),
+    /// A chunk-serving path is missing from `server.toml`. The startup
+    /// refuses to run without it — a server that starts silently and then
+    /// sends no chunks leaves vanilla clients waiting for terrain until
+    /// they time out and fall into the void (the live check of step 3.3).
+    #[error("`{setting}` is missing from server.toml: {hint}")]
+    MissingSetting {
+        /// Configuration field that is not set.
+        setting: &'static str,
+        /// What the field must point at.
+        hint: &'static str,
+    },
+}
+
+/// What each required chunk-serving path must point at (see
+/// [`require_chunk_paths`]).
+const WORLD_HINT: &str = "point it at a saved world: the directory with \
+    `level.dat` and `dimensions/minecraft/overworld/region/`; without a world \
+    the server has no chunks to send (see server.example.toml)";
+const REPORT_HINT: &str = "point it at the report of your game copy, generated \
+    by tools\\generate-reports.ps1 (see server.example.toml)";
+
+/// Fails the startup when `server.toml` does not name every path the chunk
+/// sending of the live check needs: the world itself and the three reports
+/// its wire payloads are encoded from.
+///
+/// Checked before anything is loaded so a wrong configuration is one clear
+/// message on stderr, never a server that runs without terrain. The check
+/// only looks at presence — unreadable files are reported by their own
+/// loader with the failing path.
+pub fn require_chunk_paths(config: &ServerConfig) -> Result<(), RunError> {
+    let required = [
+        ("world_dir", WORLD_HINT, &config.world_dir),
+        ("blocks_report", REPORT_HINT, &config.blocks_report),
+        ("registries_report", REPORT_HINT, &config.registries_report),
+        ("packets_report", REPORT_HINT, &config.packets_report),
+    ];
+    for (setting, hint, value) in required {
+        let present = value
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|path| !path.is_empty());
+        if !present {
+            return Err(RunError::MissingSetting { setting, hint });
+        }
+    }
+    Ok(())
 }
 
 /// Loads the packet ids the server will speak.
@@ -76,18 +122,24 @@ fn load_packet_ids(config: &ServerConfig) -> Result<Arc<data::PacketIds>, RunErr
 }
 
 /// Builds the chunk loader pool and the join values (`net::WorldInfo`) of
-/// the configured world, or the empty defaults for no `world_dir` (the M2
-/// behaviour: no chunks, spawn at eight and no seed).
+/// the configured world.
 ///
-/// Everything happens before the port is bound: a world whose `level.dat`
-/// or `world_gen_settings.dat` cannot be read or whose region directory is
-/// missing fails at startup, never as a failed read on someone's join.
-fn build_world(
+/// Every path is demanded by [`require_chunk_paths`] at the top of `run`
+/// first, so `world_dir` is always set here — the `None` branch only stays
+/// as the direct, library-level answer for a caller that skipped that
+/// check (the unit tests and the parity self-session build the world above
+/// the check). Everything happens before the port is bound: a world whose
+/// `level.dat` or `world_gen_settings.dat` cannot be read or whose region
+/// directory is missing fails at startup, never as a failed read on
+/// someone's join.
+pub fn build_world(
     config: &ServerConfig,
     game_data: Arc<GameData>,
 ) -> Result<(Option<net::Loader>, net::WorldInfo), RunError> {
     let Some(dir) = config.world_dir.as_deref().map(str::trim) else {
-        tracing::info!("no world_dir configured: the server sends no chunks");
+        // Only reachable when `run` was bypassed; `run` refuses to start
+        // without a world (require_chunk_paths).
+        tracing::warn!("no world_dir configured: the server sends no chunks");
         return Ok((None, net::WorldInfo::default()));
     };
     let root = Path::new(dir);
@@ -143,8 +195,19 @@ fn build_world(
 /// broken jar fails before the port is bound. Packet ids are resolved the
 /// same way: a broken packets report fails before the port is bound.
 pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> Result<(), RunError> {
+    // One clear message instead of a server that starts and then serves an
+    // empty world: the world template and the three reports come first.
+    require_chunk_paths(&config)?;
     let packet_ids = load_packet_ids(&config)?;
+    // Session recording (`MINECRAFT_SESSION_TRACE`) and the id → name
+    // table every packet log line reads from, live before the first
+    // connection arrives.
+    net::trace::start();
+    net::trace::install_names(net::trace::names_for(&packet_ids));
     let (loader, world) = build_world(&config, Arc::clone(&game_data))?;
+    if let Some(loader) = &loader {
+        warm_world(loader).await;
+    }
     let listener = TcpListener::bind(&config.listen).await?;
     let local = listener.local_addr()?;
     tracing::info!(
@@ -165,6 +228,28 @@ pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> Result<(), R
     )
     .await?;
     Ok(())
+}
+
+/// Reads the world batch once before the port is bound, so the start log
+/// shows how many chunks are ready to be sent (the live check asks for
+/// exactly that number). Not fatal: a world that cannot be read now will
+/// fail the same read with a warning on someone's join.
+async fn warm_world(loader: &net::Loader) {
+    let reply = match loader.load_batch().await {
+        Ok(reply) => reply,
+        Err(error) => {
+            tracing::warn!(%error, "world warm-up could not be queued");
+            return;
+        }
+    };
+    match reply.await {
+        Ok(Ok(chunks)) => tracing::info!(
+            ready_chunks = chunks.len(),
+            "world warm-up finished: chunks ready to send"
+        ),
+        Ok(Err(error)) => tracing::warn!(%error, "world warm-up failed at startup"),
+        Err(error) => tracing::warn!(%error, "the world warm-up reply was dropped"),
+    }
 }
 
 #[cfg(test)]
@@ -319,8 +404,70 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// Without `world_dir` the server stays the M2 one: no pool, the
-    /// default spawn and no hashed seed — the behaviour parity records.
+    /// The startup refuses a config without the chunk paths, naming the
+    /// first missing field — never a server that runs and sends nothing
+    /// (the bug the live check of step 3.3 ran into).
+    #[test]
+    fn a_startup_without_the_chunk_paths_is_refused_by_name() {
+        let mut config = config(None);
+
+        let error = require_chunk_paths(&config).expect_err("world_dir missing");
+        match &error {
+            RunError::MissingSetting { setting, .. } => assert_eq!(*setting, "world_dir"),
+            other => panic!("unexpected error: {other}"),
+        }
+        assert!(error.to_string().contains("server.toml"), "{error}");
+
+        config.world_dir = Some("world".to_owned());
+        let error = require_chunk_paths(&config).expect_err("blocks_report missing");
+        assert!(
+            matches!(
+                &error,
+                RunError::MissingSetting {
+                    setting: "blocks_report",
+                    ..
+                }
+            ),
+            "{error}"
+        );
+
+        config.blocks_report = Some("blocks.json".to_owned());
+        let error = require_chunk_paths(&config).expect_err("registries_report missing");
+        assert!(
+            matches!(
+                &error,
+                RunError::MissingSetting {
+                    setting: "registries_report",
+                    ..
+                }
+            ),
+            "{error}"
+        );
+
+        config.registries_report = Some("registries.json".to_owned());
+        let error = require_chunk_paths(&config).expect_err("packets_report missing");
+        assert!(
+            matches!(
+                &error,
+                RunError::MissingSetting {
+                    setting: "packets_report",
+                    ..
+                }
+            ),
+            "{error}"
+        );
+
+        config.packets_report = Some("packets.json".to_owned());
+        require_chunk_paths(&config).expect("all four chunk paths are set");
+
+        // A blank path is as missing as no path at all.
+        config.world_dir = Some("  ".to_owned());
+        require_chunk_paths(&config).expect_err("blank world_dir");
+    }
+
+    /// The library-level behaviour without `world_dir` (used only below
+    /// `require_chunk_paths`, e.g. by the parity self-session): no pool,
+    /// the default spawn and no hashed seed — the behaviour parity records.
     #[test]
     fn without_a_world_dir_the_empty_world_defaults_are_used() {
         let (loader, info) =

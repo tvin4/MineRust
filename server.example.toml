@@ -15,29 +15,30 @@ max_players = 20
 # Path to the client jar of your game installation.
 client_jar = "path/to/client.jar"
 
-# Optional: reports/packets.json generated from your game copy with
-# `tools\generate-reports.ps1`. When set, every packet id is taken from
-# that report and verified at startup; when omitted the compiled defaults
-# (documented, unverified) are used and the server logs a warning.
+# REQUIRED at startup: reports/packets.json generated from your game copy
+# with `tools\generate-reports.ps1`. Every packet id is taken from that
+# report and verified at startup; the server stops with a clear error when
+# the field is missing (a server without packet ids cannot be compared
+# with the vanilla one).
 # packets_report = "path/to/generated/reports/packets.json"
 
-# Optional: reports/registries.json generated from your game copy with
-# `tools\generate-reports.ps1`. When set, the numeric ids of the built-in
+# REQUIRED at startup: reports/registries.json generated from your game
+# copy with `tools\generate-reports.ps1`. The numeric ids of the built-in
 # registries (block, item, potion, ...) come from that report and their
-# tags are sent during configuration; when omitted only the synchronized
-# registries get tags and the client fails to load registries.
+# tags are sent during configuration.
 # registries_report = "path/to/generated/reports/registries.json"
 
-# Optional: reports/blocks.json generated from your game copy with
-# `tools\generate-reports.ps1`. When set, block state ids come from that
-# report, which is required to encode chunk block palettes; when omitted
-# chunk sections cannot be encoded (M3).
+# REQUIRED at startup: reports/blocks.json generated from your game copy
+# with `tools\generate-reports.ps1`. Block state ids come from that
+# report, which is required to encode chunk block palettes.
 # blocks_report = "path/to/generated/reports/blocks.json"
 
-# Optional: a saved world directory (M3): the folder that contains
-# `level.dat` and `dimensions/minecraft/overworld/region/`. When set, the
-# server sends the ready chunks of that world on join; when omitted, no
-# chunks are sent (the empty-world behaviour of M2).
+# REQUIRED at startup: a saved world directory (M3): the folder that
+# contains `level.dat` and `dimensions/minecraft/overworld/region/`. The
+# server sends the ready chunks of that world on join; without this field
+# the startup fails with an error instead of joining players into an empty
+# void, where a vanilla client waits for terrain, times out after ~30 s and
+# falls through the world.
 # world_dir = "path/to/world-template"
 
 # Optional: vanilla server 26.3 installation used by the ignored parity
