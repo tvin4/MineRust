@@ -34,6 +34,12 @@ client_jar = "path/to/client.jar"
 # chunk sections cannot be encoded (M3).
 # blocks_report = "path/to/generated/reports/blocks.json"
 
+# Optional: a saved world directory (M3): the folder that contains
+# `level.dat` and `dimensions/minecraft/overworld/region/`. When set, the
+# server sends the ready chunks of that world on join; when omitted, no
+# chunks are sent (the empty-world behaviour of M2).
+# world_dir = "path/to/world-template"
+
 # Optional: vanilla server 26.3 installation used by the ignored parity
 # tests (crates/parity): an official server.jar from Mojang's version
 # manifest and the directory it runs in (eula.txt, server.properties,

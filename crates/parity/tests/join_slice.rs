@@ -215,7 +215,7 @@ async fn start_ours(
         env.config.registries_report.as_deref().map(Path::new),
     )
     .expect("game data from the jar");
-    let join = tokio::spawn(net::serve(listener, status, Arc::new(game_data), ids));
+    let join = tokio::spawn(net::serve(listener, status, Arc::new(game_data), ids, None));
     (addr, join.abort_handle())
 }
 

@@ -707,6 +707,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "world",
 ]
 
 [[package]]

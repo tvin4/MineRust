@@ -33,6 +33,24 @@ pub enum WorldError {
         /// The observed compression byte.
         kind: u8,
     },
+    /// A world document (`level.dat`) could not be opened or read.
+    #[error("world file {path} cannot be read: {source}")]
+    WorldFile {
+        /// Path of the world file that failed to read.
+        path: String,
+        /// Underlying I/O error (including a broken gzip container).
+        #[source]
+        source: std::io::Error,
+    },
+    /// A world document (`level.dat`) holds something the reader does not
+    /// recognise (wrong container, missing or malformed field).
+    #[error("world document {path} is malformed: {detail}")]
+    WorldDocument {
+        /// Path of the failing world document.
+        path: String,
+        /// What exactly did not parse.
+        detail: String,
+    },
     /// A stored chunk does not carry a field the model needs.
     #[error("chunk ({x}, {z}) has no usable field {field}")]
     MissingField {

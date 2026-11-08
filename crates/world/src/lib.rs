@@ -15,6 +15,7 @@
 
 mod chunk;
 mod error;
+mod level;
 mod nbt;
 mod region;
 mod send;
@@ -28,6 +29,7 @@ mod wire_fixture;
 
 pub use chunk::{Chunk, ChunkNotReady, Section};
 pub use error::WorldError;
+pub use level::{read_level_dat, LevelDat};
 pub use region::{load_region, region_coords, ChunkPos, StoredChunk};
 pub use send::{load_sendable_chunk, ChunkUnavailable};
 pub use wire::{WireError, WireRefs};

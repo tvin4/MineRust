@@ -56,6 +56,7 @@ pub async fn start_server_with_ids(
         Arc::new(test_status()),
         game_data,
         packet_ids,
+        None,
     ));
     addr
 }

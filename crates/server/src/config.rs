@@ -83,6 +83,16 @@ pub struct ServerConfig {
     /// `tools/generate-reports.ps1`.
     #[serde(default)]
     pub blocks_report: Option<String>,
+    /// Optional path to a saved world directory (step 3.3, M3).
+    ///
+    /// The directory is a world save: it holds `level.dat` (whose
+    /// `Data.DataVersion` is the schema every sent chunk must match) and
+    /// `dimensions/minecraft/overworld/region/` with the region files of
+    /// the overworld. When set, the server sends the ready chunks of that
+    /// world on join; when omitted, no chunks are sent and the join state
+    /// is the empty world of M2.
+    #[serde(default)]
+    pub world_dir: Option<String>,
     /// Optional path to the official vanilla `server.jar` (M3 parity tests).
     ///
     /// Used only by the ignored parity tests of the `parity` crate, never by
@@ -137,6 +147,13 @@ impl ServerConfig {
             .is_some_and(|path| path.trim().is_empty())
         {
             return Err(ConfigError::Invalid("blocks_report is empty".to_owned()));
+        }
+        if self
+            .world_dir
+            .as_deref()
+            .is_some_and(|path| path.trim().is_empty())
+        {
+            return Err(ConfigError::Invalid("world_dir is empty".to_owned()));
         }
         if self
             .vanilla_server_jar
@@ -283,6 +300,25 @@ client_jar = "client.jar"
 "#;
         let config: ServerConfig = toml::from_str(&text).expect("valid toml");
         assert!(matches!(config.validate(), Err(ConfigError::Invalid(_))));
+    }
+
+    #[test]
+    fn world_dir_is_optional_and_validated() {
+        let config: ServerConfig = toml::from_str(&example_toml()).expect("valid toml");
+        assert_eq!(config.world_dir, None, "no world means no chunks");
+        config.validate().expect("valid");
+
+        let text = example_toml() + "world_dir = \"C:/data/world-template\"\n";
+        let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+        assert_eq!(config.world_dir.as_deref(), Some("C:/data/world-template"));
+        config.validate().expect("valid");
+
+        let empty = example_toml() + "world_dir = \" \"\n";
+        let config: ServerConfig = toml::from_str(&empty).expect("valid toml");
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::Invalid(_)) if config.world_dir.is_some()
+        ));
     }
 
     #[test]

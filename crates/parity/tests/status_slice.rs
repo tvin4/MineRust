@@ -101,6 +101,7 @@ async fn start_ours(
         status,
         Arc::new(data::GameData::default()),
         ids,
+        None,
     ));
     (addr, join.abort_handle())
 }

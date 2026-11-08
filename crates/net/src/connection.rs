@@ -6,21 +6,24 @@ use std::time::Duration;
 
 use data::{GameData, PacketIds};
 use protocol::{
-    decode_frame, offline_uuid, ClientInformation, ConfirmTeleportation, FinishAck,
-    FinishConfiguration, GameEvent, GameProfile, Handshake, KeepAlive, LoginAcknowledged,
-    LoginPlay, LoginStart, LoginSuccess, NextState, PingRequest, PlayerInfoEntry, PlayerInfoUpdate,
-    PongResponse, Position, RegistryData, RegistryEntry, SetCenterChunk, SetDefaultSpawnPosition,
-    StatusInfo, StatusRequest, StatusResponse, SynchronizePlayerPosition, UpdateTags,
+    decode_frame, offline_uuid, ChunkBatchFinished, ChunkBatchStart, ClientInformation,
+    ConfirmTeleportation, FinishAck, FinishConfiguration, GameEvent, GameProfile, Handshake,
+    KeepAlive, LevelChunkWithLight, LoginAcknowledged, LoginPlay, LoginStart, LoginSuccess,
+    NextState, PingRequest, PlayerInfoEntry, PlayerInfoUpdate, PongResponse, Position,
+    RegistryData, RegistryEntry, SetCenterChunk, SetDefaultSpawnPosition, StatusInfo,
+    StatusRequest, StatusResponse, SynchronizePlayerPosition, UpdateTags,
     CONFIGURATION_PLUGIN_MESSAGE, MAX_STRING_CHARS, MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT,
     MOVE_PLAYER_ROT, MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
 };
 use tokio::io::{AsyncRead, AsyncWrite, BufReader};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::oneshot;
 use tokio::time::Instant;
 use tracing::{debug, info, trace, warn};
 
 use crate::error::ConnectionError;
 use crate::frame::{read_frame, write_frame};
+use crate::loader::{LoadError, Loader};
 
 /// Maximum time a connection may spend before reaching the play state
 /// (handshake, status, login and configuration). Once in play there is no
@@ -74,19 +77,23 @@ const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(30);
 ///
 /// The status document, the loaded game data and the packet ids are shared
 /// as immutable `Arc`s; there is no mutable shared state on this path.
+/// `loader` is the chunk loader pool: `None` for a server without a world
+/// (no chunks are sent, the join sequence is unchanged).
 pub async fn serve(
     listener: TcpListener,
     status: Arc<StatusInfo>,
     game_data: Arc<GameData>,
     packet_ids: Arc<PacketIds>,
+    loader: Option<Loader>,
 ) -> std::io::Result<()> {
     loop {
         let (stream, peer) = listener.accept().await?;
         let status = Arc::clone(&status);
         let game_data = Arc::clone(&game_data);
         let packet_ids = Arc::clone(&packet_ids);
+        let loader = loader.clone();
         tokio::spawn(async move {
-            match handle_connection(stream, status, game_data, packet_ids).await {
+            match handle_connection(stream, status, game_data, packet_ids, loader).await {
                 Ok(()) => debug!(%peer, "connection closed"),
                 Err(ConnectionError::TimedOut) => debug!(%peer, "connection timed out"),
                 Err(err) if err.is_client_disconnect() => {
@@ -118,6 +125,7 @@ async fn handle_connection(
     status: Arc<StatusInfo>,
     game_data: Arc<GameData>,
     packet_ids: Arc<PacketIds>,
+    loader: Option<Loader>,
 ) -> Result<(), ConnectionError> {
     let ids = packet_ids.as_ref();
     let (read_half, write_half) = stream.into_split();
@@ -148,7 +156,16 @@ async fn handle_connection(
         NextState::Login => {
             let player_name =
                 with_timeout(login_state(&mut reader, &mut writer, &game_data, ids)).await?;
-            play_state(reader, writer, &game_data, &status, &player_name, ids).await
+            play_state(
+                reader,
+                writer,
+                &game_data,
+                &status,
+                &player_name,
+                ids,
+                loader,
+            )
+            .await
         }
         // Transfer is a separate protocol flow not needed by M2.
         NextState::Transfer => {
@@ -361,6 +378,11 @@ where
 /// plugin messages, movement) are logged and ignored.
 ///
 /// Unlike the states before it, play runs without a global timeout.
+///
+/// Chunks (step 3.3c) are read by the loader pool, never here: this task
+/// queues one batch read over the pool's bounded channel and awaits the
+/// reply inside the `select!` loop below, so the keep-alive branch keeps
+/// firing while disk reads and payload builds happen on blocking threads.
 // SOURCE: wiki, unverified: the join order and field values are documented,
 // never compared with a vanilla server (see docs/SOURCES.md).
 async fn play_state<R, W>(
@@ -370,6 +392,7 @@ async fn play_state<R, W>(
     status: &StatusInfo,
     player_name: &str,
     ids: &PacketIds,
+    loader: Option<Loader>,
 ) -> Result<(), ConnectionError>
 where
     R: AsyncRead + Unpin + Send + 'static,
@@ -504,6 +527,19 @@ where
     .await?;
     info!(player = %player_name, entity_id = ENTITY_ID, "player joined");
 
+    // Queue the world read right away: from here on the pool owns disk I/O
+    // and payload building, this task only selects on the reply channel.
+    let mut loading = match &loader {
+        Some(loader) => match loader.load_batch().await {
+            Ok(pending) => Some(pending),
+            Err(err) => {
+                warn!(%err, "chunk loader unavailable, no chunks will be sent");
+                None
+            }
+        },
+        None => None,
+    };
+
     // Frames are read on a background task: reading must survive the
     // select-loop branches below (a cancelled frame read would drop bytes
     // it already consumed and desynchronise the stream), while the keep
@@ -541,6 +577,16 @@ where
                 let packet = KeepAlive { id: keep_alive_millis() };
                 write_frame(&mut writer, ids.id(KeepAlive::KEY), &packet.encode_payload()).await?;
                 watch.on_sent(Instant::now());
+            }
+            // The world read finished: the batch goes out here, in its own
+            // branch, so nothing else of the loop waited for the disk.
+            result = batch_reply(&mut loading), if loading.is_some() => {
+                loading = None;
+                match result {
+                    Ok(Ok(chunks)) => write_chunk_batch(&mut writer, ids, chunks).await?,
+                    Ok(Err(err)) => warn!(%err, "world read failed, no chunks sent"),
+                    Err(err) => warn!(%err, "chunk loader dropped the reply"),
+                }
             }
             frame = frame_rx.recv() => {
                 let body = match frame {
@@ -603,6 +649,58 @@ where
             }
         }
     }
+}
+
+/// Waits for the loader's reply on its one-shot channel.
+///
+/// While nothing is queued the receiver is `None` and this future never
+/// resolves — the `select!` arm is guarded by the same option, this only
+/// keeps the branch non-empty (the same shape as [`wait_for_deadline`]).
+async fn batch_reply(
+    loading: &mut Option<oneshot::Receiver<Result<Vec<LevelChunkWithLight>, LoadError>>>,
+) -> Result<Result<Vec<LevelChunkWithLight>, LoadError>, oneshot::error::RecvError> {
+    match loading {
+        Some(pending) => pending.await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Sends one chunk burst as the recording frames it: `chunk_batch_start`,
+/// one `level_chunk_with_light` per payload, `chunk_batch_finished` with
+/// the number of chunks in between.
+///
+/// SOURCE: parity trace of vanilla 26.3 — one start marker, nine payloads
+/// and a finished marker whose VarInt equals the payload count (walked by
+/// the parity test `blob_walk`; the recorded order of the burst itself).
+async fn write_chunk_batch<W>(
+    writer: &mut W,
+    ids: &PacketIds,
+    chunks: Vec<LevelChunkWithLight>,
+) -> Result<(), ConnectionError>
+where
+    W: AsyncWrite + Unpin,
+{
+    write_frame(
+        writer,
+        ids.id(ChunkBatchStart::KEY),
+        &ChunkBatchStart.encode_payload(),
+    )
+    .await?;
+    let mut chunk_count = 0_i32;
+    for chunk in chunks {
+        let payload = chunk.encode_payload()?;
+        write_frame(writer, ids.id(LevelChunkWithLight::KEY), &payload).await?;
+        chunk_count += 1;
+    }
+    let finished = ChunkBatchFinished { chunk_count };
+    write_frame(
+        writer,
+        ids.id(ChunkBatchFinished::KEY),
+        &finished.encode_payload(),
+    )
+    .await?;
+    debug!(chunk_count, "chunk batch sent");
+    Ok(())
 }
 
 /// Tracks the keep-alive outstanding on one connection: the timestamp it
@@ -728,5 +826,155 @@ mod tests {
         let second = keep_alive_millis();
         assert!(first >= 0, "milliseconds since server start");
         assert!(second >= first, "a monotonic clock never goes back");
+    }
+
+    /// World source whose read parks at a barrier: the pool worker sits in
+    /// the "disk read" until the test releases it.
+    struct GatedSource {
+        /// Two parties: the loading pool worker and the releasing test.
+        release: Arc<std::sync::Barrier>,
+    }
+
+    impl crate::loader::ChunkSource for GatedSource {
+        fn load_batch(&self) -> Result<Vec<LevelChunkWithLight>, LoadError> {
+            // This is the whole point of the pool: the slow world read
+            // parks on a blocking worker thread, not on the connection.
+            self.release.wait();
+            Ok(vec![one_payload()])
+        }
+    }
+
+    /// One tiny well-formed chunk payload for the fixture source.
+    fn one_payload() -> LevelChunkWithLight {
+        LevelChunkWithLight {
+            chunk_x: 6,
+            chunk_z: -2,
+            heightmaps: vec![protocol::HeightmapRecord {
+                id: 4,
+                words: vec![0],
+            }],
+            sections: vec![protocol::ChunkSection {
+                non_air: 0,
+                fluid: 0,
+                blocks: protocol::PaletteContainer::Single(0),
+                biomes: protocol::PaletteContainer::Single(1),
+            }],
+            block_entities: Vec::new(),
+            light: protocol::LightData {
+                sky_mask: vec![0x00],
+                block_mask: vec![0x00],
+                empty_sky_mask: vec![0x01],
+                empty_block_mask: vec![0x01],
+                sky_arrays: Vec::new(),
+                block_arrays: Vec::new(),
+            },
+        }
+    }
+
+    /// Reads the next frame from the client side and splits id and payload.
+    async fn next_packet<R>(reader: &mut R) -> (u32, Vec<u8>)
+    where
+        R: AsyncRead + Unpin,
+    {
+        let body = read_frame(reader).await.expect("frame from the server");
+        let mut split = protocol::PacketReader::new(&body);
+        let id = split.read_varint().expect("decodable id") as u32;
+        let payload = split.read_bytes(split.remaining()).expect("payload");
+        (id, payload.to_vec())
+    }
+
+    /// The property of step 3.3c: while the loader pool is stuck inside the
+    /// world read, the play loop still sends the keep-alive on its tick —
+    /// and the chunk batch follows only once the read is released.
+    ///
+    /// Time is paused: without a released read the only thing that can fire
+    /// is the keep-alive interval, which is exactly what is being asserted.
+    #[tokio::test]
+    async fn reading_the_world_never_defers_the_keep_alive() {
+        tokio::time::pause();
+        let ids = Arc::new(PacketIds::compiled());
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let loader = Loader::spawn(Arc::new(GatedSource {
+            release: Arc::clone(&release),
+        }))
+        .expect("pool threads");
+
+        let (client, server) = tokio::io::duplex(1 << 20);
+        let (server_read, server_write) = tokio::io::split(server);
+        let ids_in_task = Arc::clone(&ids);
+        let joined = tokio::spawn(async move {
+            let game_data = GameData::default();
+            let status = StatusInfo {
+                version_name: "test".to_owned(),
+                protocol_version: 1,
+                max_players: 1,
+                online_players: 0,
+                motd: "test".to_owned(),
+            };
+            play_state(
+                server_read,
+                server_write,
+                &game_data,
+                &status,
+                "Steve",
+                &ids_in_task,
+                Some(loader),
+            )
+            .await
+        });
+
+        let mut client = BufReader::new(client);
+        // The join sequence arrives first, unchanged by the chunk path.
+        let join = [
+            LoginPlay::KEY,
+            SetDefaultSpawnPosition::KEY,
+            PlayerInfoUpdate::KEY,
+            SetCenterChunk::KEY,
+            GameEvent::KEY,
+            SynchronizePlayerPosition::KEY,
+        ];
+        for (index, key) in join.iter().enumerate() {
+            eprintln!("stage: waiting for join packet {index}");
+            let (id, _) = next_packet(&mut client).await;
+            assert_eq!(id, ids.id(*key), "join sequence packet");
+        }
+        eprintln!("stage: join sequence done");
+
+        // The world read is still parked at the barrier: the next packet on
+        // the wire has to be the keep-alive of the loop (its tick at 15 s
+        // under paused time; the timeout below is later and never wins).
+        eprintln!("stage: waiting for keep alive");
+        let (id, _) = tokio::time::timeout(Duration::from_secs(20), next_packet(&mut client))
+            .await
+            .expect("the keep-alive must not wait for the world read");
+        assert_eq!(id, ids.id(KeepAlive::KEY), "keep alive was deferred");
+
+        // Release the read: now the batch may go out, in the recorded
+        // framing — start marker, the payload, finished with its count.
+        eprintln!("stage: releasing the world read");
+        release.wait();
+        let (id, _) = next_packet(&mut client).await;
+        assert_eq!(id, ids.id(ChunkBatchStart::KEY), "batch start");
+        let (id, _) = next_packet(&mut client).await;
+        assert_eq!(id, ids.id(LevelChunkWithLight::KEY), "the chunk");
+        let (id, payload) = next_packet(&mut client).await;
+        assert_eq!(id, ids.id(ChunkBatchFinished::KEY), "batch finished");
+        let finished =
+            ChunkBatchFinished::decode_payload(&mut protocol::PacketReader::new(&payload))
+                .expect("decodable");
+        assert_eq!(finished.chunk_count, 1, "one chunk in the batch");
+
+        // The client goes away: play ends at once, either cleanly or with the
+        // classified disconnect (the dropped duplex reads as EOF).
+        drop(client);
+        let result = tokio::time::timeout(Duration::from_secs(5), joined)
+            .await
+            .expect("play state must finish")
+            .expect("play task must not panic");
+        match result {
+            Ok(()) => {}
+            Err(err) if err.is_client_disconnect() => {}
+            other => panic!("play ended with {other:?}"),
+        }
     }
 }

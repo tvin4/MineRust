@@ -12,29 +12,32 @@ use crate::error::WorldError;
 /// empty compound is not expected as a root (the root of a world document
 /// is always a compound, observed in the owner's template).
 pub(crate) fn disk_nbt(path: &str, bytes: &[u8]) -> Result<NbtTag, WorldError> {
-    let corrupt = |detail: String| WorldError::Corrupt {
+    decode_disk(bytes).map_err(|detail| WorldError::Corrupt {
         path: path.to_owned(),
         detail,
-    };
+    })
+}
+
+/// The shared disk decoder, failing with the detail alone so a caller
+/// (`level.dat` reader) can wrap it into its own error shape.
+pub(crate) fn decode_disk(bytes: &[u8]) -> Result<NbtTag, String> {
     let type_id = *bytes
         .first()
-        .ok_or_else(|| corrupt("empty NBT document".into()))?;
+        .ok_or_else(|| "empty NBT document".to_owned())?;
     if type_id != 10 {
-        return Err(corrupt(format!(
-            "root tag type {type_id} is not a compound"
-        )));
+        return Err(format!("root tag type {type_id} is not a compound"));
     }
     let name_len = bytes
         .get(1..3)
         .map(|len| u16::from_be_bytes([len[0], len[1]]) as usize)
-        .ok_or_else(|| corrupt("truncated root name length".into()))?;
+        .ok_or_else(|| "truncated root name length".to_owned())?;
     let payload = bytes
         .get(3 + name_len..)
-        .ok_or_else(|| corrupt("truncated root name".into()))?;
+        .ok_or_else(|| "truncated root name".to_owned())?;
     let mut network = Vec::with_capacity(payload.len() + 1);
     network.push(type_id);
     network.extend_from_slice(payload);
-    let (tag, _) = NbtTag::decode_network(&network).map_err(|error| corrupt(error.to_string()))?;
+    let (tag, _) = NbtTag::decode_network(&network).map_err(|error| error.to_string())?;
     Ok(tag)
 }
 

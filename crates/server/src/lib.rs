@@ -5,14 +5,18 @@
 //! an ephemeral port without spawning a subprocess.
 
 mod config;
+mod template;
 
 pub use config::{load_config, ConfigError, ServerConfig};
 
+use std::path::Path;
 use std::sync::Arc;
 
-use data::GameData;
+use data::{BlockStates, GameData};
 use protocol::StatusInfo;
 use tokio::net::TcpListener;
+
+use template::{TemplateWorld, WireTables};
 
 /// Builds the status document advertised to the multiplayer server list.
 ///
@@ -37,6 +41,12 @@ pub enum RunError {
     /// Game data (jar, reports) could not be read or did not verify.
     #[error(transparent)]
     Data(#[from] data::DataError),
+    /// The world template (`level.dat`, region layout) could not be read.
+    #[error(transparent)]
+    World(#[from] world::WorldError),
+    /// The configured world does not have the shape a save has.
+    #[error("invalid world_dir: {0}")]
+    InvalidWorld(String),
 }
 
 /// Loads the packet ids the server will speak.
@@ -63,6 +73,49 @@ fn load_packet_ids(config: &ServerConfig) -> Result<Arc<data::PacketIds>, RunErr
     Ok(Arc::new(ids))
 }
 
+/// Builds the chunk loader pool of the configured world, or `None` for the
+/// empty world (no `world_dir` — the M2 behaviour).
+///
+/// Everything happens before the port is bound: a world whose `level.dat`
+/// cannot be read or whose region directory is missing fails at startup,
+/// never as a failed read on someone's join.
+fn build_loader(
+    config: &ServerConfig,
+    game_data: Arc<GameData>,
+) -> Result<Option<net::Loader>, RunError> {
+    let Some(dir) = config.world_dir.as_deref().map(str::trim) else {
+        tracing::info!("no world_dir configured: the server sends no chunks");
+        return Ok(None);
+    };
+    let root = Path::new(dir);
+    let level = world::read_level_dat(root.join("level.dat"))?;
+    let region_dir = root.join("dimensions/minecraft/overworld/region");
+    if !region_dir.is_dir() {
+        return Err(RunError::InvalidWorld(format!(
+            "{} is missing the dimension directory",
+            root.display()
+        )));
+    }
+    let blocks = match config.blocks_report.as_deref() {
+        Some(path) => BlockStates::load(path)?,
+        None => {
+            tracing::warn!("no blocks_report: chunk palettes cannot be resolved to state ids");
+            BlockStates::default()
+        }
+    };
+    let registries = match config.registries_report.as_deref() {
+        Some(path) => data::load_registries_report(path)?,
+        None => {
+            tracing::warn!("no registries_report: block entity type ids cannot be resolved");
+            data::RegistryIds::default()
+        }
+    };
+    let tables = Arc::new(WireTables::new(blocks, registries, game_data));
+    let world = TemplateWorld::new(region_dir, level.data_version, tables);
+    tracing::info!(data_version = level.data_version, %dir, "world seed configured");
+    Ok(Some(net::Loader::spawn(Arc::new(world))?))
+}
+
 /// Binds the configured address and serves connections until an I/O error.
 ///
 /// `game_data` holds the registries and tags loaded from the client jar
@@ -71,6 +124,7 @@ fn load_packet_ids(config: &ServerConfig) -> Result<Arc<data::PacketIds>, RunErr
 /// same way: a broken packets report fails before the port is bound.
 pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> Result<(), RunError> {
     let packet_ids = load_packet_ids(&config)?;
+    let loader = build_loader(&config, Arc::clone(&game_data))?;
     let listener = TcpListener::bind(&config.listen).await?;
     let local = listener.local_addr()?;
     tracing::info!(
@@ -86,6 +140,7 @@ pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> Result<(), R
         Arc::new(status_info(&config)),
         game_data,
         packet_ids,
+        loader,
     )
     .await?;
     Ok(())
@@ -108,6 +163,7 @@ mod tests {
             packets_report: report,
             registries_report: None,
             blocks_report: None,
+            world_dir: None,
             vanilla_server_jar: None,
             vanilla_server_dir: None,
         }
