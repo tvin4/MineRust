@@ -338,6 +338,8 @@ async fn batch_reply(
 /// sub-batches of that size, each framed identically and sent one game
 /// tick apart; without one the burst goes out in a single piece, as the
 /// recording shows it. An empty read keeps its empty start/finished pair.
+/// Inside one burst the order is from the player's chunk outwards
+/// ([`sort_by_distance`]).
 ///
 /// SOURCE: parity trace of vanilla 26.3 — one start marker, nine payloads
 /// and a finished marker whose VarInt equals the payload count (walked by
@@ -360,6 +362,8 @@ where
     // payload and desynchronises the count of the batch framing.
     let before = chunks.len();
     chunks.retain(|chunk| !outside_view(chunk.chunk_x, chunk.chunk_z, center_x, center_z, radius));
+    // Send order (part A 2): the player's chunk first, then outwards.
+    sort_by_distance(&mut chunks, center_x, center_z);
     let outside = before - chunks.len();
     if outside > 0 {
         info!(
@@ -461,6 +465,39 @@ where
 /// (the cache centre the join announced in Set Center Chunk).
 fn outside_view(chunk_x: i32, chunk_z: i32, center_x: i32, center_z: i32, radius: i32) -> bool {
     (chunk_x - center_x).abs() > radius || (chunk_z - center_z).abs() > radius
+}
+
+/// Puts a burst in the order the client must receive it: the player's own
+/// chunk first and then by growing squared chunk distance, ties broken by
+/// `(chunk_x, chunk_z)` so one world of ready chunks always sends the same
+/// sequence.
+///
+/// SOURCE: our vanilla 26.3 traces on template v2. In
+/// `target/parity/chunk-batch-vanilla.json` every one of the 11 flushes of
+/// the 72 recorded chunks has a *non-decreasing* squared distance from the
+/// join centre (6, -2), and the first flush is exactly the 3x3 square
+/// around it (9 chunks, centre first, then the four orthogonal neighbours,
+/// then the four corners). `target/parity/join-vanilla.v2runB.json` carries
+/// the same nine chunks in the same byte order. The whole trace shows
+/// five distance regressions, all of them on a flush boundary: a flush
+/// sorts the chunks it already has while the rest are still loading — so
+/// what one burst can copy is the distance order inside a flush, not a
+/// global order across flushes. Vanilla's order *within* one distance (its
+/// first four neighbours go N, E, W, S) is stable across runs but its key
+/// is never visible on the wire, and the traces do not cover a tie deeper
+/// than the 3x3 — hence the coordinate tie-break above, which reproduces
+/// the observed grouping (centre, four neighbours, four corners) with a
+/// rule of our own.
+fn sort_by_distance(chunks: &mut [LevelChunkWithLight], center_x: i32, center_z: i32) {
+    chunks.sort_unstable_by_key(|chunk| {
+        let delta_x = i64::from(chunk.chunk_x - center_x);
+        let delta_z = i64::from(chunk.chunk_z - center_z);
+        (
+            delta_x * delta_x + delta_z * delta_z,
+            chunk.chunk_x,
+            chunk.chunk_z,
+        )
+    });
 }
 
 /// The radius this connection sends chunks in (the owner's rule, part A 6):

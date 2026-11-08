@@ -308,6 +308,67 @@ async fn chunks_outside_the_send_radius_are_not_sent() {
         .expect("written without error");
 }
 
+/// Part A, 2: the burst opens with the join centre and then every chunk
+/// by non-decreasing squared distance — the order vanilla's flushes show
+/// (its first flush is the 3x3 square around (6, -2)).
+///
+/// The fixture is the whole 17x17 square `self_session` records, handed
+/// over in the row order it arrived in until part A 2: rows from the
+/// corner (-2, -10), the same far corner the recording started with.
+#[test]
+fn the_burst_goes_out_from_the_centre_to_the_far_corners() {
+    let mut chunks: Vec<_> = (-10..=6)
+        .flat_map(|chunk_z| (-2..=14).map(move |chunk_x| (chunk_x, chunk_z)))
+        .map(|(chunk_x, chunk_z)| LevelChunkWithLight {
+            chunk_x,
+            chunk_z,
+            ..one_payload()
+        })
+        .collect();
+
+    sort_by_distance(&mut chunks, 6, -2);
+
+    let order: Vec<(i32, i32)> = chunks
+        .iter()
+        .map(|chunk| (chunk.chunk_x, chunk.chunk_z))
+        .collect();
+    let squared = |(x, z): (i32, i32)| (x - 6).pow(2) + (z + 2).pow(2);
+    assert_eq!(order.first().copied(), Some((6, -2)), "centre first");
+    assert!(
+        order
+            .windows(2)
+            .all(|pair| squared(pair[0]) <= squared(pair[1])),
+        "the distance from the centre never falls: {order:?}"
+    );
+    assert!(
+        order
+            .windows(2)
+            .all(|pair| squared(pair[0]) != squared(pair[1]) || pair[0] < pair[1]),
+        "a distance tie is ordered by coordinates: {order:?}"
+    );
+    // The nine chunks vanilla opens with are exactly this square: the
+    // centre, the four orthogonal neighbours and the four corners of 3x3.
+    let mut first_nine = order[..9].to_vec();
+    let mut vanilla = [
+        (6, -2),
+        (6, -1),
+        (7, -2),
+        (5, -2),
+        (6, -3),
+        (7, -1),
+        (5, -1),
+        (5, -3),
+        (7, -3),
+    ];
+    first_nine.sort_unstable();
+    vanilla.sort_unstable();
+    assert_eq!(
+        first_nine, vanilla,
+        "the opening square of the vanilla flush"
+    );
+    assert_eq!(order.last().copied(), Some((14, 6)), "the far corner last");
+}
+
 /// Step 3.3d in the loop: the connection decodes the client's pace
 /// answer and stays open without answering it (a composition the loop
 /// cannot read would end the connection right here, and the next read
