@@ -55,9 +55,11 @@ const OFF_VALUES: [&str; 4] = ["0", "off", "false", "no"];
 const ON_VALUES: [&str; 3] = ["1", "true", "on"];
 
 /// Payloads up to this many bytes are stored as hex; larger ones only get
-/// their size (a chunk can be tens of kilobytes — the frame still proves
-/// what went out, the coordinates are in its first eight bytes and logged).
-const MAX_PAYLOAD: usize = 64 * 1024;
+/// their size. The cap sits well above the biggest packet observed on the
+/// wire (`level_chunk_with_light` of ~82 KB): a whole chunk payload then
+/// lands in the file, and so do its first eight bytes — the chunk
+/// coordinates the parity report reads out of it.
+const MAX_PAYLOAD: usize = 1024 * 1024;
 
 /// Reverse id → resource location, from the packets report when one is
 /// loaded. Never fatal: an unnamed packet keeps its numeric id.
