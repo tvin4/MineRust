@@ -8,6 +8,10 @@ mod config;
 mod template;
 
 pub use config::{load_config, ConfigError, ServerConfig};
+/// The saved-world reader and its id tables, exported for the parity crate:
+/// the chunk slice (step 3.3f) builds the very payloads this server would
+/// send and diffs them against the recorded vanilla ones.
+pub use template::{TemplateWorld, WireTables};
 
 use std::path::Path;
 use std::sync::Arc;
@@ -15,8 +19,6 @@ use std::sync::Arc;
 use data::{BlockStates, GameData};
 use protocol::StatusInfo;
 use tokio::net::TcpListener;
-
-use template::{TemplateWorld, WireTables};
 
 /// Builds the status document advertised to the multiplayer server list.
 ///
