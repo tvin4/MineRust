@@ -60,6 +60,13 @@ impl RegistryIds {
         self.registries.keys().map(String::as_str)
     }
 
+    /// Numeric protocol id of one entry of one static registry
+    /// (`minecraft:block_entity_type` → `minecraft:mob_spawner`), if the
+    /// report describes both.
+    pub fn entry_id(&self, registry_id: &str, entry: &str) -> Option<i32> {
+        self.get(registry_id)?.get(entry).copied()
+    }
+
     /// Entry ids of one registry (`minecraft:block`), if the report
     /// describes it.
     pub(crate) fn get(&self, registry_id: &str) -> Option<&BTreeMap<String, i32>> {

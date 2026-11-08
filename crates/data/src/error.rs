@@ -115,10 +115,27 @@ pub enum DataError {
         source: io::Error,
     },
 
+    /// The blocks report file cannot be read.
+    #[error("cannot read blocks report {path}: {source}")]
+    BlocksReportRead {
+        /// Path of the report file.
+        path: String,
+        /// Underlying I/O error.
+        source: io::Error,
+    },
+
     /// The registries report describes no registries: it is not a
     /// `reports/registries.json` of this game version.
     #[error("registries report {path} contains no registries")]
     EmptyReport {
+        /// Path of the report file.
+        path: String,
+    },
+
+    /// The blocks report describes no blocks: it is not a
+    /// `reports/blocks.json` of this game version.
+    #[error("blocks report {path} contains no blocks")]
+    EmptyBlocksReport {
         /// Path of the report file.
         path: String,
     },

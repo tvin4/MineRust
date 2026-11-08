@@ -20,7 +20,8 @@ mod status;
 
 pub use chunk::{ChunkBatchFinished, ChunkBatchStart, LevelChunkWithLight};
 pub use chunk_payload::{
-    set_bits, BlockEntity, ChunkSection, HeightmapRecord, LightData, PaletteContainer,
+    set_bits, BlockEntity, ChunkSection, HeightmapRecord, LightData, PaletteContainer, BIOME_CELLS,
+    BLOCK_CELLS, LIGHT_ARRAY_BYTES,
 };
 pub use configuration::{
     ClientInformation, FinishAck, FinishConfiguration, RegistryData, RegistryEntry, RegistryTag,

@@ -128,6 +128,19 @@ impl NbtTag {
         self.encode_payload(out)
     }
 
+    /// Appends this value as one entry of a compound: type byte, then the
+    /// length-prefixed name, then the payload.
+    ///
+    /// A [`NbtTag::Compound`] writes its own entries in sorted order; this
+    /// entry-wise writer lets a caller hold a different order — the recorded
+    /// wire order of some vanilla records (a mob spawner) is not
+    /// alphabetical, and chunk parity compares those bytes.
+    pub fn encode_entry(&self, name: &str, out: &mut Vec<u8>) -> Result<(), NbtError> {
+        out.push(self.type_id());
+        write_mutf8(name, out)?;
+        self.encode_payload(out)
+    }
+
     /// Convenience wrapper around [`Self::encode_network`].
     pub fn to_network_bytes(&self) -> Result<Vec<u8>, NbtError> {
         let mut out = Vec::new();
@@ -312,6 +325,29 @@ mod tests {
                 b'n', b'r', b'a', b'm', b'a', 0x00,
             ]
         );
+    }
+
+    #[test]
+    fn entry_wise_writing_keeps_the_callers_order() {
+        let first = NbtTag::Int(1);
+        let second = NbtTag::String("x".to_owned());
+        // Record the entries in reverse of the sorted compound order.
+        let mut ordered = vec![0x0A];
+        second.encode_entry("z", &mut ordered).expect("encodable");
+        first.encode_entry("a", &mut ordered).expect("encodable");
+        ordered.push(0x00);
+        let mut sorted = vec![0x0A];
+        first.encode_entry("a", &mut sorted).expect("encodable");
+        second.encode_entry("z", &mut sorted).expect("encodable");
+        sorted.push(0x00);
+        assert_ne!(ordered, sorted, "entry order is the caller's to choose");
+        // One entry equals what the compound encoder writes for one child.
+        let compound = compound_of(vec![("a", first.clone())]);
+        let single = compound.to_network_bytes().expect("encodable");
+        let mut entry = vec![0x0A];
+        first.encode_entry("a", &mut entry).expect("encodable");
+        entry.push(0x00);
+        assert_eq!(entry, single);
     }
 
     #[test]

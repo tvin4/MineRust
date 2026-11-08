@@ -35,9 +35,10 @@ pub use packets::{
     LoginStart, LoginSuccess, NextState, PaletteContainer, PingRequest, PlayerInfoEntry,
     PlayerInfoUpdate, PongResponse, ProfileProperty, RegistryData, RegistryEntry, RegistryTag,
     SetCenterChunk, SetCompression, SetDefaultSpawnPosition, StatusRequest, StatusResponse,
-    SynchronizePlayerPosition, TagRegistry, UpdateTags, CONFIGURATION_CLIENTBOUND_PLUGIN_MESSAGE,
-    CONFIGURATION_PLUGIN_MESSAGE, MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT,
-    MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE, SELECT_KNOWN_PACKS,
-    SELECT_KNOWN_PACKS_SERVERBOUND, UPDATE_ENABLED_FEATURES,
+    SynchronizePlayerPosition, TagRegistry, UpdateTags, BIOME_CELLS, BLOCK_CELLS,
+    CONFIGURATION_CLIENTBOUND_PLUGIN_MESSAGE, CONFIGURATION_PLUGIN_MESSAGE, LIGHT_ARRAY_BYTES,
+    MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT, MOVE_PLAYER_STATUS_ONLY,
+    PLAY_PLUGIN_MESSAGE, SELECT_KNOWN_PACKS, SELECT_KNOWN_PACKS_SERVERBOUND,
+    UPDATE_ENABLED_FEATURES,
 };
 pub use status::StatusInfo;
