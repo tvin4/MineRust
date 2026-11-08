@@ -57,6 +57,37 @@ const FIELDS: [&str; 15] = [
 /// Longest example text kept in a table cell.
 const NOTE_WIDTH: usize = 160;
 
+/// The owner's matrix categories: each folds the field groups of
+/// [`FIELDS`] it is read from — one cell per chunk per category.
+const MATRIX: [(&str, &[&str]); 6] = [
+    ("блоки и data-слова", &["section block palettes"]),
+    ("non-air/fluid", &["section non-air/fluid"]),
+    (
+        "карты высот",
+        &["heightmap ids (порядок)", "heightmap words"],
+    ),
+    ("биомы", &["section biome palettes"]),
+    (
+        "block entities",
+        &[
+            "block entity count",
+            "block entity records (порядок)",
+            "block entity NBT bytes",
+        ],
+    ),
+    (
+        "свет",
+        &[
+            "light sky mask",
+            "light block mask",
+            "light empty-sky mask",
+            "light empty-block mask",
+            "light sky arrays",
+            "light block arrays",
+        ],
+    ),
+];
+
 /// One field group's tally over the paired chunks.
 #[derive(Debug, Default, Clone)]
 struct Agg {
@@ -69,6 +100,78 @@ struct Agg {
 }
 
 type Fields = BTreeMap<&'static str, Agg>;
+
+/// `field → (equal, total)` as a [`Fields`] table stands before one chunk
+/// is compared — the delta over it is what that chunk alone contributed.
+type Before = BTreeMap<&'static str, (usize, usize)>;
+
+/// One chunk's row of the [`MATRIX`] table: `None` where a category was
+/// not compared for this chunk, `Some(equal)` otherwise.
+struct MatrixRow {
+    /// The chunk the row belongs to.
+    coord: (i32, i32),
+    /// One entry per [`MATRIX`] category, in that order.
+    cells: Vec<Option<bool>>,
+}
+
+/// The tallies of every field as they stand before the next chunk.
+fn snapshot(fields: &Fields) -> Before {
+    fields
+        .iter()
+        .map(|(field, agg)| (*field, (agg.equal, agg.total)))
+        .collect()
+}
+
+/// Derives one chunk's category verdicts from what `compare_pair` added
+/// to the tallies under [`MATRIX`].
+fn matrix_row(coord: (i32, i32), before: &Before, fields: &Fields) -> MatrixRow {
+    let cells = MATRIX
+        .iter()
+        .map(|(_, members)| {
+            let mut verdict: Option<bool> = None;
+            for member in *members {
+                let (equal_before, total_before) = before.get(member).copied().unwrap_or((0, 0));
+                let Some(agg) = fields.get(member) else {
+                    continue;
+                };
+                if agg.total > total_before {
+                    let equal = agg.equal > equal_before;
+                    verdict = Some(verdict.unwrap_or(true) && equal);
+                }
+            }
+            verdict
+        })
+        .collect();
+    MatrixRow { coord, cells }
+}
+
+/// The matrix section: one row per paired chunk, ✓ / **✗** / — per category.
+fn matrix_section(rows: &[MatrixRow]) -> String {
+    let mut text = String::from("\n## Матрица по чанкам (владельцем заданные категории)\n\n");
+    text.push_str("| чанк |");
+    for (name, _) in MATRIX {
+        text.push_str(&format!(" {name} |"));
+    }
+    text.push('\n');
+    text.push_str("|---|");
+    for _ in MATRIX {
+        text.push_str("---|");
+    }
+    text.push('\n');
+    for row in rows {
+        text.push_str(&format!("| ({}, {}) |", row.coord.0, row.coord.1));
+        for cell in &row.cells {
+            let text_cell = match cell {
+                Some(true) => "✓",
+                Some(false) => "**✗**",
+                None => "—",
+            };
+            text.push_str(&format!(" {text_cell} |"));
+        }
+        text.push('\n');
+    }
+    text
+}
 
 /// Records one chunk's result for one field group.
 fn record(
@@ -200,6 +303,8 @@ struct Summary {
     paired: usize,
     /// Field tallies in [`FIELDS`] order.
     fields: Fields,
+    /// One matrix row per paired chunk, in trace order.
+    matrix: Vec<MatrixRow>,
 }
 
 impl Summary {
@@ -240,6 +345,7 @@ impl Summary {
                 diff.replace('|', "/")
             ));
         }
+        text.push_str(&matrix_section(&self.matrix));
         text.push_str(
             "\nНичего не «чинится» по этому отчёту: таблица показана владельцу,\n\
              сама сверка полей решается им (см. `docs/SOURCES.md`, критерий 3а\n\
@@ -293,13 +399,18 @@ fn the_chunk_slice_writes_the_diff_table() {
             .iter()
             .map(|field| (*field, Agg::default()))
             .collect(),
+        matrix: Vec::new(),
     };
     let mut unmatched = Vec::new();
     for chunk in &chunks {
         let coord = (chunk.chunk_x, chunk.chunk_z);
         match by_coord.get(&coord) {
             Some(ours_payload) => {
+                let before = snapshot(&summary.fields);
                 compare_pair(chunk, ours_payload, &mut summary.fields);
+                summary
+                    .matrix
+                    .push(matrix_row(coord, &before, &summary.fields));
                 summary.paired += 1;
             }
             None => unmatched.push(coord),
