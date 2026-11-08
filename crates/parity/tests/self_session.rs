@@ -9,11 +9,13 @@
 //! check's expectations:
 //!
 //! * the centre of the chunk cache is the spawn in chunks — (6, -2);
-//! * exactly nine `level_chunk_with_light` arrive (the ready chunks of the
-//!   frozen template in every recorded run);
+//! * the batch of `level_chunk_with_light` opens with `chunk_batch_start`
+//!   and carries every ready chunk of the template inside the send radius
+//!   (289 = the 8-chunk square of the scripted client's own view
+//!   distance, part A 6);
 //! * the chunk (6, -2) — the one under the join position (96.5, 145,
 //!   -31.5) — is among them;
-//! * no chunk falls outside centre ± view distance (10).
+//! * no chunk falls outside centre ± send radius (8).
 //!
 //! Manual-only like every parity test:
 //!
@@ -35,12 +37,22 @@ use protocol::LevelChunkWithLight;
 /// The chunk a join at (96.5, 145, -31.5) must be served under.
 const EXPECTED_CHUNK: (i32, i32) = (6, -2);
 
-/// Ready chunks of the frozen template in every recorded run.
-const EXPECTED_CHUNKS: usize = 9;
+/// Chunks of template v2 inside the send radius: the client asks for 8
+/// (`join_steps`), the server announces 10 (`net::VIEW_DISTANCE`), the
+/// template has 729 ready chunks — `min(8, 10)` gives the 17×17 square,
+/// and every chunk of that square is ready (`full`/`initialize_light`).
+/// Counted by `target/parity/chunk_status.py compare` (part A, 6).
+const EXPECTED_CHUNKS: usize = 289;
 
-/// The chunk cache radius the join announces (net's VIEW_DISTANCE).
-// SOURCE: our own join constant, mirrored by live_vs_vanilla.
-const VIEW_DISTANCE: i32 = 10;
+/// The radius this session sends in: the scripted client's own request
+/// (`join_steps` sends `view_distance: 8`), the server caps it at 10.
+// SOURCE: our own rules — `join_steps` and `net::connection::play::send_radius`.
+const SEND_RADIUS: i32 = 8;
+
+/// How long the burst may take to *start*: the loader reads the whole
+/// save on a pool thread (thousands of stored chunks, debug build), which
+/// is seconds, never the two seconds of the old quiet drain.
+const BATCH_WAIT: Duration = Duration::from_secs(90);
 
 /// Where the recording lands: `<workspace>/target/parity/`.
 fn out_dir() -> std::path::PathBuf {
@@ -106,21 +118,34 @@ async fn record_self_session(
     addr: SocketAddr,
 ) -> Trace {
     let mut steps = join_steps(env, &ids, addr.port());
-    // The join sequence plus the ready chunks, then two seconds of silence
-    // to catch everything the server wants to say right after the batch.
+    // 1. everything up to the opening of the chunk burst: the join packets
+    //    arrive at once, the burst only when the loader pool has built the
+    //    payloads of the whole save — a quiet drain that short would end
+    //    before the first chunk and record nothing (part A).
+    steps.push(Step::wait(
+        ids.id(protocol::ChunkBatchStart::KEY),
+        BATCH_WAIT,
+    ));
+    // 2. the burst itself, then two seconds of silence to catch everything
+    //    the server wants to say right after it.
     steps.push(Step::quiet(Duration::from_secs(2), Duration::from_secs(60)));
     let mut client = Client::connect("self", addr, Arc::clone(&ids))
         .await
         .expect("connect to our own server");
-    if let Err(error) = client.run(&steps).await {
-        let partial = client.into_trace();
-        partial.save(&out_dir().join("self-session.json")).ok();
-        panic!("script failed after {} packets: {error}", partial.len());
-    }
+    // A script that stops early (a batch that never starts) keeps its
+    // partial recording: the assertions below report what really arrived
+    // instead of hiding it behind one generic client error.
+    let outcome = client.run(&steps).await;
     let trace = client.into_trace();
     trace
         .save(&out_dir().join("self-session.json"))
         .expect("trace must be written");
+    if let Err(error) = outcome {
+        if trace.is_empty() {
+            panic!("the server never answered: {error}");
+        }
+        eprintln!("script stopped early: {error}");
+    }
     trace
 }
 
@@ -202,21 +227,25 @@ async fn our_server_serves_the_world_of_the_live_check() {
     assert_eq!(
         coords.len(),
         EXPECTED_CHUNKS,
-        "the frozen template sends nine ready chunks; got: {coords:?}"
+        "template v2 must send the {} ready chunks of radius {SEND_RADIUS}; got {} — {:?}",
+        EXPECTED_CHUNKS,
+        coords.len(),
+        coords.iter().take(12).collect::<Vec<_>>()
     );
     assert!(
         coords.contains(&EXPECTED_CHUNK),
-        "chunk {EXPECTED_CHUNK:?} under the join position (96.5, 145, -31.5) must arrive; got: {coords:?}"
+        "chunk {EXPECTED_CHUNK:?} under the join position (96.5, 145, -31.5) must arrive; got {} chunks",
+        coords.len()
     );
     if let Some((cx, cz)) = center {
         let outside: Vec<(i32, i32)> = coords
             .iter()
             .copied()
-            .filter(|(x, z)| (x - cx).abs() > VIEW_DISTANCE || (z - cz).abs() > VIEW_DISTANCE)
+            .filter(|(x, z)| (x - cx).abs() > SEND_RADIUS || (z - cz).abs() > SEND_RADIUS)
             .collect();
         assert!(
             outside.is_empty(),
-            "chunks outside centre ±{VIEW_DISTANCE}: {outside:?}"
+            "chunks outside centre ±{SEND_RADIUS}: {outside:?}"
         );
     }
 
