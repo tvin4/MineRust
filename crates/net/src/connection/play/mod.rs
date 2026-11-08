@@ -421,8 +421,11 @@ where
 /// Writes one `chunk_batch_start` … `chunk_batch_finished` pair around
 /// `chunks`, with the finished count equal to what was sent in between.
 ///
-/// Every chunk is logged with its coordinates and payload size; the batch
-/// reaching here was already cut to the send radius by
+/// Every chunk is logged at debug with its coordinates and payload size —
+/// info keeps only the batch summaries (`chunk_batch_finished sent`), so
+/// one join's worth of bursts does not print a line per payload at the
+/// default level (part A 2/3: 289 chunks were 289 info lines each). The
+/// batch reaching here was already cut to the send radius by
 /// [`write_chunk_batch`] (part A, 6), so every chunk fits the view square
 /// around `center` the join announced.
 async fn write_sub_batch<W>(
@@ -446,7 +449,7 @@ where
     let mut chunk_count = 0_i32;
     for chunk in chunks {
         let payload = chunk.encode_payload()?;
-        info!(
+        debug!(
             chunk_x = chunk.chunk_x,
             chunk_z = chunk.chunk_z,
             size = payload.len(),

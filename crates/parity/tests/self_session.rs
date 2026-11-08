@@ -28,11 +28,12 @@
 
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use parity::{join_steps, load_parity_env, Client, ParityEnv, Step, Trace, TraceDirection};
 use protocol::LevelChunkWithLight;
+use tracing_subscriber::util::SubscriberInitExt;
 
 /// The chunk a join at (96.5, 145, -31.5) must be served under.
 const EXPECTED_CHUNK: (i32, i32) = (6, -2);
@@ -200,6 +201,41 @@ async fn measure_second_join(env: &ParityEnv, ids: Arc<data::PacketIds>, addr: S
     );
 }
 
+/// Everything the subscriber of the in-process server printed during the
+/// two joins, kept as plain text so the end of the test can count it.
+struct LogSink(Arc<Mutex<String>>);
+
+impl std::io::Write for LogSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if let Ok(text) = std::str::from_utf8(buf) {
+            self.0.lock().expect("log sink uncontended").push_str(text);
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Part A 2/3: what a join costs the log at info level. The subscriber
+/// lives for the whole test and stops every `debug!` at its level filter,
+/// so the printed figures are exactly what a default (`info`) server run
+/// would write to its console — the per-chunk lines of one burst in
+/// particular (289 chunks x two joins). Like every `MEASURE` line of this
+/// test it is printed, never asserted.
+fn count_info_lines(logged: &str) {
+    let lines: Vec<&str> = logged.lines().filter(|line| !line.is_empty()).collect();
+    let per_chunk = lines
+        .iter()
+        .filter(|line| line.contains("level_chunk_with_light sent"))
+        .count();
+    eprintln!(
+        "MEASURE logs: {n} info lines over two joins, {per_chunk} of them per-chunk",
+        n = lines.len()
+    );
+}
+
 /// Payload bytes of one chunk packet; the coordinate prefix is the first
 /// two big-endian i32 the encode writes (see protocol's LevelChunkWithLight).
 fn chunk_coordinates(trace: &Trace, ids: &data::PacketIds) -> Vec<(i32, i32)> {
@@ -255,6 +291,16 @@ async fn our_server_serves_the_world_of_the_live_check() {
     }
     let ids = Arc::new(env.packet_ids().expect("packet ids"));
 
+    // Part A 2/3: capture every info line of the in-process server for the
+    // MEASURE line at the end (the guard keeps the subscriber installed).
+    let logged = Arc::new(Mutex::new(String::new()));
+    let sink = Arc::clone(&logged);
+    let _log_guard = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_writer(move || LogSink(Arc::clone(&sink)))
+        .finish()
+        .set_default();
+
     let mut guard = ServerGuard { abort: None };
     let (addr, abort) = start_with_world(&env, Arc::clone(&ids)).await;
     guard.abort = Some(abort);
@@ -307,4 +353,5 @@ async fn our_server_serves_the_world_of_the_live_check() {
         "self-session written: {} packets, center {center:?}, chunks {coords:?}",
         trace.len()
     );
+    count_info_lines(&logged.lock().expect("log buffer uncontended"));
 }
