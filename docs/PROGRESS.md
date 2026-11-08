@@ -511,6 +511,48 @@ NBT → sky 15 / block 0, временное решение (не parity), по�
       света реально есть — остальные 19 из 24 в (6,−2)), `PROGRESS.md`,
       `graphify update`, push.
 
+## Часть 3, шаг 3.3: живая проверка — диагностика по 6 пунктам (выполнено, ждём ответа владельца)
+
+Живая проверка провалена (клиент ~30 с в списке серверов → пустота/тишина).
+Вместо слепых починок сделана диагностика; игровой код **не менялся**
+(единственное исключение — fail-fast при отсутствии путей, разрешённое
+владельцем). Что сделано по шести пунктам:
+
+1. **Конфиги + fail-fast + старт-лог:** `require_chunk_paths` в `run()`
+   (четыре пути: `world_dir`, `blocks_report`, `registries_report`,
+   `packets_report`; первая недостающая → `RunError::MissingSetting` с
+   подсказкой), `build_world` стал `pub` (lenient), прогревочный
+   `warm_world` пишет info-лог загрузчика; `server.toml` и
+   `server.example.toml` помечены REQUIRED.
+2. **Логи чанков/батчей/пакетов:** info — `chunk batch requested from the
+   loader`, `world read finished, chunks found`, каждая
+   `level_chunk_with_light sent` (x/z/размер), `chunk_batch_finished sent`,
+   `chunk batch sent`, `chunk_batch_received: pace chosen`; warn —
+   `loader=None` и чанк вне радиуса (`outside_view`); debug —
+   `chunk_batch_start sent` и каждый пакет из `trace::record`
+   (включить: `RUST_LOG=net=debug`).
+3. **Трейс живого сеанса:** `MINECRAFT_SESSION_TRACE=1` (или путь) →
+   `target/parity/live-session.json`; формат — заголовок + JSON-записи с
+   запятыми *между* ними, чисто закрытый файл — валидный JSON, хвост
+   убитого сервера чинит `salvage_tail`; payload > 64 КБ пишется `null`.
+   **Запись реального сеанса заблокирована пунктом 6** (сервер не стартует
+   с `world_dir`).
+4. **Сравнение с ванилью:** `parity/tests/live_vs_vanilla.rs` (без assert,
+   отчёт `target/parity-report/live-vs-vanilla.md`): порядок login→первый
+   чанк, serverbound в порядке чтения, чанки/центр. Предварительный
+   прогон на `join-{vanilla,ours}.json`: у ванили
+   `set_chunk_cache_center` = `06 feffffff0f` → **центр (6,−2) подтверждён
+   на проводе**, спавн (96,145,−32) → чанк (6,−2) под (96.5,145,−31.5) ✓.
+5. **Свой сеанс:** `parity/tests/self_session.rs` (`--ignored`) поднимает
+   наш сервер in-process с реальным миром и скриптованным клиентом;
+   assert'ы: центр (6,−2), ровно 9 чанков, (6,−2) среди них, ничего вне
+   центр±10. Сейчас падает ровно на блокере пункта 6 (с текстом ссылки на
+   этот раздел).
+6. **Блокер (см. «Известные проблемы / блокеры»): `seed` лежит внутри
+   compound `data`, читатель ждёт его в корне** → сервер с `world_dir` не
+   стартует. Фикс — игровой код (крейт `world`), разрешения нет →
+   ждём решение владельца.
+
 ## Что дальше
 
 - **Часть 3, шаг 3.3 — ВЫПОЛНЕН (a–g), СТОП:** мир не расширять,
@@ -540,6 +582,23 @@ NBT → sky 15 / block 0, временное решение (не parity), по�
 
 ## Известные проблемы / блокеры
 
+- **[БЛОКЕР, шаг 3.3-диагностики] `world_gen_settings.dat` хранит `seed`
+  внутри compound `data`, а `read_world_gen_settings`
+  (`crates/world/src/level.rs`, `long_of`) ищет `seed` в корне документа.**
+  Доказательная база (диагностика, байт-в-байт, скрипт
+  `target/parity/check-world-docs.py`):
+  - реальный файл `C:\MineRust-data\world-template\data\minecraft\world_gen_settings.dat`:
+    корень `{DataVersion, data: {seed: 12345, bonus_chest,
+    generate_structures, dimensions}}` — `seed` **в корне отсутствует**;
+  - `level.dat`: корень `{Data: {...}}`, `Data.DataVersion = 5023`,
+    `Data.spawn.pos = [96, 145, -32]` — читается нашим парсером ✓;
+  - unit-тест `settings_nbt` синтетический (seed в корне) и не ловит
+    расхождения с реальным файлом.
+  Симптом: `error: world document ... world_gen_settings.dat is malformed:
+  no seed long at the root` → сервер с `world_dir` не стартует, живая
+  проверка и `self_session.rs` невозможны. **Фикс — игровой код, разрешения
+  нет.** Предлагаемый вариант: читать `root.data.seed` с fallback на корень
+  (оба формата) + тест по реальным байтам шаблона. Ждём решение владельца.
 - M2 закрывает play-состояние только join-последовательностью: чанков нет,
   движение игрока принимается, но не применяется (пустой мир, симуляция —
   M3+). Кик по неответу keep-alive реализован (30 с после неотвеченного
