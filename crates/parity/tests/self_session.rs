@@ -51,21 +51,15 @@ fn out_dir() -> std::path::PathBuf {
         .join("parity")
 }
 
-/// Both known blockers are the same file: the reader of
-/// `world_gen_settings.dat` expects `seed` at the root while the template
-/// stores it inside the `data` compound (docs/PROGRESS.md, «Блокеры»).
-fn build_world_or_explain(
+/// Builds the world out of the configured template, saying what broke
+/// when it does (the seed-envelope blocker of the live check was fixed by
+/// reading `data.seed`; a remaining error is a new one to look at).
+fn build_or_explain(
     env: &ParityEnv,
     game_data: Arc<data::GameData>,
 ) -> (Option<net::Loader>, net::WorldInfo) {
-    match server::build_world(&env.config, game_data) {
-        Ok(world) => world,
-        Err(error) => panic!(
-            "the saved world cannot be built: {error}\n\
-             (known blocker: `seed` inside the `data` compound of \
-             world_gen_settings.dat — see docs/PROGRESS.md)"
-        ),
-    }
+    server::build_world(&env.config, game_data)
+        .unwrap_or_else(|error| panic!("the saved world cannot be built: {error}"))
 }
 
 /// Starts our own server in-process with the loaded world on an ephemeral
@@ -86,7 +80,7 @@ async fn start_with_world(
         )
         .expect("game data from the jar"),
     );
-    let (loader, world) = build_world_or_explain(env, Arc::clone(&game_data));
+    let (loader, world) = build_or_explain(env, Arc::clone(&game_data));
     let server = tokio::spawn(net::serve(listener, status, game_data, ids, loader, world));
     (addr, server.abort_handle())
 }
