@@ -7,6 +7,14 @@
 //! compound (`pos` block coordinates); `data/minecraft/world_gen_settings.dat`
 //! holds the `seed` the client is introduced to through `hashed_seed`
 //! (step 3.3e).
+//!
+//! The data-pack documents the game saves (`world_gen_settings.dat`,
+//! `game_rules.dat`, ...) are wrapped in a `data` compound with the
+//! `DataVersion` int beside it at the root — walked byte by byte on the
+//! owner's template. The seed reader therefore looks under `data` first and
+//! falls back to a bare root `seed` (the shape older writers produce);
+//! both forms are covered by tests, the real file by an ignored one
+//! (`tests/template_docs.rs`).
 
 use std::fs;
 use std::io::Read;
@@ -72,10 +80,14 @@ pub fn read_level_dat(path: impl AsRef<Path>) -> Result<LevelDat, WorldError> {
 /// A world without a readable seed is not guessed at either: `hashed_seed`
 /// would point the client at a different light/biome computation than the
 /// chunks of the save hold (step 3.3e keeps `0` when there is no world).
+///
+/// The seed lives inside the `data` envelope of the template
+/// (`{data:{seed,...}, DataVersion}`); a bare `seed` at the root is the
+/// other documented shape and still reads ([`seed_of`]).
 pub fn read_world_gen_settings(path: impl AsRef<Path>) -> Result<WorldGenSettings, WorldError> {
     let display = path.as_ref().display().to_string();
     let root = read_world_document(path)?;
-    let seed = long_of(&root, "seed").map_err(|detail| WorldError::WorldDocument {
+    let seed = seed_of(&root).map_err(|detail| WorldError::WorldDocument {
         path: display,
         detail,
     })?;
@@ -83,7 +95,11 @@ pub fn read_world_gen_settings(path: impl AsRef<Path>) -> Result<WorldGenSetting
 }
 
 /// The gzip disk NBT document under `path`, read and decoded.
-fn read_world_document(path: impl AsRef<Path>) -> Result<NbtTag, WorldError> {
+///
+/// Public so the audit test of the template (`tests/template_docs.rs`) can
+/// open every saved `.dat` the game writes; the server itself reads the two
+/// documents above through their own readers.
+pub fn read_world_document(path: impl AsRef<Path>) -> Result<NbtTag, WorldError> {
     let path = path.as_ref();
     let display = path.display().to_string();
     let compressed = fs::read(path).map_err(|source| WorldError::WorldFile {
@@ -118,14 +134,24 @@ fn int_of(root: &NbtTag, field: &str, key: &str) -> Result<i32, String> {
     }
 }
 
-/// A `long` of the root compound, as a detail string otherwise.
-fn long_of(root: &NbtTag, key: &str) -> Result<i64, String> {
+/// The `seed` of the generation document as a detail string otherwise.
+///
+/// The game wraps these documents in a `data` compound — the template's
+/// bytes hold `{data:{bonus_chest, seed, generate_structures,
+/// dimensions}, DataVersion}` — so `data.seed` is read first and a bare
+/// root `seed` is the fallback for the other writing.
+fn seed_of(root: &NbtTag) -> Result<i64, String> {
     let NbtTag::Compound(root) = root else {
         return Err("root is not a compound".to_owned());
     };
-    match root.get(key) {
+    if let Some(NbtTag::Compound(data)) = root.get("data") {
+        if let Some(NbtTag::Long(seed)) = data.get("seed") {
+            return Ok(*seed);
+        }
+    }
+    match root.get("seed") {
         Some(NbtTag::Long(value)) => Ok(*value),
-        _ => Err(format!("no {key} long at the root")),
+        _ => Err("no seed long under data or at the root".to_owned()),
     }
 }
 
@@ -184,8 +210,38 @@ mod tests {
         out
     }
 
-    /// The world generation document: `seed` as a long of the root.
+    /// The world generation document in the shape of the real template
+    /// (walked byte by byte): the root holds the `data` compound — with
+    /// `bonus_chest`, the `seed` long, `generate_structures` and the
+    /// `dimensions` map — and the `DataVersion` int beside it. Stream
+    /// order matches the file: `data` first, `DataVersion` last.
     fn settings_nbt(seed: i64) -> Vec<u8> {
+        let mut out = vec![0x0A, 0x00, 0x00]; // compound, empty root name
+        out.extend_from_slice(&[0x0A, 0x00, 0x04]); // compound named `data`
+        out.extend_from_slice(b"data");
+        out.extend_from_slice(&[0x01, 0x00, 0x0B]); // byte named `bonus_chest`
+        out.extend_from_slice(b"bonus_chest");
+        out.push(0x00); // false
+        out.extend_from_slice(&[0x04, 0x00, 0x04]); // long named `seed`
+        out.extend_from_slice(b"seed");
+        out.extend_from_slice(&seed.to_be_bytes());
+        out.extend_from_slice(&[0x01, 0x00, 0x13]); // byte `generate_structures`
+        out.extend_from_slice(b"generate_structures");
+        out.push(0x01); // true
+        out.extend_from_slice(&[0x0A, 0x00, 0x0A]); // compound `dimensions`
+        out.extend_from_slice(b"dimensions");
+        out.push(0x00); // empty map: dimensions are not read here
+        out.push(0x00); // end of data
+        out.extend_from_slice(&[0x03, 0x00, 0x0B]); // int named `DataVersion`
+        out.extend_from_slice(b"DataVersion");
+        out.extend_from_slice(&5023_i32.to_be_bytes());
+        out.push(0x00); // end of the root
+        out
+    }
+
+    /// The other documented shape: `seed` lying directly at the root (the
+    /// fallback the reader must keep honouring).
+    fn flat_settings_nbt(seed: i64) -> Vec<u8> {
         let mut out = vec![0x0A, 0x00, 0x00]; // compound, empty root name
         out.extend_from_slice(&[0x04, 0x00, 0x04]); // long named `seed`
         out.extend_from_slice(b"seed");
@@ -221,11 +277,40 @@ mod tests {
         let _ = fs::remove_file(&path);
     }
 
+    /// The shape of the owner's template: `seed` inside `data`. This is the
+    /// regression test of the step 3.3 live check — the flat document used
+    /// to be the only shape the reader accepted.
     #[test]
-    fn the_seed_comes_out_of_the_generation_document() {
+    fn the_seed_comes_out_of_the_data_envelope_of_the_document() {
         let path = gzip_file("settings-ok", &settings_nbt(12345));
         let settings = read_world_gen_settings(&path).expect("valid document");
         assert_eq!(settings.seed, 12345, "as stored by the game");
+        let _ = fs::remove_file(&path);
+    }
+
+    /// The fallback shape (a bare root `seed`) must keep reading.
+    #[test]
+    fn a_seed_at_the_root_of_the_document_still_reads() {
+        let path = gzip_file("settings-flat", &flat_settings_nbt(777));
+        let settings = read_world_gen_settings(&path).expect("valid document");
+        assert_eq!(settings.seed, 777, "the other documented shape");
+        let _ = fs::remove_file(&path);
+    }
+
+    /// Neither shape present: the field is named, never defaulted.
+    #[test]
+    fn a_generation_document_without_any_seed_is_refused() {
+        let mut document = settings_nbt(12345);
+        document.clear();
+        document.extend_from_slice(&[0x0A, 0x00, 0x00]); // empty root compound
+        document.push(0x00);
+        let path = gzip_file("settings-noseed", &document);
+        let error = read_world_gen_settings(&path).expect_err("no seed at all");
+        assert!(
+            matches!(&error, WorldError::WorldDocument { .. }),
+            "{error}"
+        );
+        assert!(error.to_string().contains("no seed"), "{error}");
         let _ = fs::remove_file(&path);
     }
 
@@ -243,7 +328,7 @@ mod tests {
 
     #[test]
     fn a_level_without_a_spawn_is_refused_with_the_missing_field() {
-        let path = gzip_file("level-nospawn", &settings_nbt(1)); // seed only
+        let path = gzip_file("level-nospawn", &settings_nbt(1)); // not level.dat
         let error = read_level_dat(&path).expect_err("no Data.spawn");
         assert!(
             matches!(&error, WorldError::WorldDocument { .. }),

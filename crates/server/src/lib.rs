@@ -339,12 +339,31 @@ mod tests {
         gzip(&doc)
     }
 
-    /// A gzipped disk NBT document: the root's `seed` long.
+    /// A gzipped disk NBT document in the shape of the real template: the
+    /// root holds the `data` compound (with `bonus_chest`, the `seed`
+    /// long, `generate_structures` and `dimensions`) and the `DataVersion`
+    /// int — walked byte by byte on the owner's save (the live check of
+    /// step 3.3 failed on a seed missing from this envelope).
     fn settings_document(seed: i64) -> Vec<u8> {
         let mut doc = vec![0x0A, 0x00, 0x00]; // root compound, empty name
+        doc.extend_from_slice(&[0x0A, 0x00, 0x04]); // compound `data`
+        doc.extend_from_slice(b"data");
+        doc.extend_from_slice(&[0x01, 0x00, 0x0B]); // byte `bonus_chest`
+        doc.extend_from_slice(b"bonus_chest");
+        doc.push(0x00); // false
         doc.extend_from_slice(&[0x04, 0x00, 0x04]); // long `seed`
         doc.extend_from_slice(b"seed");
         doc.extend_from_slice(&seed.to_be_bytes());
+        doc.extend_from_slice(&[0x01, 0x00, 0x13]); // byte `generate_structures`
+        doc.extend_from_slice(b"generate_structures");
+        doc.push(0x01); // true
+        doc.extend_from_slice(&[0x0A, 0x00, 0x0A]); // compound `dimensions`
+        doc.extend_from_slice(b"dimensions");
+        doc.push(0x00); // empty map
+        doc.push(0x00); // end of data
+        doc.extend_from_slice(&[0x03, 0x00, 0x0B]); // int `DataVersion`
+        doc.extend_from_slice(b"DataVersion");
+        doc.extend_from_slice(&5023_i32.to_be_bytes());
         doc.push(0x00); // root end
         gzip(&doc)
     }
