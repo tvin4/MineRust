@@ -1,5 +1,6 @@
-//! Clientbound chunk packets of the play state: the chunk payload itself
-//! and the two batch markers around a burst of chunks.
+//! Clientbound chunk packets of the play state — the chunk payload itself
+//! and the two batch markers around a burst of chunks — plus the
+//! serverbound reply that sets the pace of the following batches.
 //!
 //! The record layouts behind the payload are in [`crate::packets::chunk_payload`]
 //! (data from the vanilla join recording, not from a wiki). The batch
@@ -164,6 +165,55 @@ impl ChunkBatchFinished {
     }
 }
 
+/// Serverbound Chunk Batch Received: answered to every
+/// `chunk_batch_finished`, it tells the server how fast the client wants
+/// the following batches to arrive.
+// SOURCE: wiki, unverified — the composition (a single Float called
+// "Chunks Per Tick") is the documented one; `data/reports/packets.json`
+// only gives the packet's id (11). Whether a vanilla server accepts this
+// payload is checked by the parity run of step 3.3d: the bot sends it
+// after `chunk_batch_finished`, and a stream that keeps flowing past the
+// reply proves the composition (result in `docs/SOURCES.md`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChunkBatchReceived {
+    /// Chunks per tick the client asks the server to send.
+    pub chunks_per_tick: f32,
+}
+
+impl ChunkBatchReceived {
+    /// Packet id of Chunk Batch Received (play, serverbound).
+    ///
+    /// The literal is the report's `protocol_id` — a verified value of
+    /// `reports/packets.json`, not a documentation guess.
+    pub const ID: u32 = 11;
+
+    /// Key that resolves the Chunk Batch Received id at runtime.
+    pub const KEY: PacketKey = PacketKey::serverbound(
+        ProtocolState::Play,
+        "minecraft:chunk_batch_received",
+        Self::ID,
+    );
+
+    /// Encodes the payload (packet id excluded).
+    pub fn encode_payload(&self) -> Vec<u8> {
+        let mut writer = PacketWriter::new();
+        writer.write_f32(self.chunks_per_tick);
+        writer.into_bytes()
+    }
+
+    /// Decodes the payload; an empty payload is the only valid one.
+    pub fn decode_payload(reader: &mut PacketReader<'_>) -> Result<Self, CodecError> {
+        Ok(Self {
+            chunks_per_tick: reader.read_f32()?,
+        })
+    }
+
+    /// Encodes the packet as a complete frame.
+    pub fn to_frame(&self) -> Result<Vec<u8>, CodecError> {
+        encode_frame(Self::ID, &self.encode_payload())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,6 +318,28 @@ mod tests {
         let decoded = ChunkBatchFinished::decode_payload(&mut reader).expect("decodable");
         reader.ensure_empty().expect("no trailing bytes");
         assert_eq!(decoded, finished);
+    }
+
+    /// The pace reply of step 3.3d is exactly one float: four bytes of
+    /// payload, the id from the report (11), and nothing else.
+    #[test]
+    fn batch_received_carries_one_float() {
+        let packet = ChunkBatchReceived {
+            chunks_per_tick: 10.5,
+        };
+        let payload = packet.encode_payload();
+        assert_eq!(payload.len(), 4, "a single float on the wire");
+        let mut reader = PacketReader::new(&payload);
+        let decoded =
+            ChunkBatchReceived::decode_payload(&mut reader).expect("decodable only this far");
+        reader.ensure_empty().expect("no trailing bytes");
+        assert_eq!(decoded.chunks_per_tick, 10.5, "round-tripped unchanged");
+        assert_eq!(ChunkBatchReceived::ID, 11, "the report's protocol_id");
+        assert_eq!(ChunkBatchReceived::KEY.default_id, 11, "same as the id");
+        assert_eq!(
+            ChunkBatchReceived::KEY.name,
+            "minecraft:chunk_batch_received"
+        );
     }
 
     #[test]

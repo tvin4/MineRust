@@ -29,10 +29,10 @@ pub use frame::{
 pub use nbt::{NbtError, NbtTag, MAX_NBT_DEPTH};
 pub use packets::{
     hashed_seed, offline_uuid, set_bits, used_packet_keys, BlockEntity, ChunkBatchFinished,
-    ChunkBatchStart, ChunkSection, ClientInformation, ConfirmTeleportation, DeathLocation,
-    DisconnectLogin, FinishAck, FinishConfiguration, GameEvent, GameProfile, Handshake,
-    HeightmapRecord, KeepAlive, LevelChunkWithLight, LightData, LoginAcknowledged, LoginPlay,
-    LoginStart, LoginSuccess, NextState, PaletteContainer, PingRequest, PlayerInfoEntry,
+    ChunkBatchReceived, ChunkBatchStart, ChunkSection, ClientInformation, ConfirmTeleportation,
+    DeathLocation, DisconnectLogin, FinishAck, FinishConfiguration, GameEvent, GameProfile,
+    Handshake, HeightmapRecord, KeepAlive, LevelChunkWithLight, LightData, LoginAcknowledged,
+    LoginPlay, LoginStart, LoginSuccess, NextState, PaletteContainer, PingRequest, PlayerInfoEntry,
     PlayerInfoUpdate, PongResponse, ProfileProperty, RegistryData, RegistryEntry, RegistryTag,
     SetCenterChunk, SetCompression, SetDefaultSpawnPosition, StatusRequest, StatusResponse,
     SynchronizePlayerPosition, TagRegistry, UpdateTags, BIOME_CELLS, BLOCK_CELLS,

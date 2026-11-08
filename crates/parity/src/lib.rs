@@ -19,12 +19,14 @@
 mod client;
 mod diff;
 mod env;
+mod steps;
 mod trace;
 mod vanilla;
 
 pub use client::{Client, ClientError, Step};
 pub use diff::{diff_traces, normalize, render_report, CountRow, PayloadRow, TracesDiff};
 pub use env::{load_parity_env, EnvError, ParityEnv, PACKETS_REPORT_VAR, SERVER_TOML_VAR};
+pub use steps::join_steps;
 pub use trace::{
     from_hex, to_hex, HexError, Trace, TraceDirection, TraceEntry, TraceIoError, TraceState,
 };

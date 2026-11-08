@@ -4,7 +4,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::io::BufReader;
+use protocol::PacketKey;
+use tokio::io::{AsyncWriteExt, BufReader};
 
 use super::*;
 
@@ -56,11 +57,47 @@ async fn next_packet<R>(reader: &mut R) -> (u32, Vec<u8>)
 where
     R: AsyncRead + Unpin,
 {
-    let body = read_frame(reader).await.expect("frame from the server");
+    try_next_packet(reader)
+        .await
+        .expect("frame from the server")
+}
+
+/// [`next_packet`] without the expectation: an error is the end of the
+/// stream (a closed or broken connection), which some tests assert on.
+async fn try_next_packet<R>(reader: &mut R) -> Result<(u32, Vec<u8>), String>
+where
+    R: AsyncRead + Unpin,
+{
+    let body = read_frame(reader).await.map_err(|err| err.to_string())?;
     let mut split = protocol::PacketReader::new(&body);
-    let id = split.read_varint().expect("decodable id") as u32;
-    let payload = split.read_bytes(split.remaining()).expect("payload");
-    (id, payload.to_vec())
+    let id = split.read_varint().map_err(|err| err.to_string())? as u32;
+    let payload = split
+        .read_bytes(split.remaining())
+        .map_err(|err| err.to_string())?;
+    Ok((id, payload.to_vec()))
+}
+
+/// The status document every test connection is started with.
+fn test_status() -> StatusInfo {
+    StatusInfo {
+        version_name: "test".to_owned(),
+        protocol_version: 1,
+        max_players: 1,
+        online_players: 0,
+        motd: "test".to_owned(),
+    }
+}
+
+/// The join sequence every play connection sends first.
+fn join_keys() -> [PacketKey; 6] {
+    [
+        LoginPlay::KEY,
+        SetDefaultSpawnPosition::KEY,
+        PlayerInfoUpdate::KEY,
+        SetCenterChunk::KEY,
+        GameEvent::KEY,
+        SynchronizePlayerPosition::KEY,
+    ]
 }
 
 /// The property of step 3.3c: while the loader pool is stuck inside the
@@ -84,13 +121,7 @@ async fn reading_the_world_never_defers_the_keep_alive() {
     let ids_in_task = Arc::clone(&ids);
     let joined = tokio::spawn(async move {
         let game_data = GameData::default();
-        let status = StatusInfo {
-            version_name: "test".to_owned(),
-            protocol_version: 1,
-            max_players: 1,
-            online_players: 0,
-            motd: "test".to_owned(),
-        };
+        let status = test_status();
         play_state(
             server_read,
             server_write,
@@ -108,15 +139,7 @@ async fn reading_the_world_never_defers_the_keep_alive() {
 
     let mut client = BufReader::new(client);
     // The join sequence arrives first, unchanged by the chunk path.
-    let join = [
-        LoginPlay::KEY,
-        SetDefaultSpawnPosition::KEY,
-        PlayerInfoUpdate::KEY,
-        SetCenterChunk::KEY,
-        GameEvent::KEY,
-        SynchronizePlayerPosition::KEY,
-    ];
-    for key in join {
+    for key in join_keys() {
         let (id, _) = next_packet(&mut client).await;
         assert_eq!(id, ids.id(key), "join sequence packet");
     }
@@ -152,6 +175,134 @@ async fn reading_the_world_never_defers_the_keep_alive() {
     // The client goes away: play ends at once, either cleanly or with the
     // classified disconnect (the dropped duplex reads as EOF).
     drop(client);
+    let result = tokio::time::timeout(Duration::from_secs(5), joined)
+        .await
+        .expect("play state must finish")
+        .expect("play task must not panic");
+    match result {
+        Ok(()) => {}
+        Err(err) if err.is_client_disconnect() => {}
+        other => panic!("play ended with {other:?}"),
+    }
+}
+
+/// Step 3.3d, pure pacing: once the client wants one chunk per tick, a
+/// burst of three leaves as three own sub-batches — each framed exactly
+/// as the recording frames a whole burst (start, payload, finished=1) —
+/// and at least one game tick apart. Real time: the sleep of the pace is
+/// the very thing under test.
+#[tokio::test]
+async fn a_confirmed_pace_splits_a_burst_into_tick_sized_sub_batches() {
+    let ids = Arc::new(PacketIds::compiled());
+    let (client, server) = tokio::io::duplex(1 << 20);
+    let (_server_read, mut server_write) = tokio::io::split(server);
+    let ids_in_task = Arc::clone(&ids);
+    let started = std::time::Instant::now();
+    let written = tokio::spawn(async move {
+        let mut pace = ChunkPace::default();
+        pace.ack(1.0);
+        let chunks: Vec<_> = (0..3)
+            .map(|index| LevelChunkWithLight {
+                chunk_x: index,
+                ..one_payload()
+            })
+            .collect();
+        write_chunk_batch(&mut server_write, &ids_in_task, chunks, &pace).await
+    });
+
+    let mut client = BufReader::new(client);
+    for sub_batch in 0..3 {
+        let (id, _) = next_packet(&mut client).await;
+        assert_eq!(
+            id,
+            ids.id(ChunkBatchStart::KEY),
+            "start of sub-batch {sub_batch}"
+        );
+        let (id, _) = next_packet(&mut client).await;
+        assert_eq!(
+            id,
+            ids.id(LevelChunkWithLight::KEY),
+            "the chunk of sub-batch {sub_batch}"
+        );
+        let (id, payload) = next_packet(&mut client).await;
+        assert_eq!(
+            id,
+            ids.id(ChunkBatchFinished::KEY),
+            "finished of sub-batch {sub_batch}"
+        );
+        let finished =
+            ChunkBatchFinished::decode_payload(&mut protocol::PacketReader::new(&payload))
+                .expect("decodable");
+        assert_eq!(finished.chunk_count, 1, "one chunk per sub-batch");
+    }
+    tokio::time::timeout(Duration::from_secs(5), written)
+        .await
+        .expect("the burst must finish writing")
+        .expect("write task must not panic")
+        .expect("written without error");
+    let passed = started.elapsed();
+    assert!(
+        passed >= Duration::from_millis(100),
+        "two game ticks of pacing expected between three sub-batches, took {passed:?}"
+    );
+}
+
+/// Step 3.3d in the loop: the connection decodes the client's pace
+/// answer and stays open without answering it (a composition the loop
+/// cannot read would end the connection right here, and the next read
+/// would return that error instead of silence).
+#[tokio::test]
+async fn the_pace_answer_keeps_the_connection_open() {
+    let ids = Arc::new(PacketIds::compiled());
+    let (client, server) = tokio::io::duplex(1 << 12);
+    let (server_read, server_write) = tokio::io::split(server);
+    let ids_in_task = Arc::clone(&ids);
+    let joined = tokio::spawn(async move {
+        let game_data = GameData::default();
+        let status = test_status();
+        play_state(
+            server_read,
+            server_write,
+            &game_data,
+            &status,
+            "Steve",
+            &ids_in_task,
+            World {
+                loader: None,
+                info: WorldInfo::default(),
+            },
+        )
+        .await
+    });
+
+    let (client_read, mut client_write) = tokio::io::split(client);
+    let mut client = BufReader::new(client_read);
+    for key in join_keys() {
+        let (id, _) = next_packet(&mut client).await;
+        assert_eq!(id, ids.id(key), "join sequence packet");
+    }
+
+    // The pace answer of a real client, after the batch it reacts to.
+    let ack = ChunkBatchReceived {
+        chunks_per_tick: 8.0,
+    };
+    let frame = protocol::encode_frame(ids.id(ChunkBatchReceived::KEY), &ack.encode_payload())
+        .expect("encodable pace answer");
+    client_write.write_all(&frame).await.expect("sent");
+    client_write.flush().await.expect("flushed");
+
+    // A connection that cannot read the packet closes here; a healthy one
+    // stays silent — the loop never answers a pace.
+    let answered =
+        tokio::time::timeout(Duration::from_millis(300), try_next_packet(&mut client)).await;
+    match answered {
+        Ok(Ok((id, _))) => panic!("unexpected server packet 0x{id:X} after the pace"),
+        Ok(Err(err)) => panic!("the pace answer broke the connection: {err}"),
+        Err(_) => {} // open and silent, exactly as it should be
+    }
+
+    drop(client);
+    drop(client_write);
     let result = tokio::time::timeout(Duration::from_secs(5), joined)
         .await
         .expect("play state must finish")

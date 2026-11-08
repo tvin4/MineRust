@@ -12,35 +12,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use data::PacketIds;
-use parity::{load_parity_env, Client, ParityEnv, Step, Trace, Vanilla};
-use protocol::{
-    ClientInformation, FinishAck, FinishConfiguration, Handshake, LoginAcknowledged, LoginStart,
-    LoginSuccess, NextState, ProtocolState,
-};
-
-/// How long to wait for a single scripted packet.
-const WAIT: Duration = Duration::from_secs(15);
-/// Vanilla answers its known-packs probe within milliseconds; our server
-/// sends no probe at all, so this step must not burn the full WAIT.
-const PROBE_WAIT: Duration = Duration::from_secs(3);
-/// Player name of the scripted client; offline UUIDs derive from it.
-const PLAYER: &str = "ParityBot";
-
-/// Reply to vanilla's `select_known_packs` probe: the same single pack the
-/// server announced (`minecraft:core` version `26.3`), echoed back in the
-/// observed layout (VarInt count, then three strings).
-///
-/// The layout was read off vanilla's own probe bytes in the parity trace;
-/// a successful exchange (finish arrives afterwards) is what proves it.
-fn known_packs_reply() -> Vec<u8> {
-    let mut out = Vec::new();
-    protocol::encode_varint(1, &mut out);
-    for part in ["minecraft", "core", "26.3"] {
-        protocol::encode_varint(part.len() as i32, &mut out);
-        out.extend_from_slice(part.as_bytes());
-    }
-    out
-}
+use parity::{join_steps, load_parity_env, Client, ParityEnv, Step, Trace, Vanilla};
+use protocol::FinishConfiguration;
 
 /// Reads the parity environment or explains why the test is skipped.
 fn parity_env_or_skip() -> Option<ParityEnv> {
@@ -62,73 +35,6 @@ fn out_dir() -> std::path::PathBuf {
         .join("parity")
 }
 
-/// The scripted login → configuration → play sequence, identical for both
-/// servers.
-fn join_steps(env: &ParityEnv, ids: &PacketIds, server_port: u16) -> Vec<Step> {
-    let handshake = Handshake {
-        protocol_version: env.config.protocol_version,
-        server_address: "localhost".to_owned(),
-        server_port,
-        next_state: NextState::Login,
-    };
-    let login = LoginStart {
-        name: PLAYER.to_owned(),
-        uuid: protocol::offline_uuid(PLAYER),
-    };
-    let info = ClientInformation {
-        locale: "en_us".to_owned(),
-        view_distance: 8,
-        chat_mode: 0,
-        chat_colors: true,
-        skin_parts: 0x7F,
-        main_hand: 1,
-        text_filtering: false,
-        allow_server_listings: true,
-        particle_status: 0,
-    };
-    vec![
-        Step::send(
-            ids.id(Handshake::KEY),
-            handshake.encode_payload().expect("handshake encodable"),
-            Some(ProtocolState::Login),
-        ),
-        Step::send(
-            ids.id(LoginStart::KEY),
-            login.encode_payload().expect("login encodable"),
-            None,
-        ),
-        Step::wait(ids.id(LoginSuccess::KEY), WAIT),
-        Step::send(
-            ids.id(LoginAcknowledged::KEY),
-            LoginAcknowledged.encode_payload(),
-            Some(ProtocolState::Configuration),
-        ),
-        Step::send(
-            ids.id(ClientInformation::KEY),
-            info.encode_payload().expect("client info encodable"),
-            None,
-        ),
-        // Vanilla announces its data packs and expects an answer; our
-        // server does not perform this exchange, so the step ends quietly.
-        Step::respond(
-            ids.id(protocol::SELECT_KNOWN_PACKS),
-            PROBE_WAIT,
-            ids.id(protocol::SELECT_KNOWN_PACKS_SERVERBOUND),
-            known_packs_reply(),
-        ),
-        Step::wait(ids.id(FinishConfiguration::KEY), WAIT),
-        Step::send(
-            ids.id(FinishAck::KEY),
-            FinishAck.encode_payload(),
-            Some(ProtocolState::Play),
-        ),
-        // Everything the server sends on joining: the join sequence and any
-        // chunks it decides to send right away. Two seconds of silence ends
-        // the recording early.
-        Step::quiet(Duration::from_secs(2), Duration::from_secs(45)),
-    ]
-}
-
 /// Runs the join script against one server and saves the trace.
 async fn record_join(
     env: &ParityEnv,
@@ -137,7 +43,11 @@ async fn record_join(
     addr: SocketAddr,
     file: &str,
 ) -> Trace {
-    let steps = join_steps(env, &ids, addr.port());
+    let mut steps = join_steps(env, &ids, addr.port());
+    // Everything the server sends on joining: the join sequence and any
+    // chunks it decides to send right away. Two seconds of silence ends
+    // the recording early.
+    steps.push(Step::quiet(Duration::from_secs(2), Duration::from_secs(45)));
     let mut client = Client::connect(target, addr, Arc::clone(&ids))
         .await
         .expect("connect to the server");

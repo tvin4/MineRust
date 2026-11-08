@@ -18,7 +18,7 @@ mod login;
 mod play;
 mod status;
 
-pub use chunk::{ChunkBatchFinished, ChunkBatchStart, LevelChunkWithLight};
+pub use chunk::{ChunkBatchFinished, ChunkBatchReceived, ChunkBatchStart, LevelChunkWithLight};
 pub use chunk_payload::{
     set_bits, BlockEntity, ChunkSection, HeightmapRecord, LightData, PaletteContainer, BIOME_CELLS,
     BLOCK_CELLS, LIGHT_ARRAY_BYTES,
@@ -88,6 +88,7 @@ pub fn used_packet_keys() -> &'static [PacketKey] {
         ChunkBatchStart::KEY,
         ChunkBatchFinished::KEY,
         // play, serverbound
+        ChunkBatchReceived::KEY,
         ConfirmTeleportation::KEY,
         KeepAlive::SERVERBOUND_KEY,
         ClientInformation::PLAY_KEY,

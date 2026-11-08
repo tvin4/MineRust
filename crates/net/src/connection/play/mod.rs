@@ -1,17 +1,20 @@
 //! The play state: the join sequence, the keep-alive loop and the chunk
 //! batches of the world.
 
+mod chunk_pace;
 mod keep_alive;
 
 #[cfg(test)]
 mod tests;
 
+use chunk_pace::ChunkPace;
+
 use data::{GameData, PacketIds};
 use protocol::{
-    decode_frame, offline_uuid, ChunkBatchFinished, ChunkBatchStart, ClientInformation,
-    ConfirmTeleportation, GameEvent, KeepAlive, LevelChunkWithLight, LoginPlay, PlayerInfoEntry,
-    PlayerInfoUpdate, Position, SetCenterChunk, SetDefaultSpawnPosition, StatusInfo,
-    SynchronizePlayerPosition, MAX_STRING_CHARS, MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT,
+    decode_frame, offline_uuid, ChunkBatchFinished, ChunkBatchReceived, ChunkBatchStart,
+    ClientInformation, ConfirmTeleportation, GameEvent, KeepAlive, LevelChunkWithLight, LoginPlay,
+    PlayerInfoEntry, PlayerInfoUpdate, Position, SetCenterChunk, SetDefaultSpawnPosition,
+    StatusInfo, SynchronizePlayerPosition, MAX_STRING_CHARS, MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT,
     MOVE_PLAYER_ROT, MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -291,6 +294,9 @@ where
     let mut keep_alive =
         tokio::time::interval_at(Instant::now() + KEEP_ALIVE_INTERVAL, KEEP_ALIVE_INTERVAL);
     let mut watch = KeepAliveWatch::default();
+    // Step 3.3d: no pace until the client names one — the join burst is
+    // sent whole, as the vanilla recording frames it.
+    let mut pace = ChunkPace::default();
     loop {
         tokio::select! {
             // The client must answer the outstanding keep-alive in time,
@@ -308,7 +314,7 @@ where
             result = batch_reply(&mut loading), if loading.is_some() => {
                 loading = None;
                 match result {
-                    Ok(Ok(chunks)) => write_chunk_batch(&mut writer, ids, chunks).await?,
+                    Ok(Ok(chunks)) => write_chunk_batch(&mut writer, ids, chunks, &pace).await?,
                     Ok(Err(err)) => warn!(%err, "world read failed, no chunks sent"),
                     Err(err) => warn!(%err, "chunk loader dropped the reply"),
                 }
@@ -339,6 +345,16 @@ where
                         payload.ensure_empty()?;
                         debug!(keep_alive_id = keep_alive.id, "keep alive answered");
                         watch.on_acked();
+                    }
+                    // Step 3.3d: the client names the pace it wants the
+                    // following bursts in; the connection ignores claims
+                    // that are not a sane rate (chunk_pace keeps the old
+                    // one instead).
+                    id if id == ids.id(ChunkBatchReceived::KEY) => {
+                        let ack = ChunkBatchReceived::decode_payload(&mut payload)?;
+                        payload.ensure_empty()?;
+                        debug!(chunks_per_tick = ack.chunks_per_tick, "chunk pace chosen");
+                        pace.ack(ack.chunks_per_tick);
                     }
                     id if id == ids.id(ClientInformation::PLAY_KEY) => {
                         let info = ClientInformation::decode_payload(&mut payload)?;
@@ -394,6 +410,11 @@ async fn batch_reply(
 /// one `level_chunk_with_light` per payload, `chunk_batch_finished` with
 /// the number of chunks in between.
 ///
+/// With a pace the client confirmed (step 3.3d) the burst is cut into
+/// sub-batches of that size, each framed identically and sent one game
+/// tick apart; without one the burst goes out in a single piece, as the
+/// recording shows it. An empty read keeps its empty start/finished pair.
+///
 /// SOURCE: parity trace of vanilla 26.3 — one start marker, nine payloads
 /// and a finished marker whose VarInt equals the payload count (walked by
 /// the parity test `blob_walk`; the recorded order of the burst itself).
@@ -401,7 +422,49 @@ async fn write_chunk_batch<W>(
     writer: &mut W,
     ids: &PacketIds,
     chunks: Vec<LevelChunkWithLight>,
+    pace: &ChunkPace,
 ) -> Result<(), ConnectionError>
+where
+    W: AsyncWrite + Unpin,
+{
+    let per_batch = pace
+        .sub_batch_size(chunks.len())
+        .unwrap_or_else(|| chunks.len().max(1));
+    let mut left = chunks.into_iter();
+    let mut total = 0_i32;
+    let mut batches = 0_u32;
+    loop {
+        let group: Vec<_> = left.by_ref().take(per_batch).collect();
+        if group.is_empty() {
+            if batches == 0 {
+                // An empty read still frames its own (empty) batch.
+                write_sub_batch(writer, ids, Vec::new()).await?;
+            }
+            debug!(
+                chunk_count = total,
+                sub_batches = batches.max(1),
+                "chunk batch sent"
+            );
+            return Ok(());
+        }
+        if batches > 0 {
+            // One sub-batch per game tick of the client's own pace; the
+            // pause only holds this branch — the keep-alive interval and
+            // the deadline tick of their own tasks meanwhile.
+            tokio::time::sleep(chunk_pace::TICK).await;
+        }
+        total += write_sub_batch(writer, ids, group).await?;
+        batches += 1;
+    }
+}
+
+/// Writes one `chunk_batch_start` … `chunk_batch_finished` pair around
+/// `chunks`, with the finished count equal to what was sent in between.
+async fn write_sub_batch<W>(
+    writer: &mut W,
+    ids: &PacketIds,
+    chunks: Vec<LevelChunkWithLight>,
+) -> Result<i32, ConnectionError>
 where
     W: AsyncWrite + Unpin,
 {
@@ -424,6 +487,5 @@ where
         &finished.encode_payload(),
     )
     .await?;
-    debug!(chunk_count, "chunk batch sent");
-    Ok(())
+    Ok(chunk_count)
 }
