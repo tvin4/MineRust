@@ -3,14 +3,14 @@
 use data::{GameData, PacketIds};
 use protocol::{
     decode_frame, offline_uuid, ClientInformation, FinishAck, FinishConfiguration, GameProfile,
-    LoginAcknowledged, LoginStart, LoginSuccess, RegistryData, RegistryEntry, UpdateTags,
-    CONFIGURATION_PLUGIN_MESSAGE, MAX_STRING_CHARS,
+    LoginAcknowledged, LoginStart, LoginSuccess, ProtocolState, RegistryData, RegistryEntry,
+    UpdateTags, CONFIGURATION_PLUGIN_MESSAGE, MAX_STRING_CHARS,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{debug, info};
 
 use crate::error::ConnectionError;
-use crate::frame::{read_frame, write_frame};
+use crate::frame::{read_tracked, write_tracked};
 
 /// Serves the login state: Login Start is answered with Login Success and
 /// the client confirms with Login Acknowledged to reach configuration,
@@ -28,7 +28,7 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let body = read_frame(reader).await?;
+    let body = read_tracked(reader, ProtocolState::Login).await?;
     let (packet_id, mut payload) = decode_frame(&body)?;
     if packet_id != ids.id(LoginStart::KEY) {
         return Err(ConnectionError::UnexpectedPacket {
@@ -56,14 +56,15 @@ where
         // SOURCE: parity recording of vanilla 26.3 (behaviour-level).
         session_id: random_session_uuid()?,
     };
-    write_frame(
+    write_tracked(
         writer,
+        ProtocolState::Login,
         ids.id(LoginSuccess::KEY),
         &success.encode_payload()?,
     )
     .await?;
 
-    let body = read_frame(reader).await?;
+    let body = read_tracked(reader, ProtocolState::Login).await?;
     let (packet_id, mut payload) = decode_frame(&body)?;
     if packet_id != ids.id(LoginAcknowledged::KEY) {
         return Err(ConnectionError::UnexpectedPacket {
@@ -105,13 +106,26 @@ where
                 })
                 .collect(),
         };
-        write_frame(writer, ids.id(RegistryData::KEY), &packet.encode_payload()?).await?;
+        write_tracked(
+            writer,
+            ProtocolState::Configuration,
+            ids.id(RegistryData::KEY),
+            &packet.encode_payload()?,
+        )
+        .await?;
     }
 
     let tags = game_data.tags_packet();
-    write_frame(writer, ids.id(UpdateTags::KEY), &tags.encode_payload()?).await?;
-    write_frame(
+    write_tracked(
         writer,
+        ProtocolState::Configuration,
+        ids.id(UpdateTags::KEY),
+        &tags.encode_payload()?,
+    )
+    .await?;
+    write_tracked(
+        writer,
+        ProtocolState::Configuration,
         ids.id(FinishConfiguration::KEY),
         &FinishConfiguration.encode_payload(),
     )
@@ -123,7 +137,7 @@ where
     );
 
     loop {
-        let body = read_frame(reader).await?;
+        let body = read_tracked(reader, ProtocolState::Configuration).await?;
         let (packet_id, mut payload) = decode_frame(&body)?;
         match packet_id {
             id if id == ids.id(ClientInformation::KEY) => {

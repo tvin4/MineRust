@@ -10,6 +10,8 @@ description = "Tokio networking layer for the MineRust server"
 data = { path = "../data" }
 getrandom = { workspace = true }
 protocol = { path = "../protocol" }
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

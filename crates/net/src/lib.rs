@@ -9,6 +9,7 @@ mod connection;
 mod error;
 mod frame;
 pub mod loader;
+pub mod trace;
 
 pub use connection::{serve, WorldInfo};
 pub use error::ConnectionError;

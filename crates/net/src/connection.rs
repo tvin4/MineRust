@@ -13,15 +13,15 @@ use std::time::Duration;
 
 use data::{GameData, PacketIds};
 use protocol::{
-    decode_frame, Handshake, NextState, PingRequest, PongResponse, StatusInfo, StatusRequest,
-    StatusResponse,
+    decode_frame, Handshake, NextState, PingRequest, PongResponse, ProtocolState, StatusInfo,
+    StatusRequest, StatusResponse,
 };
 use tokio::io::{AsyncRead, AsyncWrite, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{debug, warn};
 
 use crate::error::ConnectionError;
-use crate::frame::{read_frame, write_frame};
+use crate::frame::{read_tracked, write_tracked};
 use crate::loader::Loader;
 
 pub use play::WorldInfo;
@@ -95,7 +95,7 @@ async fn handle_connection(
     let mut reader = BufReader::new(read_half);
     let mut writer = write_half;
 
-    let body = with_timeout(read_frame(&mut reader)).await?;
+    let body = with_timeout(read_tracked(&mut reader, ProtocolState::Handshake)).await?;
     let (packet_id, mut payload) = decode_frame(&body)?;
     if packet_id != ids.id(Handshake::KEY) {
         return Err(ConnectionError::UnexpectedPacket {
@@ -158,7 +158,7 @@ where
     W: AsyncWrite + Unpin,
 {
     loop {
-        let body = read_frame(reader).await?;
+        let body = read_tracked(reader, ProtocolState::Status).await?;
         let (packet_id, mut payload) = decode_frame(&body)?;
         match packet_id {
             // A client may also send a ping without a preceding request.
@@ -167,8 +167,9 @@ where
                 let response = StatusResponse {
                     json: status.to_json(),
                 };
-                write_frame(
+                write_tracked(
                     writer,
+                    ProtocolState::Status,
                     ids.id(StatusResponse::KEY),
                     &response.encode_payload()?,
                 )
@@ -180,7 +181,13 @@ where
                 let pong = PongResponse {
                     payload: ping.payload,
                 };
-                write_frame(writer, ids.id(PongResponse::KEY), &pong.encode_payload()).await?;
+                write_tracked(
+                    writer,
+                    ProtocolState::Status,
+                    ids.id(PongResponse::KEY),
+                    &pong.encode_payload(),
+                )
+                .await?;
                 // The protocol says the connection closes after the pong.
                 return Ok(());
             }

@@ -4,10 +4,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use protocol::PacketKey;
+use protocol::{
+    GameEvent, LoginPlay, PacketKey, PlayerInfoUpdate, SetCenterChunk, SetDefaultSpawnPosition,
+    SynchronizePlayerPosition,
+};
 use tokio::io::{AsyncWriteExt, BufReader};
 
 use super::*;
+use crate::frame::read_frame;
 
 /// World source whose read parks at a barrier: the pool worker sits in
 /// the "disk read" until the test releases it.
@@ -207,7 +211,9 @@ async fn a_confirmed_pace_splits_a_burst_into_tick_sized_sub_batches() {
                 ..one_payload()
             })
             .collect();
-        write_chunk_batch(&mut server_write, &ids_in_task, chunks, &pace).await
+        // Centre 0,0 keeps every chunk of this fixture in view (the
+        // radius check of the diagnostics log stays silent here).
+        write_chunk_batch(&mut server_write, &ids_in_task, chunks, &pace, 0, 0).await
     });
 
     let mut client = BufReader::new(client);

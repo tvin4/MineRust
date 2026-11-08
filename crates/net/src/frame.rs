@@ -1,9 +1,15 @@
 //! Async packet framing over tokio streams.
+//!
+//! Two of its helpers are instrumented: [`read_tracked`] and
+//! [`write_tracked`] frame a packet exactly like [`read_frame`] and
+//! [`write_frame`], but report every packet to [`crate::trace`] — the
+//! session recording and the ordered `debug` log of the live diagnostics.
 
-use protocol::{check_frame_len, decode_varint, encode_frame, CodecError};
+use protocol::{check_frame_len, decode_varint, encode_frame, CodecError, ProtocolState};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::error::ConnectionError;
+use crate::trace;
 
 /// Reads one length-prefixed packet frame and returns its body (packet id +
 /// payload).
@@ -52,6 +58,40 @@ where
     let frame = encode_frame(packet_id, payload)?;
     writer.write_all(&frame).await?;
     writer.flush().await?;
+    Ok(())
+}
+
+/// Reads one frame and records it as a packet of `state` received from the
+/// client. The recording happens before the caller decodes the packet, so a
+/// malformed payload still appears in the trace with its true size.
+pub(crate) async fn read_tracked<R>(
+    reader: &mut R,
+    state: ProtocolState,
+) -> Result<Vec<u8>, ConnectionError>
+where
+    R: AsyncRead + Unpin,
+{
+    let body = read_frame(reader).await?;
+    let (id, consumed) = decode_varint(&body)?;
+    let id = u32::try_from(id).map_err(|_| CodecError::InvalidPacketId(id))?;
+    trace::received(state, id, &body[consumed..]);
+    Ok(body)
+}
+
+/// Writes one frame and records it as a packet of `state` sent to the
+/// client. Only what actually left the server is recorded, so a failed
+/// write never shows up in the trace.
+pub(crate) async fn write_tracked<W>(
+    writer: &mut W,
+    state: ProtocolState,
+    packet_id: u32,
+    payload: &[u8],
+) -> Result<(), ConnectionError>
+where
+    W: AsyncWrite + Unpin,
+{
+    write_frame(writer, packet_id, payload).await?;
+    trace::sent(state, packet_id, payload);
     Ok(())
 }
 

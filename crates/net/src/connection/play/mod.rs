@@ -2,6 +2,7 @@
 //! batches of the world.
 
 mod chunk_pace;
+mod join;
 mod keep_alive;
 
 #[cfg(test)]
@@ -11,11 +12,10 @@ use chunk_pace::ChunkPace;
 
 use data::{GameData, PacketIds};
 use protocol::{
-    decode_frame, offline_uuid, ChunkBatchFinished, ChunkBatchReceived, ChunkBatchStart,
-    ClientInformation, ConfirmTeleportation, GameEvent, KeepAlive, LevelChunkWithLight, LoginPlay,
-    PlayerInfoEntry, PlayerInfoUpdate, Position, SetCenterChunk, SetDefaultSpawnPosition,
-    StatusInfo, SynchronizePlayerPosition, MAX_STRING_CHARS, MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT,
-    MOVE_PLAYER_ROT, MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
+    decode_frame, ChunkBatchFinished, ChunkBatchReceived, ChunkBatchStart, ClientInformation,
+    ConfirmTeleportation, KeepAlive, LevelChunkWithLight, Position, ProtocolState, StatusInfo,
+    MAX_STRING_CHARS, MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT,
+    MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::oneshot;
@@ -23,7 +23,7 @@ use tokio::time::Instant;
 use tracing::{debug, info, trace, warn};
 
 use crate::error::ConnectionError;
-use crate::frame::{read_frame, write_frame};
+use crate::frame::{read_tracked, write_tracked};
 use crate::loader::{LoadError, Loader};
 
 use keep_alive::{keep_alive_millis, wait_for_deadline, KeepAliveWatch, KEEP_ALIVE_INTERVAL};
@@ -121,152 +121,45 @@ where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
 {
-    // Numeric dimension type id of the world the player joins. The empty
-    // game data of tests has no registries, so fall back with a warning.
-    let dimension_type = match game_data
-        .registry(DIMENSION_TYPE_REGISTRY)
-        .and_then(|registry| registry.entry_id(OVERWORLD))
-    {
-        Some(id) => id,
-        None => {
-            warn!(
-                registry = DIMENSION_TYPE_REGISTRY,
-                entry = OVERWORLD,
-                "dimension type entry missing, falling back to id 0"
-            );
-            0
-        }
-    };
-    // The dimension list carries the world's dimensions, not the dimension
-    // types of the registry: the vanilla join recording lists exactly the
-    // three dimensions of its own world and omits `minecraft:overworld_caves`,
-    // which the registry does contain.
-    // SOURCE: half-verified (the recording proves "not the registry"; the
-    // world itself arrives with the world template in part 3). Our world is
-    // the overworld alone for now.
-    let dimension_names = vec![OVERWORLD.to_owned()];
-
-    let login = LoginPlay {
-        entity_id: ENTITY_ID,
-        hardcore: false,
-        dimension_names,
-        max_players: status.max_players,
-        view_distance: VIEW_DISTANCE,
-        simulation_distance: VIEW_DISTANCE,
-        reduced_debug_info: false,
-        enable_respawn_screen: true,
-        do_limited_crafting: false,
-        dimension_type,
-        dimension_name: OVERWORLD.to_owned(),
-        // Step 3.3e: `world_gen_settings.dat`'s seed, hashed by the
-        // formula the parity recording verified (test `login_fields`);
-        // without a world the default stays zero.
-        hashed_seed: world.info.hashed_seed,
-        game_mode: 0,
-        previous_game_mode: 0,
-        is_debug: false,
-        is_flat: false,
-        death_location: None,
-        portal_cooldown: 0,
-        sea_level: SEA_LEVEL,
-        online_mode: false,
-        enforces_secure_chat: false,
-    };
-    write_frame(
+    // Packet 1..6 of the join (module documentation) — recorded packet by
+    // packet by the session trace as they go out.
+    join::send_join(
         &mut writer,
-        ids.id(LoginPlay::KEY),
-        &login.encode_payload()?,
+        game_data,
+        status,
+        player_name,
+        ids,
+        &world.info,
     )
     .await?;
-
-    // Step 3.3e: the spawn of the save (`level.dat`) is where the player
-    // joins — it also drives the chunk cache centre below, which vanilla
-    // takes from the player's position.
-    let spawn = SetDefaultSpawnPosition {
-        dimension: OVERWORLD.to_owned(),
-        position: world.info.spawn,
-        yaw: 0.0,
-        pitch: 0.0,
-    };
-    write_frame(
-        &mut writer,
-        ids.id(SetDefaultSpawnPosition::KEY),
-        &spawn.encode_payload()?,
-    )
-    .await?;
-
-    let uuid = offline_uuid(player_name);
-    let info = PlayerInfoUpdate {
-        players: vec![PlayerInfoEntry {
-            uuid,
-            name: player_name.to_owned(),
-            properties: Vec::new(),
-            game_mode: 0,
-            listed: true,
-            latency: 0,
-        }],
-    };
-    write_frame(
-        &mut writer,
-        ids.id(PlayerInfoUpdate::KEY),
-        &info.encode_payload()?,
-    )
-    .await?;
-
-    // Centre of the cache: the position the player joined at (`spawn`),
-    // expressed in chunks — vanilla keeps its view centred on the player.
-    let center = SetCenterChunk {
-        chunk_x: world.info.spawn.x >> 4,
-        chunk_z: world.info.spawn.z >> 4,
-    };
-    write_frame(
-        &mut writer,
-        ids.id(SetCenterChunk::KEY),
-        &center.encode_payload(),
-    )
-    .await?;
-
-    // Without event 13 the client stays on its loading screen.
-    // SOURCE: wiki, unverified: the event id and the "close the loading
-    // screen" effect were observed as documented, not compared to vanilla.
-    let event = GameEvent {
-        event: GameEvent::START_WAITING_FOR_CHUNKS,
-        value: 0.0,
-    };
-    write_frame(&mut writer, ids.id(GameEvent::KEY), &event.encode_payload()).await?;
-
-    let teleport = SynchronizePlayerPosition {
-        teleport_id: JOIN_TELEPORT_ID,
-        x: f64::from(world.info.spawn.x) + 0.5,
-        y: f64::from(world.info.spawn.y),
-        z: f64::from(world.info.spawn.z) + 0.5,
-        velocity_x: 0.0,
-        velocity_y: 0.0,
-        velocity_z: 0.0,
-        yaw: 0.0,
-        pitch: 0.0,
-        flags: 0, // fully absolute teleport
-    };
-    write_frame(
-        &mut writer,
-        ids.id(SynchronizePlayerPosition::KEY),
-        &teleport.encode_payload(),
-    )
-    .await?;
-    info!(player = %player_name, entity_id = ENTITY_ID, "player joined");
 
     // Queue the world read right away: from here on the pool owns disk I/O
     // and payload building, this task only selects on the reply channel.
     let mut loading = match &world.loader {
         Some(loader) => match loader.load_batch().await {
-            Ok(pending) => Some(pending),
+            Ok(pending) => {
+                info!(player = %player_name, "chunk batch requested from the loader");
+                Some(pending)
+            }
             Err(err) => {
                 warn!(%err, "chunk loader unavailable, no chunks will be sent");
                 None
             }
         },
-        None => None,
+        None => {
+            // The configuration refuses to start without a world (server
+            // crate); this still fires for in-process servers started by
+            // tests directly through `net::serve`.
+            warn!(
+                player = %player_name,
+                "no chunk loader: this server sends no chunks at all"
+            );
+            None
+        }
     };
+    // The client's chunk cache centre lives around the spawn; used below to
+    // flag any chunk that arrives from outside the announced radius.
+    let (center_x, center_z) = (world.info.spawn.x >> 4, world.info.spawn.z >> 4);
 
     // Frames are read on a background task: reading must survive the
     // select-loop branches below (a cancelled frame read would drop bytes
@@ -277,7 +170,7 @@ where
     tokio::spawn(async move {
         let mut reader = reader;
         loop {
-            match read_frame(&mut reader).await {
+            match read_tracked(&mut reader, ProtocolState::Play).await {
                 Ok(body) => {
                     if frame_tx.send(Ok(body)).await.is_err() {
                         break;
@@ -306,7 +199,13 @@ where
             }
             _ = keep_alive.tick() => {
                 let packet = KeepAlive { id: keep_alive_millis() };
-                write_frame(&mut writer, ids.id(KeepAlive::KEY), &packet.encode_payload()).await?;
+                write_tracked(
+                    &mut writer,
+                    ProtocolState::Play,
+                    ids.id(KeepAlive::KEY),
+                    &packet.encode_payload(),
+                )
+                .await?;
                 watch.on_sent(Instant::now());
             }
             // The world read finished: the batch goes out here, in its own
@@ -314,7 +213,11 @@ where
             result = batch_reply(&mut loading), if loading.is_some() => {
                 loading = None;
                 match result {
-                    Ok(Ok(chunks)) => write_chunk_batch(&mut writer, ids, chunks, &pace).await?,
+                    Ok(Ok(chunks)) => {
+                        info!(found = chunks.len(), "world read finished, chunks found");
+                        write_chunk_batch(&mut writer, ids, chunks, &pace, center_x, center_z)
+                            .await?;
+                    }
                     Ok(Err(err)) => warn!(%err, "world read failed, no chunks sent"),
                     Err(err) => warn!(%err, "chunk loader dropped the reply"),
                 }
@@ -353,7 +256,12 @@ where
                     id if id == ids.id(ChunkBatchReceived::KEY) => {
                         let ack = ChunkBatchReceived::decode_payload(&mut payload)?;
                         payload.ensure_empty()?;
-                        debug!(chunks_per_tick = ack.chunks_per_tick, "chunk pace chosen");
+                        // The pacing floats: the client names how many
+                        // chunks per tick it wants in the next bursts.
+                        info!(
+                            chunks_per_tick = ack.chunks_per_tick,
+                            "chunk_batch_received: pace chosen by the client"
+                        );
                         pace.ack(ack.chunks_per_tick);
                     }
                     id if id == ids.id(ClientInformation::PLAY_KEY) => {
@@ -423,6 +331,8 @@ async fn write_chunk_batch<W>(
     ids: &PacketIds,
     chunks: Vec<LevelChunkWithLight>,
     pace: &ChunkPace,
+    center_x: i32,
+    center_z: i32,
 ) -> Result<(), ConnectionError>
 where
     W: AsyncWrite + Unpin,
@@ -438,9 +348,9 @@ where
         if group.is_empty() {
             if batches == 0 {
                 // An empty read still frames its own (empty) batch.
-                write_sub_batch(writer, ids, Vec::new()).await?;
+                write_sub_batch(writer, ids, Vec::new(), center_x, center_z).await?;
             }
-            debug!(
+            info!(
                 chunk_count = total,
                 sub_batches = batches.max(1),
                 "chunk batch sent"
@@ -453,23 +363,32 @@ where
             // the deadline tick of their own tasks meanwhile.
             tokio::time::sleep(chunk_pace::TICK).await;
         }
-        total += write_sub_batch(writer, ids, group).await?;
+        total += write_sub_batch(writer, ids, group, center_x, center_z).await?;
         batches += 1;
     }
 }
 
 /// Writes one `chunk_batch_start` … `chunk_batch_finished` pair around
 /// `chunks`, with the finished count equal to what was sent in between.
+///
+/// Every chunk is logged with its coordinates and payload size, and one
+/// outside the view square around `center` (as the join announced it) is
+/// warned about: the client does not know such a chunk and drops it — the
+/// live check reads exactly this from the log.
 async fn write_sub_batch<W>(
     writer: &mut W,
     ids: &PacketIds,
     chunks: Vec<LevelChunkWithLight>,
+    center_x: i32,
+    center_z: i32,
 ) -> Result<i32, ConnectionError>
 where
     W: AsyncWrite + Unpin,
 {
-    write_frame(
+    debug!(center_x, center_z, "chunk_batch_start sent");
+    write_tracked(
         writer,
+        ProtocolState::Play,
         ids.id(ChunkBatchStart::KEY),
         &ChunkBatchStart.encode_payload(),
     )
@@ -477,15 +396,45 @@ where
     let mut chunk_count = 0_i32;
     for chunk in chunks {
         let payload = chunk.encode_payload()?;
-        write_frame(writer, ids.id(LevelChunkWithLight::KEY), &payload).await?;
+        if outside_view(chunk.chunk_x, chunk.chunk_z, center_x, center_z) {
+            warn!(
+                chunk_x = chunk.chunk_x,
+                chunk_z = chunk.chunk_z,
+                center_x,
+                center_z,
+                view_distance = VIEW_DISTANCE,
+                "chunk outside the cache centre/radius: the client does not know it"
+            );
+        }
+        info!(
+            chunk_x = chunk.chunk_x,
+            chunk_z = chunk.chunk_z,
+            size = payload.len(),
+            "level_chunk_with_light sent"
+        );
+        write_tracked(
+            writer,
+            ProtocolState::Play,
+            ids.id(LevelChunkWithLight::KEY),
+            &payload,
+        )
+        .await?;
         chunk_count += 1;
     }
     let finished = ChunkBatchFinished { chunk_count };
-    write_frame(
+    write_tracked(
         writer,
+        ProtocolState::Play,
         ids.id(ChunkBatchFinished::KEY),
         &finished.encode_payload(),
     )
     .await?;
+    info!(chunk_count, "chunk_batch_finished sent");
     Ok(chunk_count)
+}
+
+/// Whether a chunk lies outside the square of view-distance side the client
+/// keeps loaded around `center` (as announced by Set Center Chunk).
+fn outside_view(chunk_x: i32, chunk_z: i32, center_x: i32, center_z: i32) -> bool {
+    (chunk_x - center_x).abs() > VIEW_DISTANCE || (chunk_z - center_z).abs() > VIEW_DISTANCE
 }
