@@ -122,7 +122,8 @@ fn load_packet_ids(config: &ServerConfig) -> Result<Arc<data::PacketIds>, RunErr
 }
 
 /// Builds the chunk loader pool and the join values (`net::WorldInfo`) of
-/// the configured world.
+/// the configured world: the save supplies spawn and hashed seed, the
+/// configuration supplies `view_distance` and `simulation_distance`.
 ///
 /// Every path is demanded by [`require_chunk_paths`] at the top of `run`
 /// first, so `world_dir` is always set here — the `None` branch only stays
@@ -140,7 +141,16 @@ pub fn build_world(
         // Only reachable when `run` was bypassed; `run` refuses to start
         // without a world (require_chunk_paths).
         tracing::warn!("no world_dir configured: the server sends no chunks");
-        return Ok((None, net::WorldInfo::default()));
+        // The configured distances still reach Login (play): they belong
+        // to the configuration, not to the save.
+        return Ok((
+            None,
+            net::WorldInfo {
+                view_distance: config.view_distance,
+                simulation_distance: config.simulation_distance,
+                ..net::WorldInfo::default()
+            },
+        ));
     };
     let root = Path::new(dir);
     let level = world::read_level_dat(root.join("level.dat"))?;
@@ -155,9 +165,13 @@ pub fn build_world(
     }
     // Step 3.3e: the seed of the save travels into Login (play) hashed by
     // the formula the vanilla recording verified (parity test `login_fields`).
+    // The two chunk distances come from `server.toml` (both default to the
+    // vanilla 10 of the `login_fields` recording).
     let info = net::WorldInfo {
         spawn: level.spawn,
         hashed_seed: protocol::hashed_seed(settings.seed),
+        view_distance: config.view_distance,
+        simulation_distance: config.simulation_distance,
     };
     let blocks = match config.blocks_report.as_deref() {
         Some(path) => {
@@ -186,6 +200,8 @@ pub fn build_world(
         spawn_x = info.spawn.x,
         spawn_y = info.spawn.y,
         spawn_z = info.spawn.z,
+        view_distance = info.view_distance,
+        simulation_distance = info.simulation_distance,
         %dir,
         "world configured"
     );
@@ -276,6 +292,8 @@ mod tests {
             world_dir: None,
             vanilla_server_jar: None,
             vanilla_server_dir: None,
+            view_distance: config::DEFAULT_DISTANCES,
+            simulation_distance: config::DEFAULT_DISTANCES,
         }
     }
 
@@ -420,8 +438,10 @@ mod tests {
                     z: -32
                 },
                 hashed_seed: protocol::hashed_seed(12345),
+                view_distance: config.view_distance,
+                simulation_distance: config.simulation_distance,
             },
-            "spawn from level.dat, seed hashed the verified way"
+            "spawn and seed from the save, distances from the config"
         );
         drop(loader);
         let _ = std::fs::remove_dir_all(&root);

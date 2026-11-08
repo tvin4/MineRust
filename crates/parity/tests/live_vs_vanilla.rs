@@ -41,7 +41,8 @@ const CHUNK_PACKET_ID: u32 = 0x2E;
 
 /// View distance the server announces in Login (play): the radius of the
 /// square around the centre every allowed chunk must fall in.
-// SOURCE: our own `net` join constant, documented in server.example.toml.
+// SOURCE: our own `view_distance` (`server.toml`, default 10, documented in
+// server.example.toml) — the radius Login (play) announces.
 const VIEW_DISTANCE: i32 = 10;
 
 /// Where recordings land: `<workspace>/target/parity/`.

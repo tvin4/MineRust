@@ -41,26 +41,27 @@ const DIMENSION_TYPE_REGISTRY: &str = "minecraft:dimension_type";
 /// Entity id assigned to the single player of a connection.
 const ENTITY_ID: i32 = 1;
 
-/// View distance the server announces in Login (play) **and the largest
-/// radius it ever sends**: the radius of a connection is the client's own
-/// request capped by this server maximum (`send_radius`), so Login never
-/// promises more than the server is willing to send.
-// SOURCE: wiki, unverified: the vanilla value is 10 (read from the login
-// recording by the parity test `login_fields`, it is not in the game data).
-const VIEW_DISTANCE: i32 = 10;
-
 /// Sea level sent in Login (play).
 // SOURCE: wiki, unverified: vanilla value, not read from the game data.
 const SEA_LEVEL: i32 = 63;
+
+/// Both distances Login (play) announces when no config was passed (the
+/// parity slices and the unit tests build a server without `server.toml`):
+/// the same 10/10 the real server's `server.toml` fields default to
+/// (`server::DEFAULT_DISTANCES`).
+const DEFAULT_DISTANCES: i32 = 10;
 
 /// Spawn block of the empty world; the player teleports to its centre.
 const EMPTY_SPAWN: Position = Position { x: 8, y: 64, z: 8 };
 
 /// What the play loop knows about the world a connection joins.
 ///
-/// The server reads both values from the save at startup (step 3.3e):
-/// `spawn` is `Data.spawn.pos` of `level.dat`, `hashed_seed` is the hash
-/// of `world_gen_settings.dat`'s `seed`. The default is the empty M2
+/// `spawn` and `hashed_seed` are read from the save at startup (step
+/// 3.3e): `spawn` is `Data.spawn.pos` of `level.dat`, `hashed_seed` is
+/// the hash of `world_gen_settings.dat`'s `seed`; `view_distance` and
+/// `simulation_distance` come from `server.toml` (both default to
+/// [`DEFAULT_DISTANCES`]) and are announced in Login (play). The default
+/// is the empty M2
 /// world — centre block eight and no seed — so a server without a world
 /// behaves exactly as before (parity slices included).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +71,20 @@ pub struct WorldInfo {
     pub spawn: Position,
     /// `hashed_seed` of Login (play): the seed's hash, zero without a world.
     pub hashed_seed: i64,
+    /// View distance announced in Login (play) (`server.toml`,
+    /// `view_distance`) **and the largest radius this server ever sends**:
+    /// the radius of a connection is the client's own request capped by
+    /// this maximum (`send_radius`), so Login never promises more than the
+    /// server is willing to send.
+    // SOURCE: the parity test `login_fields` reads 10 out of the vanilla
+    // login; 10 is also what `server.toml` defaults the field to.
+    pub view_distance: i32,
+    /// Simulation distance announced in Login (play) (`server.toml`,
+    /// `simulation_distance`). Nothing is simulated yet — the field only
+    /// announces the number (M4 and later use it).
+    // SOURCE: the parity test `login_fields` reads 10 out of the vanilla
+    // login; 10 is also what `server.toml` defaults the field to.
+    pub simulation_distance: i32,
 }
 
 impl Default for WorldInfo {
@@ -77,6 +92,8 @@ impl Default for WorldInfo {
         Self {
             spawn: EMPTY_SPAWN,
             hashed_seed: 0,
+            view_distance: DEFAULT_DISTANCES,
+            simulation_distance: DEFAULT_DISTANCES,
         }
     }
 }
@@ -132,9 +149,10 @@ where
     let player_name = client.player_name.as_str();
     // Chunks go out inside this radius only: what the client asked for in
     // configuration, never more than Login (play) announced (part A, 6).
-    let radius = send_radius(client.view_distance);
+    let radius = send_radius(client.view_distance, world.info.view_distance);
     info!(
         client_view_distance = ?client.view_distance,
+        server_view_distance = world.info.view_distance,
         radius,
         player = %player_name,
         "chunk send radius chosen"
@@ -517,30 +535,57 @@ fn sort_by_distance(chunks: &mut [&LevelChunkWithLight], center_x: i32, center_z
 
 /// The radius this connection sends chunks in (the owner's rule, part A 6):
 /// the view distance the client asked for in configuration, capped by the
-/// maximum Login (play) announced. A client that asked for nothing — or
-/// for something impossible (a negative or absurdly large value) — gets
-/// the maximum the server announced, never less than nothing and never
-/// more than [`VIEW_DISTANCE`].
-fn send_radius(client_view_distance: Option<i32>) -> i32 {
-    client_view_distance.map_or(VIEW_DISTANCE, |requested| requested.clamp(0, VIEW_DISTANCE))
+/// maximum Login (play) announced — the first is the client's own
+/// `client_information`, the second is the server's `view_distance`
+/// (`server.toml`, default [`DEFAULT_DISTANCES`]). A client that asked for
+/// nothing — or for something impossible (a negative or absurdly large
+/// value) — gets the maximum the server announced, never less than nothing
+/// and never more than it.
+fn send_radius(client_view_distance: Option<i32>, server_view_distance: i32) -> i32 {
+    client_view_distance.map_or(server_view_distance, |requested| {
+        requested.clamp(0, server_view_distance)
+    })
 }
 
 #[cfg(test)]
 mod send_radius_tests {
-    use super::send_radius;
+    use super::{send_radius, DEFAULT_DISTANCES};
 
     #[test]
     fn the_radius_is_the_client_request_capped_by_the_server_maximum() {
-        assert_eq!(send_radius(Some(8)), 8, "the bot's own request");
-        assert_eq!(send_radius(Some(10)), 10, "the announced maximum");
-        assert_eq!(send_radius(Some(16)), 10, "a larger request is capped");
-        assert_eq!(send_radius(Some(32)), 10, "the client maximum is capped");
+        assert_eq!(send_radius(Some(8), 10), 8, "the bot's own request");
+        assert_eq!(send_radius(Some(10), 10), 10, "the announced maximum");
+        assert_eq!(send_radius(Some(16), 10), 10, "a larger request is capped");
+        assert_eq!(
+            send_radius(Some(32), 10),
+            10,
+            "the client maximum is capped"
+        );
+    }
+
+    #[test]
+    fn the_configured_server_view_distance_caps_its_own() {
+        assert_eq!(send_radius(None, 6), 6, "no request: the configured one");
+        assert_eq!(send_radius(Some(8), 6), 6, "a larger request is capped");
+        assert_eq!(send_radius(Some(3), 6), 3, "a smaller one stands");
     }
 
     #[test]
     fn a_missing_or_impossible_request_falls_back_safely() {
-        assert_eq!(send_radius(None), 10, "no request: the announced maximum");
-        assert_eq!(send_radius(Some(0)), 0, "never below what the client asks");
-        assert_eq!(send_radius(Some(-5)), 0, "an absurd request clamps down");
+        assert_eq!(
+            send_radius(None, DEFAULT_DISTANCES),
+            10,
+            "no request: the announced maximum"
+        );
+        assert_eq!(
+            send_radius(Some(0), 10),
+            0,
+            "never below what the client asks"
+        );
+        assert_eq!(
+            send_radius(Some(-5), 10),
+            0,
+            "an absurd request clamps down"
+        );
     }
 }

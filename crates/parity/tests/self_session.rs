@@ -39,7 +39,8 @@ use tracing_subscriber::util::SubscriberInitExt;
 const EXPECTED_CHUNK: (i32, i32) = (6, -2);
 
 /// Chunks of template v2 inside the send radius: the client asks for 8
-/// (`join_steps`), the server announces 10 (`net::VIEW_DISTANCE`), the
+/// (`join_steps`), the server announces 10 (`server.toml`,
+/// `view_distance`, defaulting to `server::DEFAULT_DISTANCES`), the
 /// template has 729 ready chunks — `min(8, 10)` gives the 17×17 square,
 /// and every chunk of that square is ready (`full`/`initialize_light`).
 /// Counted by `target/parity/chunk_status.py compare` (part A, 6).

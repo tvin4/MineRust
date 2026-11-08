@@ -9,6 +9,17 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+/// Value both chunk distances fall back to when the field is absent: the
+/// vanilla defaults the parity test `login_fields` reads out of the real
+/// server's join (`view_distance = 10`, `simulation_distance = 10`, the
+/// same numbers its `server.properties` slider advertises).
+pub const DEFAULT_DISTANCES: i32 = 10;
+
+/// Serde default shared by `view_distance` and `simulation_distance`.
+fn default_distances() -> i32 {
+    DEFAULT_DISTANCES
+}
+
 /// Errors while loading or validating the server configuration.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -83,6 +94,21 @@ pub struct ServerConfig {
     /// `tools/generate-reports.ps1`.
     #[serde(default)]
     pub blocks_report: Option<String>,
+    /// Chunks around the player the server announces it sends in Login
+    /// (play) — also the largest radius this server ever sends (the real
+    /// radius is min(this, the client's own request), see
+    /// `net::connection::play::send_radius`).
+    ///
+    /// Absent means [`DEFAULT_DISTANCES`] (both vanilla login fields
+    /// recorded by the parity test `login_fields` are 10).
+    #[serde(default = "default_distances")]
+    pub view_distance: i32,
+    /// Chunks around the player the server announces it keeps simulating
+    /// in Login (play). Nothing is simulated yet — this only announces the
+    /// number (M4 and later do the work); absent means
+    /// [`DEFAULT_DISTANCES`] like `view_distance`.
+    #[serde(default = "default_distances")]
+    pub simulation_distance: i32,
     /// Optional path to a saved world directory (step 3.3, M3).
     ///
     /// The directory is a world save: it holds `level.dat` (whose
@@ -117,6 +143,18 @@ impl ServerConfig {
             return Err(ConfigError::Invalid(format!(
                 "max_players must be positive, got {}",
                 self.max_players
+            )));
+        }
+        if self.view_distance <= 0 {
+            return Err(ConfigError::Invalid(format!(
+                "view_distance must be positive (chunks), got {}",
+                self.view_distance
+            )));
+        }
+        if self.simulation_distance <= 0 {
+            return Err(ConfigError::Invalid(format!(
+                "simulation_distance must be positive (chunks), got {}",
+                self.simulation_distance
             )));
         }
         if self.version_name.trim().is_empty() {
@@ -225,6 +263,41 @@ client_jar = "client.jar"
         let text = example_toml().replace("client.jar", "");
         let config: ServerConfig = toml::from_str(&text).expect("valid toml");
         assert!(matches!(config.validate(), Err(ConfigError::Invalid(_))));
+    }
+
+    #[test]
+    fn both_chunk_distances_default_to_the_vanilla_ten() {
+        let config: ServerConfig = toml::from_str(&example_toml()).expect("valid toml");
+        assert_eq!(config.view_distance, DEFAULT_DISTANCES, "default view");
+        assert_eq!(
+            config.simulation_distance, DEFAULT_DISTANCES,
+            "default simulation"
+        );
+        config.validate().expect("valid");
+    }
+
+    #[test]
+    fn parses_chunk_distances_from_the_file() {
+        let text = example_toml()
+            + r#"view_distance = 6
+simulation_distance = 4
+"#;
+        let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+        assert_eq!(config.view_distance, 6);
+        assert_eq!(config.simulation_distance, 4);
+        config.validate().expect("valid");
+    }
+
+    #[test]
+    fn rejects_a_distance_that_is_not_positive() {
+        for field in ["view_distance", "simulation_distance"] {
+            let text = example_toml() + &format!("{field} = 0\n");
+            let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+            assert!(
+                matches!(config.validate(), Err(ConfigError::Invalid(_))),
+                "{field} = 0 must be rejected"
+            );
+        }
     }
 
     #[test]

@@ -7,10 +7,17 @@
 
 listen = "0.0.0.0:25565"
 # Matches the vanilla `motd` (server.properties) so the status parity test
-# compares like with like; view/simulation distance in the code are 10 as
-# in the vanilla defaults.
+# compares like with like.
 motd = "A Minecraft Server"
 max_players = 20
+
+# Chunks announced in Login (play): view distance = the largest radius the
+# server sends (a client may ask for less in configuration, never for more),
+# simulation distance = announced, nothing is simulated yet. 10/10 is both
+# the vanilla `server.properties` default and what the parity test
+# `login_fields` reads out of a real server's join.
+view_distance = 10
+simulation_distance = 10
 
 # Path to the client jar of your game installation.
 client_jar = "path/to/client.jar"

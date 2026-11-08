@@ -30,7 +30,6 @@ use crate::frame::write_tracked;
 
 use super::{
     WorldInfo, DIMENSION_TYPE_REGISTRY, ENTITY_ID, JOIN_TELEPORT_ID, OVERWORLD, SEA_LEVEL,
-    VIEW_DISTANCE,
 };
 
 /// Sends the whole join sequence described in the module documentation.
@@ -78,8 +77,8 @@ where
         hardcore: false,
         dimension_names,
         max_players: status.max_players,
-        view_distance: VIEW_DISTANCE,
-        simulation_distance: VIEW_DISTANCE,
+        view_distance: info.view_distance,
+        simulation_distance: info.simulation_distance,
         reduced_debug_info: false,
         enable_respawn_screen: true,
         do_limited_crafting: false,
@@ -159,7 +158,7 @@ where
     info!(
         center_x = center.chunk_x,
         center_z = center.chunk_z,
-        view_distance = VIEW_DISTANCE,
+        view_distance = info.view_distance,
         "chunk cache centre sent"
     );
 
