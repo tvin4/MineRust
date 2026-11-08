@@ -87,7 +87,7 @@ fn section_record(
     refs: &dyn WireRefs,
 ) -> Result<Prepared, WireError> {
     let states = named_compound(chunk, y, section.block_states.as_ref(), "block_states")?;
-    let (blocks, names, cells) = container(
+    let (blocks, names, cells, fluid_entry) = container(
         chunk,
         y,
         "block_states",
@@ -105,7 +105,7 @@ fn section_record(
         },
     )?;
     let biomes = named_compound(chunk, y, section.biomes.as_ref(), "biomes")?;
-    let (biomes, _, _) = container(chunk, y, "biomes", biomes, BIOME_CELLS, 1, |name, _| {
+    let (biomes, _, _, _) = container(chunk, y, "biomes", biomes, BIOME_CELLS, 1, |name, _| {
         refs.biome_id(name).ok_or_else(|| WireError::UnknownBiome {
             x: chunk.x,
             z: chunk.z,
@@ -113,7 +113,7 @@ fn section_record(
             name: name.to_owned(),
         })
     })?;
-    let (non_air, fluid) = counts(&names, &cells);
+    let (non_air, fluid) = counts(&names, &cells, &fluid_entry);
     Ok(Prepared {
         y,
         names,
@@ -140,8 +140,14 @@ fn named_compound<'a>(
     }
 }
 
+/// One container resolved: the wire record, the palette names, the palette
+/// index of every cell and a fluid flag per palette entry
+/// (the return of [`container`]).
+type ContainerOut = (PaletteContainer, Vec<String>, Vec<usize>, Vec<bool>);
+
 /// One palette container of a section: the wire record, the palette names
-/// and — for blocks — the palette index of every cell.
+/// — for blocks — the palette index of every cell, and for every palette
+/// entry whether a cell of it counts toward the fluid header.
 ///
 /// `min_bits` is the recorded floor (4 for blocks, 1 for biomes); `cells`
 /// fixes the cell count (`4096` blocks, `64` biomes); `to_id` resolves one
@@ -155,8 +161,12 @@ fn container(
     cells: usize,
     min_bits: usize,
     to_id: impl Fn(&str, Option<&BTreeMap<String, String>>) -> Result<i32, WireError>,
-) -> Result<(PaletteContainer, Vec<String>, Vec<usize>), WireError> {
+) -> Result<ContainerOut, WireError> {
     let entries = palette_entries(chunk, y, field, compound)?;
+    let fluid_entry: Vec<bool> = entries
+        .iter()
+        .map(|entry| counts_as_fluid(&entry.name, entry.properties.as_ref()))
+        .collect();
     if entries.len() > cells {
         return Err(chunk.wrong_type(&format!(
             "section Y={y} {field}.palette holds {} entries for {cells} cells",
@@ -177,7 +187,12 @@ fn container(
                 names.len()
             )));
         }
-        return Ok((PaletteContainer::Single(ids[0]), names, vec![0; cells]));
+        return Ok((
+            PaletteContainer::Single(ids[0]),
+            names,
+            vec![0; cells],
+            fluid_entry,
+        ));
     };
     let bits = cell_bits(names.len(), min_bits);
     let expected = longs_for(cells, bits);
@@ -207,6 +222,7 @@ fn container(
         },
         names,
         indices,
+        fluid_entry,
     ))
 }
 
@@ -300,14 +316,14 @@ fn pack(cells: &[usize], bits: usize) -> Vec<u8> {
     words.iter().flat_map(|word| word.to_be_bytes()).collect()
 }
 
-/// The two count headers of a section: cells that are not air and cells of a
-/// fluid block.
+/// The two count headers of a section: cells that are not air and cells
+/// counted as fluid. `fluid_entry` flags each palette index once for all.
 ///
 /// SOURCE: parity trace — `non_air = 4096 − (air | cave_air | void_air)`
-/// and the fluid count equal every `:water`/`:lava` block, proven on all
-/// packed sections of the recorded full chunk; waterlogged variants of other
-/// blocks were never observed and are not counted (docs/SOURCES.md).
-fn counts(names: &[String], cells: &[usize]) -> (u16, u16) {
+/// and the fluid rule of [`counts_as_fluid`], both confirmed on **all 1944
+/// sections** of the join and ack recordings (`parity/a2_findings`,
+/// `target/parity-report/a2-evidence.md`).
+fn counts(names: &[String], cells: &[usize], fluid_entry: &[bool]) -> (u16, u16) {
     const AIR: [&str; 3] = ["minecraft:air", "minecraft:cave_air", "minecraft:void_air"];
     let mut non_air = 0_usize;
     let mut fluid = 0_usize;
@@ -316,11 +332,36 @@ fn counts(names: &[String], cells: &[usize]) -> (u16, u16) {
         if !AIR.contains(&name) {
             non_air += 1;
         }
-        if name.ends_with(":water") || name.ends_with(":lava") {
+        if fluid_entry.get(*index).is_some_and(|&flag| flag) {
             fluid += 1;
         }
     }
     (non_air as u16, fluid as u16)
+}
+
+/// Whether a cell of this palette entry counts toward the fluid header of
+/// its section: `water`/`lava`, any state with `waterlogged=true`, and the
+/// five names whose fluid state is water without being one (`seagrass`,
+/// `tall_seagrass`, `kelp`, `kelp_plant`, `bubble_column`).
+///
+/// SOURCE: the `a2_findings` test computed every candidate rule from
+/// vanilla's own cells against vanilla's own headers and this rule matched
+/// 1944/1944 sections of two recordings; the earlier `water`/`lava` rule
+/// matched only 1841/1944 (docs/SOURCES.md).
+fn counts_as_fluid(name: &str, properties: Option<&BTreeMap<String, String>>) -> bool {
+    const AQUATIC: [&str; 5] = [
+        "minecraft:seagrass",
+        "minecraft:tall_seagrass",
+        "minecraft:kelp",
+        "minecraft:kelp_plant",
+        "minecraft:bubble_column",
+    ];
+    if name.ends_with(":water") || name.ends_with(":lava") || AQUATIC.contains(&name) {
+        return true;
+    }
+    properties
+        .and_then(|props| props.get("waterlogged"))
+        .is_some_and(|value| value == "true")
 }
 
 #[cfg(test)]
@@ -393,6 +434,36 @@ mod tests {
             }
             other => panic!("expected a packed biome container, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn the_fluid_header_rule_is_the_one_the_recordings_proved() {
+        let logged_yes = BTreeMap::from([("waterlogged".to_owned(), "true".to_owned())]);
+        let logged_no = BTreeMap::from([("waterlogged".to_owned(), "false".to_owned())]);
+        assert!(counts_as_fluid("minecraft:water", None), "water");
+        assert!(counts_as_fluid("minecraft:lava", None), "lava");
+        assert!(
+            counts_as_fluid("minecraft:oak_slab", Some(&logged_yes)),
+            "waterlogged state flows"
+        );
+        assert!(
+            !counts_as_fluid("minecraft:oak_slab", Some(&logged_no)),
+            "waterlogged=false does not"
+        );
+        assert!(
+            !counts_as_fluid("minecraft:oak_slab", None),
+            "a dry block does not"
+        );
+        for name in [
+            "minecraft:seagrass",
+            "minecraft:tall_seagrass",
+            "minecraft:kelp",
+            "minecraft:kelp_plant",
+            "minecraft:bubble_column",
+        ] {
+            assert!(counts_as_fluid(name, None), "{name} counts as fluid");
+        }
+        assert!(!counts_as_fluid("minecraft:stone", None), "stone");
     }
 
     #[test]
