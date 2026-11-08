@@ -98,7 +98,10 @@ async fn reading_the_world_never_defers_the_keep_alive() {
             &status,
             "Steve",
             &ids_in_task,
-            Some(loader),
+            World {
+                loader: Some(loader),
+                info: WorldInfo::default(),
+            },
         )
         .await
     });

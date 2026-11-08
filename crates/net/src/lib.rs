@@ -10,7 +10,7 @@ mod error;
 mod frame;
 pub mod loader;
 
-pub use connection::serve;
+pub use connection::{serve, WorldInfo};
 pub use error::ConnectionError;
 pub use frame::{read_frame, write_frame};
 pub use loader::{ChunkSource, Loader};

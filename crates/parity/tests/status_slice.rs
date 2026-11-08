@@ -102,6 +102,7 @@ async fn start_ours(
         Arc::new(data::GameData::default()),
         ids,
         None,
+        net::WorldInfo::default(),
     ));
     (addr, join.abort_handle())
 }

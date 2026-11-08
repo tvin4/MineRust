@@ -57,6 +57,7 @@ pub async fn start_server_with_ids(
         game_data,
         packet_ids,
         None,
+        net::WorldInfo::default(),
     ));
     addr
 }

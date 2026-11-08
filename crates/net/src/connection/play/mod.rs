@@ -43,7 +43,42 @@ const VIEW_DISTANCE: i32 = 10;
 const SEA_LEVEL: i32 = 63;
 
 /// Spawn block of the empty world; the player teleports to its centre.
-const SPAWN: Position = Position { x: 8, y: 64, z: 8 };
+const EMPTY_SPAWN: Position = Position { x: 8, y: 64, z: 8 };
+
+/// What the play loop knows about the world a connection joins.
+///
+/// The server reads both values from the save at startup (step 3.3e):
+/// `spawn` is `Data.spawn.pos` of `level.dat`, `hashed_seed` is the hash
+/// of `world_gen_settings.dat`'s `seed`. The default is the empty M2
+/// world — centre block eight and no seed — so a server without a world
+/// behaves exactly as before (parity slices included).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorldInfo {
+    /// Block the player joins at; the teleport target and the chunk cache
+    /// centre are derived from it (`Set Center Chunk` of the join).
+    pub spawn: Position,
+    /// `hashed_seed` of Login (play): the seed's hash, zero without a world.
+    pub hashed_seed: i64,
+}
+
+impl Default for WorldInfo {
+    fn default() -> Self {
+        Self {
+            spawn: EMPTY_SPAWN,
+            hashed_seed: 0,
+        }
+    }
+}
+
+/// Everything the play loop touches of the world a connection joins: the
+/// pool that reads it and the values read from the save (step 3.3e).
+/// Grouped into one argument so [`play_state`] stays readable.
+pub(super) struct World {
+    /// Chunk loader pool; `None` when the server runs without a world.
+    pub(super) loader: Option<Loader>,
+    /// Join values of the save; the default is the empty M2 world.
+    pub(super) info: WorldInfo,
+}
 
 /// Teleport id of the initial join teleport; the client must confirm it
 /// before movement packets are taken seriously.
@@ -77,7 +112,7 @@ pub(super) async fn play_state<R, W>(
     status: &StatusInfo,
     player_name: &str,
     ids: &PacketIds,
-    loader: Option<Loader>,
+    world: World,
 ) -> Result<(), ConnectionError>
 where
     R: AsyncRead + Unpin + Send + 'static,
@@ -120,10 +155,10 @@ where
         do_limited_crafting: false,
         dimension_type,
         dimension_name: OVERWORLD.to_owned(),
-        // TODO(part 3a): take the seed from level.dat and hash it with
-        // `protocol::hashed_seed` (the formula is verified against the
-        // vanilla recording); without a world we send zero.
-        hashed_seed: 0,
+        // Step 3.3e: `world_gen_settings.dat`'s seed, hashed by the
+        // formula the parity recording verified (test `login_fields`);
+        // without a world the default stays zero.
+        hashed_seed: world.info.hashed_seed,
         game_mode: 0,
         previous_game_mode: 0,
         is_debug: false,
@@ -141,9 +176,12 @@ where
     )
     .await?;
 
+    // Step 3.3e: the spawn of the save (`level.dat`) is where the player
+    // joins — it also drives the chunk cache centre below, which vanilla
+    // takes from the player's position.
     let spawn = SetDefaultSpawnPosition {
         dimension: OVERWORLD.to_owned(),
-        position: SPAWN,
+        position: world.info.spawn,
         yaw: 0.0,
         pitch: 0.0,
     };
@@ -172,9 +210,11 @@ where
     )
     .await?;
 
+    // Centre of the cache: the position the player joined at (`spawn`),
+    // expressed in chunks — vanilla keeps its view centred on the player.
     let center = SetCenterChunk {
-        chunk_x: SPAWN.x >> 4,
-        chunk_z: SPAWN.z >> 4,
+        chunk_x: world.info.spawn.x >> 4,
+        chunk_z: world.info.spawn.z >> 4,
     };
     write_frame(
         &mut writer,
@@ -194,9 +234,9 @@ where
 
     let teleport = SynchronizePlayerPosition {
         teleport_id: JOIN_TELEPORT_ID,
-        x: f64::from(SPAWN.x) + 0.5,
-        y: f64::from(SPAWN.y),
-        z: f64::from(SPAWN.z) + 0.5,
+        x: f64::from(world.info.spawn.x) + 0.5,
+        y: f64::from(world.info.spawn.y),
+        z: f64::from(world.info.spawn.z) + 0.5,
         velocity_x: 0.0,
         velocity_y: 0.0,
         velocity_z: 0.0,
@@ -214,7 +254,7 @@ where
 
     // Queue the world read right away: from here on the pool owns disk I/O
     // and payload building, this task only selects on the reply channel.
-    let mut loading = match &loader {
+    let mut loading = match &world.loader {
         Some(loader) => match loader.load_batch().await {
             Ok(pending) => Some(pending),
             Err(err) => {

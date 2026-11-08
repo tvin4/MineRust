@@ -24,6 +24,8 @@ use crate::error::ConnectionError;
 use crate::frame::{read_frame, write_frame};
 use crate::loader::Loader;
 
+pub use play::WorldInfo;
+
 /// Maximum time a connection may spend before reaching the play state
 /// (handshake, status, login and configuration). Once in play there is no
 /// global timeout: a joined client is kept alive by keep-alives instead.
@@ -35,14 +37,16 @@ const CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
 ///
 /// The status document, the loaded game data and the packet ids are shared
 /// as immutable `Arc`s; there is no mutable shared state on this path.
-/// `loader` is the chunk loader pool: `None` for a server without a world
-/// (no chunks are sent, the join sequence is unchanged).
+/// `loader` is the chunk loader pool (`None` for a server without a world,
+/// no chunks are sent) and `world` carries the join values of the save —
+/// both read at startup on the server side.
 pub async fn serve(
     listener: TcpListener,
     status: Arc<StatusInfo>,
     game_data: Arc<GameData>,
     packet_ids: Arc<PacketIds>,
     loader: Option<Loader>,
+    world: WorldInfo,
 ) -> std::io::Result<()> {
     loop {
         let (stream, peer) = listener.accept().await?;
@@ -51,7 +55,7 @@ pub async fn serve(
         let packet_ids = Arc::clone(&packet_ids);
         let loader = loader.clone();
         tokio::spawn(async move {
-            match handle_connection(stream, status, game_data, packet_ids, loader).await {
+            match handle_connection(stream, status, game_data, packet_ids, loader, world).await {
                 Ok(()) => debug!(%peer, "connection closed"),
                 Err(ConnectionError::TimedOut) => debug!(%peer, "connection timed out"),
                 Err(err) if err.is_client_disconnect() => {
@@ -84,6 +88,7 @@ async fn handle_connection(
     game_data: Arc<GameData>,
     packet_ids: Arc<PacketIds>,
     loader: Option<Loader>,
+    world: WorldInfo,
 ) -> Result<(), ConnectionError> {
     let ids = packet_ids.as_ref();
     let (read_half, write_half) = stream.into_split();
@@ -126,7 +131,10 @@ async fn handle_connection(
                 &status,
                 &player_name,
                 ids,
-                loader,
+                play::World {
+                    loader,
+                    info: world,
+                },
             )
             .await
         }

@@ -29,7 +29,7 @@ mod wire_fixture;
 
 pub use chunk::{Chunk, ChunkNotReady, Section};
 pub use error::WorldError;
-pub use level::{read_level_dat, LevelDat};
+pub use level::{read_level_dat, read_world_gen_settings, LevelDat, WorldGenSettings};
 pub use region::{load_region, region_coords, ChunkPos, StoredChunk};
 pub use send::{load_sendable_chunk, ChunkUnavailable};
 pub use wire::{WireError, WireRefs};

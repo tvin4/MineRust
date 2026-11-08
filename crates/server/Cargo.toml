@@ -29,4 +29,5 @@ world = { path = "../world" }
 
 [dev-dependencies]
 data = { path = "../data", features = ["fixtures"] }
+flate2.workspace = true
 serde_json = { workspace = true }
