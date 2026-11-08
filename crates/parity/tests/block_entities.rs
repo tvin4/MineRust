@@ -206,6 +206,233 @@ fn ten_block_entities_frame_against_the_stored_chunk() {
     );
 }
 
+/// Owner step 3: for every recorded chunk — the block entity records (the
+/// (7, -2) case in the open: vanilla sends 2, the stored list is empty) and
+/// the block data behind them, section by section against the stored NBT.
+/// How far the recording's world sits from the served template decides
+/// whether the phantom records are a reader bug or a stale recording.
+#[test]
+#[ignore = "requires the owner's files and the recorded trace"]
+fn every_recorded_chunk_against_its_stored_one() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let env = parity::load_parity_env().expect("parity environment");
+    let registries = env
+        .config
+        .registries_report
+        .as_deref()
+        .map(Path::new)
+        .expect("registries_report path");
+    let by_id = block_entity_ids(registries);
+
+    for (coord, bytes) in chunk_trace::all_payloads(&workspace) {
+        let mut reader = protocol::PacketReader::new(&bytes);
+        let decoded = match protocol::LevelChunkWithLight::decode_payload(&mut reader) {
+            Ok(chunk) => chunk,
+            Err(error) => {
+                eprintln!("chunk {coord:?}: payload does not decode: {error}");
+                continue;
+            }
+        };
+        let Some(chunk) = chunk_trace::stored_chunk_at(&env.world_template, coord.0, coord.1)
+        else {
+            eprintln!("chunk {coord:?}: not in the stored world");
+            continue;
+        };
+        let stored = stored_entities(&chunk);
+        eprintln!(
+            "chunk {coord:?}: vanilla {} records, stored {} entries",
+            decoded.block_entities.len(),
+            stored.len()
+        );
+        for entity in &decoded.block_entities {
+            report_wire_record(coord, entity, &stored, &by_id, &chunk);
+        }
+        if stored.len() != decoded.block_entities.len() {
+            if let NbtTag::Compound(root) = &chunk.root {
+                eprintln!("  stored root keys: {:?}", root.keys().collect::<Vec<_>>());
+                match root.get("block_entities") {
+                    Some(value) => {
+                        eprintln!("  stored `block_entities`: {}", abbreviate(value, 600))
+                    }
+                    None => eprintln!("  stored chunk has no `block_entities` key"),
+                }
+            }
+        }
+        report_block_data(coord, &decoded, &chunk);
+    }
+}
+
+/// One section whose packed block data differs: section index, the wire
+/// bytes, the stored bytes and the byte positions that do not match.
+type DifferingData = (usize, Vec<u8>, Vec<u8>, Vec<usize>);
+
+/// How many sections of block data differ between the recording and the
+/// stored chunk; for (7, -2) additionally the palettes and the wired bytes
+/// of every differing section, cell by cell.
+fn report_block_data(
+    coord: (i32, i32),
+    decoded: &protocol::LevelChunkWithLight,
+    chunk: &world::Chunk,
+) {
+    let mut differing: Vec<DifferingData> = Vec::new();
+    for (index, (recorded, stored)) in decoded.sections.iter().zip(&chunk.sections).enumerate() {
+        let wire_bytes = match &recorded.blocks {
+            protocol::PaletteContainer::Single(_) => Vec::new(),
+            protocol::PaletteContainer::Packed { data, .. } => data.clone(),
+        };
+        let stored_bytes = stored_data_bytes(stored);
+        if wire_bytes != stored_bytes {
+            let positions = wire_bytes
+                .iter()
+                .zip(&stored_bytes)
+                .enumerate()
+                .filter(|(_, (wire, mine))| wire != mine)
+                .map(|(position, _)| position)
+                .collect::<Vec<_>>();
+            differing.push((index, wire_bytes, stored_bytes, positions));
+        }
+    }
+    eprintln!(
+        "  chunk {coord:?}: {}/{} sections differ in block data",
+        differing.len(),
+        chunk.sections.len()
+    );
+    if coord != (7, -2) {
+        return;
+    }
+    for (index, wire, stored, positions) in &differing {
+        let palette = match &decoded.sections[*index].blocks {
+            protocol::PaletteContainer::Single(_) => "single".to_owned(),
+            protocol::PaletteContainer::Packed { bits, palette, .. } => {
+                format!("{bits} bits, {} ids {palette:?}", palette.len())
+            }
+        };
+        let stored_names = chunk_trace::palette_names(&chunk.sections[*index]);
+        eprintln!(
+            "  section #{index}: wire [{palette}], stored ({} names) {stored_names:?}; \
+             data {} vs {} bytes, {} positions {positions:?}",
+            stored_names.len(),
+            wire.len(),
+            stored.len(),
+            positions.len()
+        );
+        for byte in positions.iter().take(4) {
+            for half in [0_usize, 1] {
+                let cell = *byte * 2 + half; // two 4-bit cells in one byte
+                let label = cell_label(cell, wire, stored, *index, chunk);
+                eprintln!("    byte {byte} cell {cell}: {label}");
+            }
+        }
+    }
+}
+
+/// A debug string capped at `cap` bytes (only on a character boundary).
+fn abbreviate(tag: &protocol::NbtTag, cap: usize) -> String {
+    let text = format!("{tag:?}");
+    if text.len() <= cap {
+        return text;
+    }
+    let mut cut = cap;
+    while cut > 0 && !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}… ({} bytes total)", &text[..cut], text.len())
+}
+
+/// One differing cell of (7, -2): the wire palette id against the stored
+/// block name at the same coordinates (`cell = x + z·16 + y·256`, section
+/// index 1 = Y −3 = world y −48..−33).
+fn cell_label(
+    cell: usize,
+    wire: &[u8],
+    stored: &[u8],
+    section: usize,
+    chunk: &world::Chunk,
+) -> String {
+    let nibble = wire.get(cell / 2).map(|byte| {
+        if cell.is_multiple_of(2) {
+            byte >> 4
+        } else {
+            byte & 0x0f
+        }
+    });
+    let stored_nibble = stored.get(cell / 2).map(|byte| {
+        if cell.is_multiple_of(2) {
+            byte >> 4
+        } else {
+            byte & 0x0f
+        }
+    });
+    let (local_x, rest) = (cell % 16, cell / 16);
+    let (local_z, local_y) = (rest % 16, rest / 16);
+    let world_y = (section as i32 - 4) * 16 + local_y as i32;
+    let world_x = chunk.x * 16 + local_x as i32;
+    let world_z = chunk.z * 16 + local_z as i32;
+    let block = block_at(chunk, world_x, world_y, world_z, [0, 2, 1]).unwrap_or_default();
+    format!(
+        "wire id nibble {nibble:?} vs stored nibble {stored_nibble:?}; \
+         stored block at ({world_x}, {world_y}, {world_z}) = {block}"
+    )
+}
+
+/// The packed block data of a stored section as wire bytes: NBT longs,
+/// each written big-endian, exactly as the payload frame does it.
+fn stored_data_bytes(section: &world::Section) -> Vec<u8> {
+    let Some(NbtTag::Compound(states)) = &section.block_states else {
+        return Vec::new();
+    };
+    match states.get("data") {
+        Some(NbtTag::LongArray(words)) => {
+            words.iter().flat_map(|word| word.to_be_bytes()).collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// One wire record: the stored NBT twin it must have (or the block under
+/// its coordinate, per cell order, when it has none).
+fn report_wire_record(
+    coord: (i32, i32),
+    entity: &protocol::BlockEntity,
+    stored: &[BTreeMap<String, NbtTag>],
+    by_id: &BTreeMap<i32, String>,
+    chunk: &world::Chunk,
+) {
+    let (x, z) = (
+        coord.0 * 16 + i32::from(entity.local_x),
+        coord.1 * 16 + i32::from(entity.local_z),
+    );
+    let y = i32::from(entity.y);
+    let registered = by_id
+        .get(&entity.type_id)
+        .cloned()
+        .unwrap_or_else(|| format!("unregistered type {}", entity.type_id));
+    let twin = stored.iter().find(|entry| {
+        int_field(entry, "x") == Some(x)
+            && int_field(entry, "y") == Some(y)
+            && int_field(entry, "z") == Some(z)
+    });
+    match twin {
+        Some(entry) => {
+            let id = str_field(entry, "id").unwrap_or_default();
+            eprintln!(
+                "  ({x}, {y}, {z}) wire {registered}, stored {id}, agree: {}",
+                registered == id
+            );
+        }
+        None => {
+            let blocks = ORDERS
+                .iter()
+                .map(|order| block_at(chunk, x, y, z, *order).unwrap_or_default())
+                .collect::<Vec<_>>();
+            eprintln!(
+                "  ({x}, {y}, {z}) wire {registered}, NO STORED TWIN; \
+                 block by cell order {blocks:?}"
+            );
+        }
+    }
+}
+
 /// The six axis orders inside a packed section, as slow-aspect triples
 /// (fastest, middle, slowest axis index; 0 = x, 1 = y, 2 = z).
 const ORDERS: [[usize; 3]; 6] = [
