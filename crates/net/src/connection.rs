@@ -933,25 +933,28 @@ mod tests {
             GameEvent::KEY,
             SynchronizePlayerPosition::KEY,
         ];
-        for (index, key) in join.iter().enumerate() {
-            eprintln!("stage: waiting for join packet {index}");
+        for key in join {
             let (id, _) = next_packet(&mut client).await;
-            assert_eq!(id, ids.id(*key), "join sequence packet");
+            assert_eq!(id, ids.id(key), "join sequence packet");
         }
-        eprintln!("stage: join sequence done");
 
         // The world read is still parked at the barrier: the next packet on
         // the wire has to be the keep-alive of the loop (its tick at 15 s
         // under paused time; the timeout below is later and never wins).
-        eprintln!("stage: waiting for keep alive");
         let (id, _) = tokio::time::timeout(Duration::from_secs(20), next_packet(&mut client))
             .await
             .expect("the keep-alive must not wait for the world read");
         assert_eq!(id, ids.id(KeepAlive::KEY), "keep alive was deferred");
 
+        // The property is established; put the clock back to real time.
+        // While paused, an idle runtime jumps to the next keep-alive tick
+        // again and again while the pool is still building the batch, which
+        // would flood the stream with keep-alives here — with real time the
+        // next tick is a whole interval away.
+        tokio::time::resume();
+
         // Release the read: now the batch may go out, in the recorded
         // framing — start marker, the payload, finished with its count.
-        eprintln!("stage: releasing the world read");
         release.wait();
         let (id, _) = next_packet(&mut client).await;
         assert_eq!(id, ids.id(ChunkBatchStart::KEY), "batch start");

@@ -205,7 +205,11 @@ mod tests {
     /// loader built on `spawn_blocking` would make the keep-alive test of
     /// `connection.rs` wait forever. The pool therefore uses plain
     /// threads, which do not have this effect (the test above passes).
+    ///
+    /// Ignored because it waits out a real four-second bound; run it with
+    /// `--ignored` when touching the loader's threading.
     #[tokio::test]
+    #[ignore = "a real-time four-second bound keeps the normal run fast"]
     async fn a_spawn_blocking_task_freezes_the_paused_clock() {
         tokio::time::pause();
         let (release, held) = std::sync::mpsc::channel::<()>();
