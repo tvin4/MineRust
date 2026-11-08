@@ -252,6 +252,29 @@ fn block_entity_evidence(text: &mut String) {
     ));
 }
 
+/// The verdict of the report: which side erred and where every finding is
+/// recorded in `docs/DECISIONS.md`.
+fn append_verdict(text: &mut String) {
+    text.push_str("## Итог\n\n");
+    text.push_str(
+        "- `section non-air/fluid` — **наша ошибка** в правиле: правило \
+         water/lava + waterlogged=true + seagrass/tall_seagrass/kelp/kelp_plant/bubble_column \
+         сошлось 1944/1944 и исправлено в `world::wire_section` \
+         (`fix(world): count waterlogged and aquatic cells in the fluid header`); \
+         chunk-diff после фикса — 9/9.\n",
+    );
+    text.push_str(
+        "- `heightmap ids (порядок)` — **порядок итерации ванили**: три прогона дали \
+         три перестановки, стабильности 0/9 → запись «Порядок id карт высот» в \
+         `docs/DECISIONS.md`.\n",
+    );
+    text.push_str(
+        "- `block entity records (порядок)` — **порядок итерации ванили**: повторяется \
+         5/5 между двумя прогонами, но ключ неизвестен → запись «Порядок записей \
+         block entities» в `docs/DECISIONS.md`.\n",
+    );
+}
+
 /// The record shape the diff table compares.
 fn shape(records: &[BlockEntity]) -> Vec<BeRecord> {
     records
@@ -272,6 +295,7 @@ fn a2_evidence_report() {
     let header_ok = non_air_fluid_evidence(&mut text);
     heightmap_evidence(&mut text);
     block_entity_evidence(&mut text);
+    append_verdict(&mut text);
     let report = workspace().join("target/parity-report/a2-evidence.md");
     if let Some(parent) = report.parent() {
         std::fs::create_dir_all(parent).expect("report directory");
