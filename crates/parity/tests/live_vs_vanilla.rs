@@ -13,8 +13,9 @@
 //!
 //! Both file formats are understood: the parity trace the scripted client
 //! writes, and the server's own live format (`dir` instead of `direction`,
-//! an optional `payload` over 64 KiB, a tail left open or dangling when the
-//! server was killed — `salvage_tail` closes it in memory). The report lands in
+//! an optional `payload` above the trace's cap, a tail left open or
+//! dangling when the server was killed — `salvage_tail` closes it in
+//! memory). The report lands in
 //! `target/parity-report/live-vs-vanilla.md` and answers the questions of
 //! the live check: first packets in order, only-vanilla / only-ours, the
 //! serverbound line, the chunk cache centre and the chunk coordinates
@@ -132,8 +133,8 @@ fn live_entry(packet: &serde_json::Value) -> Result<TraceEntry, String> {
         .get("name")
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned);
-    // Payloads above the server's 64 KiB cap are recorded as `null`: keep
-    // the absence, the payload content is not what this comparison is for.
+    // Payloads above the trace's cap are recorded as `null`: keep the
+    // absence, the payload content is not what this comparison is for.
     let payload = packet
         .get("payload")
         .and_then(serde_json::Value::as_str)
@@ -258,8 +259,8 @@ fn label(entry: &TraceEntry) -> String {
 }
 
 /// Whether both records are the same packet at the same place (the size is
-/// deliberately off the list: a live payload over 64 KiB is recorded
-/// without bytes and would fake a mismatch).
+/// deliberately off the list: a live payload above the trace's cap is
+/// recorded without bytes and would fake a mismatch).
 fn same_packet(left: &TraceEntry, right: &TraceEntry) -> bool {
     left.state == right.state
         && left.direction == right.direction
@@ -320,10 +321,19 @@ fn serverbound_section(vanilla: &Trace, session: &Trace) -> String {
 
 /// Section: centre and chunk coordinates against the join position, with
 /// ✓/✗ verdicts — reported, never asserted.
+///
+/// Chunk coordinates live in the first eight payload bytes, so a packet
+/// recorded over the trace's payload cap (a null payload) can be counted
+/// but not placed: such rows say «не проверяемо» instead of a fake ✗.
 fn chunks_section(name: &str, trace: &Trace) -> String {
+    let packets: Vec<&TraceEntry> = trace
+        .packets
+        .iter()
+        .filter(|entry| is_chunk(entry))
+        .collect();
     let found = chunks(trace);
     let center = center(trace);
-    let at_expected = found.contains(&EXPECTED_CHUNK);
+    let readable = !found.is_empty() && found.len() == packets.len();
     let outside: Vec<(i32, i32)> = match center {
         Some((cx, cz)) => found
             .iter()
@@ -331,6 +341,24 @@ fn chunks_section(name: &str, trace: &Trace) -> String {
             .filter(|(x, z)| (x - cx).abs() > VIEW_DISTANCE || (z - cz).abs() > VIEW_DISTANCE)
             .collect(),
         None => Vec::new(),
+    };
+    let unavailable = "⚠ не проверяемо: payload не записан (> cap трейса)";
+    let (at_expected, outside_row) = if packets.is_empty() {
+        ("— пакетов нет".to_owned(), "— пакетов нет".to_owned())
+    } else if !readable {
+        (unavailable.to_owned(), unavailable.to_owned())
+    } else {
+        let expected = if found.contains(&EXPECTED_CHUNK) {
+            "✓ есть".to_owned()
+        } else {
+            "**✗ нет**".to_owned()
+        };
+        let outside_row = if outside.is_empty() {
+            "✓ нет".to_owned()
+        } else {
+            format!("**✗ {}**: {outside:?}", outside.len())
+        };
+        (expected, outside_row)
     };
     let list = found
         .iter()
@@ -340,17 +368,14 @@ fn chunks_section(name: &str, trace: &Trace) -> String {
     let mut out = format!("\n## Чанки: {name}\n\n");
     out.push_str(&format!(
         "| Проверка | Значение |\n|---|---|\n\
+         | Пакетов `level_chunk_with_light` | {} |\n\
+         | Координат извлечено (из первых 8 байт payload) | {} из {} |\n\
          | Центр `set_chunk_cache_center` (два VarInt) | {center:?} (ожидаем {EXPECTED_CHUNK:?}) |\n\
-         | Чанк {EXPECTED_CHUNK:?} под позицией (96.5, 145, -31.5) | {} |\n\
-         | Чанков вне центр±{VIEW_DISTANCE} | {} |\n\
-         | Всего `level_chunk_with_light` | {} |\n",
-        if at_expected { "✓ есть" } else { "**✗ нет**" },
-        if outside.is_empty() {
-            "✓ нет".to_owned()
-        } else {
-            format!("**✗ {}**: {outside:?}", outside.len())
-        },
-        found.len()
+         | Чанк {EXPECTED_CHUNK:?} под позицией (96.5, 145, -31.5) | {at_expected} |\n\
+         | Чанков вне центр±{VIEW_DISTANCE} | {outside_row} |\n",
+        packets.len(),
+        found.len(),
+        packets.len(),
     ));
     if !found.is_empty() {
         out.push_str(&format!("\nКоординаты в порядке отправки: {list}\n"));
