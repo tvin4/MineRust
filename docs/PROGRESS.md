@@ -940,6 +940,19 @@ warnings`, `cargo test --workspace` — зелёные.
   байт-в-байт одинаковый журнал; поля `tick/seq/kind/region/payload`
   проверены; выключенный журнал не пишет. `cargo test --workspace` —
   `net` 35+ тестов зелёные.
+- **ЧАСТЬ 3 (запуск):** `tools\run-server.bat` (ASCII, `cd /d "%~dp0.."`,
+  проверка `server.toml`; при отсутствии печатает поля `client_jar`,
+  `packets_report`, `registries_report`, `blocks_report`,
+  `vanilla_server_jar`, `vanilla_server_dir` и пример для
+  `C:\MineRust-data\`, затем `pause`; иначе `cargo run -p server
+  --release`) и `tools\run-server-vanilla.bat` (только `java -jar
+  server.jar nogui` с рабочим каталогом `C:\MineRust-data\vanilla`,
+  jar ищется в `vanilla\` затем `C:\MineRust-data\server.jar`; мира не
+  создаёт). Сухой запуск: `run-server.bat` поднял сервер, `listening
+  0.0.0.0:25565` за ~1 с, `WARN`/`ERROR` нет, шаблон мира не изменён
+  (36 файлов, 15 402 135 Б, mtime прежний). Чек-лист живой проверки —
+  `docs/LIVE-CHECK-M4.1.md` (не выполнялся), инструкция по батникам — в
+  README.
 
 ## Что дальше
 

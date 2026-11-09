@@ -80,6 +80,16 @@ CI runs the same checks on every push and pull request
    enter `localhost:25565` — the server list should show the MOTD, the version
    name and `0/20` players.
 
+### Windows helpers
+
+- `tools\run-server.bat` — starts this server in release from the repo root
+  (`server.toml` must be filled in; without it the script prints the fields
+  and an example for `C:\MineRust-data\`).
+- `tools\run-server-vanilla.bat` — starts the official vanilla jar from
+  `C:\MineRust-data\vanilla` (port 25566) for hand comparisons; it never
+  creates or copies a world.
+- Live verification checklist for the tick: `docs/LIVE-CHECK-M4.1.md`.
+
 Milestone M1 covers the handshake/status flow only: the server answers server
 list pings and closes the connection on login (M2).
 

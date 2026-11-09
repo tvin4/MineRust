@@ -1,14 +1,12 @@
 # HANDOFF (state for the next session)
 
-Round 6: ЧАСТЬ 1 (`280b752`), M4.1 plan (`d5f65c5`), 2б (`aa51fec`),
-2в (`d85e537`), 2г (`0720599`), 2д (this commit). Part 2 done.
+Round 6 done: ЧАСТЬ 1 (`280b752`), M4.1 б–д (`d5f65c5`, `aa51fec`,
+`d85e537`, `0720599`, `0bec27f`), ЧАСТЬ 3 (this commit).
 
-- ЧАСТЬ 2д (this commit): the replay journal (`net::game::replay`,
-  `Replay<W: Write>` + `ReplayRecord`). The tick writes one JSONL line
-  `{tick, seq, region, src, kind, payload}` at apply time; enabled by
-  `MINERUST_REPLAY` (value = file path). `move` kind lands in M4.2.
-  Determinism test: join→ack→quit recorded twice is byte-identical.
-- M4.1 code (б–д) is complete: tick, region, channels, kick policy,
-  overloaded tick, replay. Still M4.2+ (movement, regions, streaming).
-- Next: live-check checklist in `docs/` + `tools/run-server*.bat`
-  (ЧАСТЬ 3), then the final report.
+- M4.1 code is complete: 20 TPS deadline tick, `HashMap<id, Player>` in one
+  `Region`, Join/TeleportAck/Quit over `send().await`, Move slot,
+  kick-on-overflow, overloaded-tick reset, JSONL replay (`MINERUST_REPLAY`).
+- `tools\run-server.bat` and `tools\run-server-vanilla.bat` added; the
+  first was dry-run (listens on 25565, world template untouched).
+- Live client check NOT done: `docs/LIVE-CHECK-M4.1.md` is the checklist.
+- Next milestone is M4.2 (parse/apply movement), not started.
