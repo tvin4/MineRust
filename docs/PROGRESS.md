@@ -981,6 +981,44 @@ warnings`, `cargo test --workspace` — зелёные.
   473, расхождение закрывается в **M4.4**.
 - Код M4.1 не менялся; **M4.2 не начинался** (ждём «M4.2 можно»).
 
+## Раунд 8: позиция игрока (M4.2, выполнено)
+
+- **Соединение (`ca8d310`).** Пакеты движения больше не пишут
+  `trace!("movement received, ignored")`: классифицируются по runtime-id
+  (`MoveKind { Pos, PosRot, Rot, StatusOnly }`) и сырой payload кладётся
+  в `MoveSlot` (`MoveState { kind, payload }`, было `{ packet_id, ... }`)
+  приватной `store_move()` в `play/mod.rs`. Движение в сетевой задаче не
+  интерпретируется.
+- **Разбор в тике.** Новый модуль `net::game::movement`: `MoveUpdate`
+  (опциональные оси) + `MoveState::decode` (3×f64+bool, 3×f64+2×f32+bool,
+  2×f32+bool, bool; затем `ensure_empty`). Неполный/лишний payload —
+  ошибка (`warn` + дроп), не догадка.
+- **Применение (`net::game::region`).** `Player` держит `PlayerPos` (вход —
+  центр блока спавна `spawn + 0.5`); `Region::tick` забирает новейший
+  `MoveState`, применяет его **только** после `teleport_confirmed` (иначе
+  дропает) и накладывает оси через `Player::apply_move` — без проверок
+  движения (осознанная дыра M4, `DECISIONS.md`). `Region::tick`/
+  `Scheduler::tick` возвращают `TickOutcome { moves: Vec<AppliedMove>,
+  kicks: Vec<Kick> }` (было `Vec<Kick>`).
+- **Реплей.** `record_moves()` (общая для живого цикла и теста) пишет
+  строку `kind = "move"` с полями `x/y/z/yaw/pitch/on_ground` после
+  событий такта (`seq` продолжает счётчик `apply_queued`).
+- **Тесты (`net` 20 passed, 1 ignored).** Декод каждого вида (5), игнор до
+  `TeleportAck`, применение после ack, rotation не двигает позицию, слот
+  хранит только новейший пакет, replay-детерминизм с `move` (сценарий
+  дважды — байт-в-байт). `cargo test --workspace` зелёный.
+- **Живая проверка (автоподмена).** Бот `parity` по нашему серверу не
+  ходит: `enforce_mode` (все режимы кроме `Preload`) требует spectator
+  (`login game_mode 0; expected 3`), а `Preload` не двигается. Поэтому e2e
+  проверен одноразовым smoke (в репо не попал): in-process сервер +
+  ручной `parity::Client` (join → `accept_teleportation` id 1 →
+  20×`move_player_pos` шагом 0.2 от спавна 96.5,145,−31.5). Реплей: 21
+  строка (join, teleport_ack, 19 move), x растёт 96.7→100.3 по одному move
+  за тик — без скачков. Ручной чек-лист F3 — `docs/LIVE-CHECK-M4.2.md`.
+- **Отложено.** `set_chunk_cache_center`/перенос центра кэша — **M4.4**
+  (стриминг), сейчас не делаем (лишний пакет и риск для join). Телепорт
+  тик уже подтверждает (`TeleportAck`). **M4.3 не начинался.**
+
 ## Что дальше
 
 - **M4 — план показан владельцу, код НЕ пишется до «план принят».**

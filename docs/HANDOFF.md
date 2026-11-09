@@ -1,7 +1,8 @@
 # HANDOFF (state for the next session)
 
-Round 7: ЧАСТЬ 1 — stop the game thread on shutdown (`c7bfa68`); ЧАСТЬ 2 — window docs.
-- Game thread no longer detached: `net::serve` = accept loop in `select!` vs `shutdown_signal()` (Ctrl+C; Win Ctrl+Break/close), then `GameThread::join_timeout(2 s)` (stop flag read once per tick).
-- Live check OK: Ctrl+Break → "shutdown signal received" → "stop requested, leaving the tick loop" → "game thread stopped", exit 0 (<1 s).
-- Docs: §4 window formula verified only at `view_distance=10`; we send 21×21=441 vs vanilla 473, closed in M4.4.
-- Next: M4.2 (parse/apply movement), NOT started — waiting for an explicit "M4.2 можно".
+M4.2 done (`ca8d310`): the game tick applies player movement.
+- Connection classifies move packets (`MoveKind {Pos,PosRot,Rot,StatusOnly}`) and stores the raw payload in `MoveSlot`; the tick decodes it (`net::game::movement`) and applies it only after `TeleportAck` (`PlayerPos`, `Player::apply_move`).
+- `Region::tick`/`Scheduler::tick` return `TickOutcome {moves, kicks}`; `record_moves()` writes the `move` replay line (x/y/z/yaw/pitch/on_ground).
+- Tests: net 20 passed / 1 ignored (decode per kind, ignore before ack, apply after ack, rotation keeps position, replay determinism).
+- Automated e2e (one-off smoke, not in repo): in-process server plus a hand-driven `parity::Client` gives a replay of 21 lines, x from 96.7 to 100.3 by 0.2, one move per tick, no jumps. Owner's F3 check: `docs/LIVE-CHECK-M4.2.md`.
+- Deferred: `set_chunk_cache_center` moves to M4.4 (streaming). Next: M4.3 (parallel core) is NOT started; wait for an explicit "M4.3 можно".
