@@ -388,7 +388,17 @@ pub async fn run_walk_at(
     let mut client = Client::connect("vanilla-walk", addr, Arc::clone(&ids))
         .await
         .map_err(WalkError::Connect)?;
-    let steps = join_steps_with_view(env, &ids, port, VIEW_DISTANCE);
+    // ЧАСТЬ II, п. 1: only a run against vanilla may keep the full probe
+    // budget (its port comes from the very `server.properties` this run
+    // dials); every other listener is our own server, which never sends
+    // `select_known_packs`, so a packet nobody sends may only be waited
+    // for 100 ms. That is what removes the ~3000 ms the ЧАСТЬ III series
+    // spent waiting on the bot itself.
+    let probe_wait = match env.vanilla_port() {
+        Ok(vanilla) if vanilla == port => crate::steps::PROBE_WAIT,
+        _ => crate::steps::PROBE_WAIT_NO_PROBE,
+    };
+    let steps = join_steps_with_view(env, &ids, port, VIEW_DISTANCE, probe_wait);
     client.run(&steps).await.map_err(WalkError::Join)?;
 
     let mut jsonl = Jsonl::create(trace_path)?;

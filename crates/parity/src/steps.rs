@@ -17,9 +17,16 @@ use crate::{ParityEnv, Step};
 
 /// How long to wait for a single scripted packet.
 const WAIT: Duration = Duration::from_secs(15);
-/// Vanilla answers its known-packs probe within milliseconds; our server
-/// sends no probe at all, so this step must not burn the full WAIT.
-const PROBE_WAIT: Duration = Duration::from_secs(3);
+/// Vanilla answers its known-packs probe within milliseconds, and the
+/// scripted slices walked against vanilla keep waiting the full budget
+/// when no probe ever arrives (unchanged, this is the vanilla series).
+pub const PROBE_WAIT: Duration = Duration::from_secs(3);
+/// The same scripted step against a server that sends no
+/// `select_known_packs` probe at all (our own server, ЧАСТЬ II): waiting
+/// for a packet nobody sends must not cost join three seconds, so the
+/// budget is cut to 100 ms (`docs/ROUND2-CONTEXT.md`, the ~3000 ms the
+/// bot spent on itself).
+pub const PROBE_WAIT_NO_PROBE: Duration = Duration::from_millis(100);
 /// Player name of the scripted client; offline UUIDs derive from it.
 const PLAYER: &str = "ParityBot";
 
@@ -47,17 +54,23 @@ fn known_packs_reply() -> Vec<u8> {
 /// of their own); the walk bot asks for its own distance through
 /// [`join_steps_with_view`].
 pub fn join_steps(env: &ParityEnv, ids: &PacketIds, server_port: u16) -> Vec<Step> {
-    join_steps_with_view(env, ids, server_port, 8)
+    join_steps_with_view(env, ids, server_port, 8, PROBE_WAIT)
 }
 
 /// The same scripted login → configuration → play sequence with an explicit
 /// client view distance: the walk bot sends 10 to match the copy's
 /// `server.properties` (`view-distance=10`).
+///
+/// `probe_wait` is how long the scripted reply waits for vanilla's
+/// known-packs probe: [`PROBE_WAIT`] for a server that sends it, and
+/// [`PROBE_WAIT_NO_PROBE`] for one that never will. Vanilla series keep the
+/// original budget byte for byte.
 pub fn join_steps_with_view(
     env: &ParityEnv,
     ids: &PacketIds,
     server_port: u16,
     view_distance: i8,
+    probe_wait: Duration,
 ) -> Vec<Step> {
     let handshake = Handshake {
         protocol_version: env.config.protocol_version,
@@ -103,10 +116,12 @@ pub fn join_steps_with_view(
             None,
         ),
         // Vanilla announces its data packs and expects an answer; our
-        // server does not perform this exchange, so the step ends quietly.
+        // server does not perform this exchange, so the step ends quietly
+        // after `probe_wait` instead of burning a probe budget it does not
+        // even have (ЧАСТЬ II, п. 1).
         Step::respond(
             ids.id(protocol::SELECT_KNOWN_PACKS),
-            PROBE_WAIT,
+            probe_wait,
             ids.id(protocol::SELECT_KNOWN_PACKS_SERVERBOUND),
             known_packs_reply(),
         ),
