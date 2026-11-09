@@ -9,10 +9,13 @@
 //! * every `chunk_batch_finished` is answered with `chunk_batch_received`
 //!   carrying the pace float of the live trace (byte exact);
 //! * `minecraft:player_position` is acknowledged with the 33-byte layout
-//!   observed there (VarInt teleport id + 3 doubles + 8 zero bytes) and
-//!   `minecraft:player_loaded` is sent once, right after the first ack
-//!   (**hypothesis: the trigger is unknown; the live client sent it about
-//!   a second after the ack**);
+//!   observed there (VarInt teleport id + 3 doubles + 8 zero bytes);
+//! * `minecraft:client_tick_end` (serverbound id 13 in the packets
+//!   report) goes out every 50 ms on the absolute grid the first
+//!   teleport ack anchors, and `minecraft:player_loaded` once at
+//!   ack + 1001 ms — the order and gap of the live client
+//!   (`live-session.json`: ack seq 52 → first tick seq 53 → player_loaded
+//!   seq 91 = +1001.28 ms);
 //! * `minecraft:move_player_pos` goes out once per 50 ms absolute deadline,
 //!   step ≤ 0.2 blocks, constant height, and any step that would leave the
 //!   owner's zone is refused *before* it is sent;
@@ -68,6 +71,15 @@ const KEY_ACCEPT: PacketKey =
     PacketKey::serverbound(ProtocolState::Play, "minecraft:accept_teleportation", 0x00);
 const KEY_PLAYER_LOADED: PacketKey =
     PacketKey::serverbound(ProtocolState::Play, "minecraft:player_loaded", 0x2C);
+/// Exactly 13 in the packets report (walk default matches it; the report
+/// wins whenever one is configured).
+const KEY_TICK_END: PacketKey =
+    PacketKey::serverbound(ProtocolState::Play, "minecraft:client_tick_end", 0x0D);
+
+/// Delay between the first teleport ack and `player_loaded`: the live
+/// client's gap of 1001.28 ms (`live-session.json` seq 52 → seq 91),
+/// floored to a whole millisecond.
+const LOADED_DELAY: Duration = Duration::from_millis(1001);
 const KEY_MOVE_POS: PacketKey =
     PacketKey::serverbound(ProtocolState::Play, "minecraft:move_player_pos", 0x1E);
 
@@ -170,6 +182,18 @@ pub struct CacheMove {
 
 /// Sentinel `x`/`z` of a cache-move payload that did not decode.
 pub const UNKNOWN_CHUNK: i32 = i32::MIN;
+
+/// Play-loop timers armed together by the first teleport ack
+/// (ЧАСТЬ I, п. 2). Before that ack neither packet may go out.
+#[derive(Debug, Default)]
+struct Timers {
+    /// Next slot of the `client_tick_end` 50 ms absolute grid: `None`
+    /// until the ack anchors it at the ack instant.
+    tick: Option<tokio::time::Instant>,
+    /// When `player_loaded` goes out (`None` = not armed or already
+    /// sent): the ack instant + [`LOADED_DELAY`].
+    loaded: Option<tokio::time::Instant>,
+}
 
 /// Everything the run produced, for the report.
 #[derive(Debug)]
@@ -331,7 +355,7 @@ async fn play(
     let mut emitted = 0usize;
     let mut pos: Option<[f64; 3]> = None;
     let mut spawn: Option<[f64; 3]> = None;
-    let mut loaded_sent = false;
+    let mut timers = Timers::default();
     let mut moved = 0u32;
     let mut chunking = Batch {
         t_ms: 0.0,
@@ -358,7 +382,18 @@ async fn play(
                 break;
             }
         }
-        match client.recv_packet(deadline).await {
+        // Wake on the nearest of the three grids (movement, tick_end,
+        // player_loaded): the other timers are armed later than this
+        // read, and a read parked until the movement grid would delay
+        // an already-due `client_tick_end` by up to a full tick.
+        let mut wake = deadline;
+        if let Some(at) = timers.tick {
+            wake = wake.min(at);
+        }
+        if let Some(at) = timers.loaded {
+            wake = wake.min(at);
+        }
+        match client.recv_packet(wake).await {
             Ok(_) => {}
             Err(error) => {
                 stop = Some(Stop::Closed {
@@ -374,7 +409,7 @@ async fn play(
             &mut stats,
             &mut emitted,
             &mut pos,
-            &mut loaded_sent,
+            &mut timers,
             &mut chunking,
         )
         .await?;
@@ -384,6 +419,28 @@ async fn play(
         }
         if spawn.is_none() {
             spawn = pos;
+        }
+        // ЧАСТЬ I, п. 2: `client_tick_end` (id 13) on the absolute
+        // 50 ms grid the first ack anchored, then `player_loaded` once
+        // at ack + 1001 ms — the order of the live trace (seq 53…90,
+        // then seq 91).
+        if let Some(at) = timers.tick {
+            if tokio::time::Instant::now() >= at {
+                let id = ids.id(KEY_TICK_END);
+                send(client, id, &[]).await?;
+                let mut next = at + TICK;
+                while next <= tokio::time::Instant::now() {
+                    next += TICK;
+                }
+                timers.tick = Some(next);
+            }
+        }
+        if let Some(at) = timers.loaded {
+            if tokio::time::Instant::now() >= at {
+                let id = ids.id(KEY_PLAYER_LOADED);
+                send(client, id, &[]).await?;
+                timers.loaded = None;
+            }
         }
         if tokio::time::Instant::now() >= deadline {
             let next = next_step(mode, pos, moved);
@@ -426,7 +483,7 @@ async fn play(
             &mut stats,
             &mut emitted,
             &mut pos,
-            &mut loaded_sent,
+            &mut timers,
             &mut chunking,
         )
         .await?;
@@ -452,7 +509,7 @@ async fn process_recorded(
     stats: &mut RunStats,
     emitted: &mut usize,
     pos: &mut Option<[f64; 3]>,
-    loaded_sent: &mut bool,
+    timers: &mut Timers,
     chunking: &mut Batch,
 ) -> Result<Option<Stop>, WalkError> {
     while *emitted < client.trace().len() {
@@ -491,12 +548,13 @@ async fn process_recorded(
                 *pos = Some(spawn_pos);
                 let id = ids.id(KEY_ACCEPT);
                 send(client, id, &ack).await?;
-                if !*loaded_sent {
-                    // Hypothesis: the live client sent this ~1 s after the
-                    // ack; we send it right after instead.
-                    let id = ids.id(KEY_PLAYER_LOADED);
-                    send(client, id, &[]).await?;
-                    *loaded_sent = true;
+                if timers.tick.is_none() {
+                    // ЧАСТЬ I, п. 2: the first ack anchors both timers,
+                    // like the live trace (ack seq 52, first tick seq 53,
+                    // player_loaded seq 91 = ack + 1001.28 ms).
+                    let now = tokio::time::Instant::now();
+                    timers.tick = Some(now);
+                    timers.loaded = Some(now + LOADED_DELAY);
                 }
             }
             Some("minecraft:chunk_batch_finished") => {
