@@ -1,10 +1,12 @@
 # HANDOFF (state for the next session)
 
 ## Done
-- ЧАСТЬ I п.1-5 done (b4d151c, 3ec8b97); `ms()` clock bug fixed (b74ac44:
-  it returned seconds, a 10.8 s run read as t_ms=10.803); checks green.
+- ЧАСТЬ I п.1-5 done (b4d151c, 3ec8b97); `ms()` clock bug fixed (b74ac44).
+- Re-run with the fixed clock: П1 clean (Completed, 10 004 ms, 428 chunks,
+  106 batches, world ok, 173/441 explained as an early abort); П2 kicked by
+  vanilla (`Invalid move player packet`) after 30 moves; П3 skipped (stop rule).
 
 ## Next
-- Re-run П1-П3 on fresh v2 copies with the fixed clock; copy the log lines
-  per run into traces/ (rules in ROUND2-CONTEXT.md, п.3).
-- Then ЧАСТЬ III entry timings (A/B/В) and the single final report.
+- ЧАСТЬ III: implement the preload measurement in parity (wait 441 chunks or
+  30 s), run vanilla cold/warm and our server cold/warm, then the single
+  final report. Rules and structure: `docs/ROUND2-CONTEXT.md`.
