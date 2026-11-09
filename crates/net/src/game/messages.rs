@@ -146,7 +146,7 @@ pub enum MoveKind {
     PosRot,
     /// `minecraft:move_player_rot`: rotation only.
     Rot,
-    /// `minecraft:move_player_status_only`: the on-ground flag only.
+    /// `minecraft:move_player_status_only`: the flags byte only.
     StatusOnly,
 }
 

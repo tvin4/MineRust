@@ -410,7 +410,8 @@ fn record_moves<W: std::io::Write>(replay: &mut Replay<W>, tick: u64, moves: &[A
                 "z": applied.position.z,
                 "yaw": applied.position.yaw,
                 "pitch": applied.position.pitch,
-                "on_ground": applied.position.on_ground,
+                "on_ground": applied.position.on_ground(),
+                "flags": applied.position.flags,
             }),
         );
     }

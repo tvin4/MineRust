@@ -36,8 +36,9 @@ pub struct PlayerPos {
     pub yaw: f32,
     /// Pitch in degrees.
     pub pitch: f32,
-    /// Whether the client claims to stand on the ground.
-    pub on_ground: bool,
+    /// The raw movement flags byte the client sent (bit 0: on the ground,
+    /// [`PlayerPos::on_ground`]; other bits are preserved, not interpreted).
+    pub flags: u8,
 }
 
 impl PlayerPos {
@@ -50,8 +51,13 @@ impl PlayerPos {
             z: f64::from(spawn.z) + 0.5,
             yaw: 0.0,
             pitch: 0.0,
-            on_ground: false,
+            flags: 0,
         }
+    }
+
+    /// Bit 0 of [`flags`](Self::flags): the player stands on the ground.
+    pub fn on_ground(&self) -> bool {
+        self.flags & MoveUpdate::ON_GROUND != 0
     }
 
     /// Overlays the axes a movement packet carries onto this position.
@@ -71,7 +77,7 @@ impl PlayerPos {
         if let Some(pitch) = update.pitch {
             self.pitch = pitch;
         }
-        self.on_ground = update.on_ground;
+        self.flags = update.flags;
     }
 }
 

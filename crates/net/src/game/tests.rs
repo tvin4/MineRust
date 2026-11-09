@@ -88,21 +88,21 @@ fn the_move_slot_keeps_only_the_newest_packet() {
     assert!(slot.take().is_none(), "taking drains the slot");
 }
 
-/// Payload of `move_player_pos`: three big-endian doubles and the flag.
-fn pos_payload(x: f64, y: f64, z: f64, on_ground: bool) -> Vec<u8> {
+/// Payload of `move_player_pos`: three big-endian doubles and the flags byte.
+fn pos_payload(x: f64, y: f64, z: f64, flags: u8) -> Vec<u8> {
     let mut out = Vec::with_capacity(25);
     for value in [x, y, z] {
         out.extend_from_slice(&value.to_be_bytes());
     }
-    out.push(u8::from(on_ground));
+    out.push(flags);
     out
 }
 
-/// A `move_player_pos` slot value.
+/// A `move_player_pos` slot value standing on the ground (flags 0x01).
 fn pos_move(x: f64, y: f64, z: f64) -> MoveState {
     MoveState {
         kind: MoveKind::Pos,
-        payload: pos_payload(x, y, z, true),
+        payload: pos_payload(x, y, z, 0x01),
     }
 }
 
@@ -144,7 +144,8 @@ fn a_movement_after_the_ack_moves_the_player() {
         (applied.position.x, applied.position.y, applied.position.z),
         (100.5, 70.0, -50.25)
     );
-    assert!(applied.position.on_ground);
+    assert!(applied.position.on_ground());
+    assert_eq!(applied.position.flags, 0x01);
 
     let position = region.get(1).expect("still there").position();
     assert_eq!(
@@ -164,7 +165,9 @@ fn a_rotation_packet_keeps_the_position() {
     let mut payload = Vec::new();
     payload.extend_from_slice(&90.0f32.to_be_bytes());
     payload.extend_from_slice(&(-45.0f32).to_be_bytes());
-    payload.push(0);
+    // 0x02 is a real wire value (bit 0 clear): the position must not move and
+    // on-ground must stay false even though the byte is non-zero.
+    payload.push(0x02);
     slot.store(MoveState {
         kind: MoveKind::Rot,
         payload,
@@ -179,7 +182,8 @@ fn a_rotation_packet_keeps_the_position() {
     );
     assert_eq!(after.yaw, 90.0);
     assert_eq!(after.pitch, -45.0);
-    assert!(!after.on_ground);
+    assert_eq!(after.flags, 0x02);
+    assert!(!after.on_ground(), "bit 0 is clear, so not on the ground");
 }
 
 #[test]
@@ -373,6 +377,7 @@ fn the_same_movement_scenario_is_recorded_twice_identically() {
     assert_eq!(line["payload"]["y"], 64.0);
     assert_eq!(line["payload"]["z"], -2.5);
     assert_eq!(line["payload"]["on_ground"], true);
+    assert_eq!(line["payload"]["flags"], 1);
 }
 
 #[test]
