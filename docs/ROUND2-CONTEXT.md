@@ -21,9 +21,10 @@ HANDOFF (≤10 строк), push; большие выводы в файлы; п�
 | fcce22c | fix: `save-all flush` + `stop` только после того, как бот завершился сам: walk-future ставит `quit` после возврата `run_walk`, серверное будущее ждёт флаг (опрос 50 мс), затем стоп |
 | c532728 | feat: режим подтверждается по трейсу: `login.game_mode` (полный разбор `LoginPlay`, id 50) и первый байт `player_abilities` (id 65); несовпадение/неразбор → `Stop::Mode`; факты в `RunStats.game_mode/abilities_flags` и в отчёт |
 
-П.1-3 ЧАСТИ I — готовы полностью. П.4 (удаление execute-проб) — частично:
-walk.rs собирает факты и останавливается сам, но `walk_trace.rs` ещё
-содержит execute-пробы (см. «Осталось»).
+П.1-4 ЧАСТИ I — готовы полностью: walk.rs собирает факты и останавливается
+сам (`Stop::Mode`); execute-пробы из `walk_trace.rs` удалены, вместо них
+проверка `game_mode == 3 && abilities_flags == 0x07` → нарушение → abort
+последовательности, факты в отчёте (см. «Осталось», п.1 — сделано).
 
 ## Ключевые факты (проверенные, не выдумывать заново)
 
@@ -55,12 +56,12 @@ walk.rs собирает факты и останавливается сам, н
 
 ## Что осталось (план новой сессии)
 
-1. Добить п.4: в `crates/parity/tests/walk_trace.rs` удалить execute-пробы:
-   константы `CHECK_INTERVAL`, `CHECK_ATTEMPTS`, `GM_SPECTATOR`,
-   `GM_NOT_SPECTATOR`; enum `GmStatus`; поле `outcome.gm`, `probe_err`,
-   чтение лога и секцию «Gamemode probes» отчёта. Заменить проверкой
-   `stats.game_mode == Some(3) && stats.abilities_flags == Some(0x07)`:
-   не сходится → нарушение → abort последовательности; вывод в отчёт.
+1. [ГОТОВО] Добить п.4: execute-пробы из `crates/parity/tests/walk_trace.rs`
+   удалены (константы `CHECK_*`/`GM_*`, enum `GmStatus`, `outcome.gm`,
+   `probe_err`, чтение лога, секция «Gamemode probes»); вместо них проверка
+   `stats.game_mode == Some(3) && stats.abilities_flags == Some(0x07)` —
+   не сходится → нарушение → abort последовательности, факты в отчёте
+   (mode from the trace) и в walk-summary.md.
 2. П.5 ЧАСТИ I: критерий мира через `target/parity/chunk_status.py`
    (`compare <template> <world>`): парсить `only_in_B` (новые чанки) —
    стоп только вне зоны x -7..19, z -15..11; `status_diffs` внутри зоны
