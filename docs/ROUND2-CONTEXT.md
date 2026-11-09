@@ -20,11 +20,13 @@ HANDOFF (≤10 строк), push; большие выводы в файлы; п�
 | 2d826e2 | feat: `client_tick_end` (id 13) каждые 50 мс по абсолютной сетке, якорь — первый teleport ack; `player_loaded` через 1001 мс после ack (живой клиент: seq 52→91 = +1001.28 мс); recv просыпается по ближайшему из дедлайнов движение/тик/loaded; `Timers` |
 | fcce22c | fix: `save-all flush` + `stop` только после того, как бот завершился сам: walk-future ставит `quit` после возврата `run_walk`, серверное будущее ждёт флаг (опрос 50 мс), затем стоп |
 | c532728 | feat: режим подтверждается по трейсу: `login.game_mode` (полный разбор `LoginPlay`, id 50) и первый байт `player_abilities` (id 65); несовпадение/неразбор → `Stop::Mode`; факты в `RunStats.game_mode/abilities_flags` и в отчёт |
+| b4d151c | test: execute-пробы из `walk_trace.rs` удалены, вместо них assert `game_mode == 3 && abilities_flags == 0x07` → нарушение → abort последовательности, факты в отчёте |
+| 3ec8b97 | test: мир через `chunk_status.py compare` + зона x -7..19 / z -15..11 (`tests/common/world_criterion.rs`); region SHA/`entities`/`poi` — только информация, шаблон сверяется по SHA |
 
-П.1-4 ЧАСТИ I — готовы полностью: walk.rs собирает факты и останавливается
-сам (`Stop::Mode`); execute-пробы из `walk_trace.rs` удалены, вместо них
-проверка `game_mode == 3 && abilities_flags == 0x07` → нарушение → abort
-последовательности, факты в отчёте (см. «Осталось», п.1 — сделано).
+П.1-5 ЧАСТИ I — готовы полностью: walk.rs собирает факты режима и
+останавливается сам (`Stop::Mode`) вместо execute-проб (b4d151c),
+мировой критерий — `chunk_status.py compare` + зона (3ec8b97) вместо
+abort по region SHA; прогоны П1-П3 ещё не делались с новым кодом.
 
 ## Ключевые факты (проверенные, не выдумывать заново)
 
@@ -53,6 +55,11 @@ HANDOFF (≤10 строк), push; большие выводы в файлы; п�
   факты из лога копировать до следующего прогона.
 - Сервер (наша копия конфигурации): view-distance 10, spectator,
   `network-compression-threshold=-1` (записать значение в отчёте).
+- `chunk_status.py` на устаревшей копии П1 (2026-11-09, smoke-проверка):
+  template 2209 чанков, копия 2209, `only_in_B` и `status_diffs` пусты,
+  `heightmap_diffs=5`, `light_presence_diffs=11`; прошлый раунд остановил П1
+  старым критерием (4 region/*.mca поменялись) вместе с обрывом os error
+  10053 — region SHA теперь только информация.
 
 ## Что осталось (план новой сессии)
 
@@ -62,12 +69,13 @@ HANDOFF (≤10 строк), push; большие выводы в файлы; п�
    `stats.game_mode == Some(3) && stats.abilities_flags == Some(0x07)` —
    не сходится → нарушение → abort последовательности, факты в отчёте
    (mode from the trace) и в walk-summary.md.
-2. П.5 ЧАСТИ I: критерий мира через `target/parity/chunk_status.py`
-   (`compare <template> <world>`): парсить `only_in_B` (новые чанки) —
-   стоп только вне зоны x -7..19, z -15..11; `status_diffs` внутри зоны
-   перечислить без стопа; каталог шаблона сверять по SHA; `entities/` и
-   `poi/` перечислять отдельно. Region SHA из критерия убрать (остаётся
-   информацией).
+2. [ГОТОВО] П.5 ЧАСТИ I: критерий мира через `target/parity/chunk_status.py`
+   `compare <template> <world>` (модуль `tests/common/world_criterion.rs`):
+   `only_in_B` парсится, стоп только при новых чанках вне зоны x -7..19,
+   z -15..11; `status_diffs` внутри/снаружи зоны перечисляются без стопа;
+   каталог шаблона сверяется по SHA (до/после всех прогонов), `entities/`
+   и `poi/` — отдельными списками; region SHA убран из критерия, остаётся
+   информацией. Отказ скрипта/нулевой скан шаблона = нарушение.
 3. Прогоны П1 (стоять 10 с), П2 (прямая +x), П3 (диагональ +x/-z;
    200 шагов по 0.2, settle 5 с), каждый на свежей копии v2; П2/П3
    запускать автоматически, если предыдущий чист. Условия остановки:
@@ -109,7 +117,7 @@ HANDOFF (≤10 строк), push; большие выводы в файлы; п�
   `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`
   (все три обязательны и должны быть зелёными).
 - Прогоны: `cargo test -p parity --test walk_trace -- --ignored --nocapture`
-  (только после п.4-хвоста и п.5).
+  (п.4-хвост и п.5 готовы — можно запускать).
 - После правок кода: `graphify update .` (AST-only).
 - `docs/PROGRESS.md` обновить после этапа; коммиты Conventional Commits.
 
@@ -118,8 +126,10 @@ HANDOFF (≤10 строк), push; большие выводы в файлы; п�
 - `crates/parity/src/client.rs` — `stamps`/`arrivals`, метки на сокете.
 - `crates/parity/src/walk.rs` — бот: таймеры, тики, player_loaded,
   cache-move/порции, факты режима, Stop.
-- `crates/parity/tests/walk_trace.rs` — оркестратор 3 прогонов,
-  отчёт, diff мира (execute-пробы ещё не удалены — п.4-хвост).
+- `crates/parity/tests/walk_trace.rs` — оркестратор 3 прогонов, отчёт,
+  diff мира, факт режима ЧАСТЬ I п.4; п.5 через world_criterion.
+- `crates/parity/tests/common/world_criterion.rs` — `chunk_status.py
+  compare`, зона, парсинг + юнит-тесты.
 - `crates/protocol/src/packets/play.rs` — `LoginPlay` (game_mode).
 - `target/parity/chunk_status.py` — критерий мира (`scan`/`compare`).
 - `target/parity/live-session.json` — живой трейс.
