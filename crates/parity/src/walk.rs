@@ -33,7 +33,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use data::PacketIds;
-use protocol::{PacketKey, ProtocolState};
+use protocol::{LoginPlay, PacketKey, ProtocolState};
 
 use crate::client::{Client, ClientError};
 use crate::env::{EnvError, ParityEnv};
@@ -80,6 +80,17 @@ const KEY_TICK_END: PacketKey =
 /// client's gap of 1001.28 ms (`live-session.json` seq 52 → seq 91),
 /// floored to a whole millisecond.
 const LOADED_DELAY: Duration = Duration::from_millis(1001);
+
+/// Game mode id that means spectator in the login (play) packet.
+/// SOURCE: protocol docs (wiki, unverified by us) — cross-checked in the
+/// trace by [`SPECTATOR_FLAGS`], the two facts must agree (ЧАСТЬ I, п. 5).
+const SPECTATOR_GAME_MODE: i32 = 3;
+
+/// The `player_abilities` flags byte recorded in run P1 under the
+/// forced-spectator configuration (server log: `Default game type:
+/// SPECTATOR`): invulnerable `0x01` + flying `0x02` + may-fly `0x04`,
+/// no instant build. The creative/wrong-mode bits disagree with login.
+const SPECTATOR_FLAGS: u8 = 0x07;
 const KEY_MOVE_POS: PacketKey =
     PacketKey::serverbound(ProtocolState::Play, "minecraft:move_player_pos", 0x1E);
 
@@ -144,6 +155,12 @@ pub enum Stop {
     BadTeleport {
         /// Payload size seen.
         size: usize,
+    },
+    /// The trace's mode facts failed the spectator cross-check of
+    /// ЧАСТЬ I, п. 5 (`login.game_mode` vs `player_abilities` flags).
+    Mode {
+        /// The offending fact, human-readable (report line).
+        detail: String,
     },
 }
 
@@ -216,6 +233,12 @@ pub struct RunStats {
     pub spawn: Option<[f64; 3]>,
     /// The last position the bot sent.
     pub last: Option<[f64; 3]>,
+    /// `game_mode` decoded from the clientbound login (play) packet:
+    /// `3` is spectator (ЧАСТЬ I, п. 5).
+    pub game_mode: Option<i32>,
+    /// Flags byte of the clientbound `player_abilities` packet (`0x07`
+    /// under the forced spectator of the observed runs).
+    pub abilities_flags: Option<u8>,
 }
 
 /// Failures outside the run's stop conditions (connect, join, file).
@@ -584,6 +607,39 @@ async fn process_recorded(
                     z,
                 });
             }
+            Some("minecraft:login") => {
+                // ЧАСТЬ I, п. 5: the mode is proven by the trace itself —
+                // the login (play) field, never by console probes.
+                let Some(mode) = login_game_mode(&payload) else {
+                    return Ok(Some(Stop::Mode {
+                        detail: format!("login payload ({} bytes) did not decode", payload.len()),
+                    }));
+                };
+                stats.game_mode = Some(mode);
+                if mode != SPECTATOR_GAME_MODE {
+                    return Ok(Some(Stop::Mode {
+                        detail: format!(
+                            "login game_mode {mode}; expected {SPECTATOR_GAME_MODE} (spectator)"
+                        ),
+                    }));
+                }
+            }
+            Some("minecraft:player_abilities") => {
+                let Some(flags) = payload.first().copied() else {
+                    return Ok(Some(Stop::Mode {
+                        detail: "player_abilities payload is empty".to_owned(),
+                    }));
+                };
+                stats.abilities_flags = Some(flags);
+                if flags != SPECTATOR_FLAGS {
+                    return Ok(Some(Stop::Mode {
+                        detail: format!(
+                            "player_abilities flags 0x{flags:02X}; expected \
+                             0x{SPECTATOR_FLAGS:02X} (spectator)"
+                        ),
+                    }));
+                }
+            }
             Some("minecraft:disconnect") => {
                 return Ok(Some(Stop::Kick {
                     payload: entry.payload.clone(),
@@ -593,6 +649,15 @@ async fn process_recorded(
         }
     }
     Ok(None)
+}
+
+/// `game_mode` of a clientbound login (play) payload; `None` when the
+/// layout does not decode (the mode then cannot be proven).
+fn login_game_mode(payload: &[u8]) -> Option<i32> {
+    let mut reader = protocol::PacketReader::new(payload);
+    LoginPlay::decode_payload(&mut reader)
+        .ok()
+        .map(|login| login.game_mode)
 }
 
 /// Sends one packet; the trace entry it creates is picked up by the
@@ -613,6 +678,8 @@ fn new_stats() -> RunStats {
         elapsed_ms: 0.0,
         spawn: None,
         last: None,
+        game_mode: None,
+        abilities_flags: None,
     }
 }
 

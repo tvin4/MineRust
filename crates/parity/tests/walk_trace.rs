@@ -393,6 +393,11 @@ fn write_report(outcome: &RunOutcome, evidence: &[String]) {
                  movement packets sent: {:?}\nspawn: {:?} | last position: {:?}\n",
                 stats.stop, stats.elapsed_ms, stats.teleports, stats.moves, stats.spawn, stats.last
             ));
+            text.push_str(&format!(
+                "mode from the trace (ЧАСТЬ I, п. 5): login game_mode {:?} | \
+                 player_abilities flags {:?}\n",
+                stats.game_mode, stats.abilities_flags
+            ));
             text.push_str("\n## Packet counts (direction / name: times)\n");
             for (key, value) in &stats.counts {
                 text.push_str(&format!("{key}: {value}\n"));
