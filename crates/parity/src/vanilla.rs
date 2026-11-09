@@ -80,6 +80,9 @@ pub enum VanillaError {
     /// The stop command could not be written to stdin.
     #[error("cannot send `stop` to the vanilla server: {0}")]
     StopWrite(#[source] std::io::Error),
+    /// A console command (other than `stop`) could not be written.
+    #[error("cannot send a console command to the vanilla server: {0}")]
+    CommandWrite(#[source] std::io::Error),
     /// The server ignored `stop` for too long.
     #[error("the vanilla server did not stop within {0:?}")]
     StopTimeout(Duration),
@@ -145,6 +148,46 @@ impl Vanilla {
 
     /// Stops the server with `stop` on stdin and waits for a clean exit.
     pub async fn stop(mut self) -> Result<(), VanillaError> {
+        self.stop_inner().await
+    }
+
+    /// Stops the server the way the walk runs need it: `save-all flush`
+    /// first (the world is compared file-by-file afterwards), a short
+    /// pause for the save to land, then `stop`.
+    pub async fn stop_with_flush(mut self) -> Result<(), VanillaError> {
+        if let Some(stdin) = self.child.stdin.as_mut() {
+            stdin
+                .write_all(b"save-all flush\n")
+                .await
+                .map_err(VanillaError::StopWrite)?;
+            stdin.flush().await.map_err(VanillaError::StopWrite)?;
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        self.stop_inner().await
+    }
+
+    /// Writes one console command (`say`, `data get`, …) to stdin without
+    /// stopping the server; the command's own output lands in the log.
+    pub async fn command(&mut self, line: &str) -> Result<(), VanillaError> {
+        let stdin = self
+            .child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| VanillaError::CommandWrite(std::io::Error::other("stdin closed")))?;
+        stdin
+            .write_all(line.as_bytes())
+            .await
+            .map_err(VanillaError::CommandWrite)?;
+        stdin
+            .write_all(b"\n")
+            .await
+            .map_err(VanillaError::CommandWrite)?;
+        stdin.flush().await.map_err(VanillaError::CommandWrite)?;
+        Ok(())
+    }
+
+    /// Writes one console command and waits for the process to exit.
+    async fn stop_inner(&mut self) -> Result<(), VanillaError> {
         if let Some(stdin) = self.child.stdin.as_mut() {
             stdin
                 .write_all(b"stop\n")

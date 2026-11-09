@@ -40,12 +40,25 @@ fn known_packs_reply() -> Vec<u8> {
 }
 
 /// The scripted login → configuration → play sequence, up to the moment
-/// the connection has entered play (Finish Acknowledged sent).
+/// the connection has entered play (Finish Acknowledged sent), with the
+/// historical view distance of 8.
 ///
-/// The slice itself decides what to do in play: record the join traffic
-/// (the join slice), join, answer a batch and watch the stream (the chunk
-/// batch slice), and so on — this list stops where play starts.
+/// Slices append their own steps after this list (a drain, a wait, a reply
+/// of their own); the walk bot asks for its own distance through
+/// [`join_steps_with_view`].
 pub fn join_steps(env: &ParityEnv, ids: &PacketIds, server_port: u16) -> Vec<Step> {
+    join_steps_with_view(env, ids, server_port, 8)
+}
+
+/// The same scripted login → configuration → play sequence with an explicit
+/// client view distance: the walk bot sends 10 to match the copy's
+/// `server.properties` (`view-distance=10`).
+pub fn join_steps_with_view(
+    env: &ParityEnv,
+    ids: &PacketIds,
+    server_port: u16,
+    view_distance: i8,
+) -> Vec<Step> {
     let handshake = Handshake {
         protocol_version: env.config.protocol_version,
         server_address: "localhost".to_owned(),
@@ -58,7 +71,7 @@ pub fn join_steps(env: &ParityEnv, ids: &PacketIds, server_port: u16) -> Vec<Ste
     };
     let info = ClientInformation {
         locale: "en_us".to_owned(),
-        view_distance: 8,
+        view_distance,
         chat_mode: 0,
         chat_colors: true,
         skin_parts: 0x7F,

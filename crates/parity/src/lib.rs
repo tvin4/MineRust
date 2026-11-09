@@ -22,12 +22,16 @@ mod env;
 mod steps;
 mod trace;
 mod vanilla;
+mod walk;
 
 pub use client::{Client, ClientError, Step};
 pub use diff::{diff_traces, normalize, render_report, CountRow, PayloadRow, TracesDiff};
 pub use env::{load_parity_env, EnvError, ParityEnv, PACKETS_REPORT_VAR, SERVER_TOML_VAR};
-pub use steps::join_steps;
+pub use steps::{join_steps, join_steps_with_view};
 pub use trace::{
     from_hex, to_hex, HexError, Trace, TraceDirection, TraceEntry, TraceIoError, TraceState,
 };
 pub use vanilla::{copy_dir_all, Vanilla, VanillaError};
+pub use walk::{
+    run_walk, Batch, CacheMove, RunStats, Stop, WalkError, WalkMode, UNKNOWN_CHUNK, VIEW_DISTANCE,
+};

@@ -21,7 +21,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::Instant;
 
-use crate::trace::Trace;
+use crate::trace::{Trace, TraceEntry};
 
 /// Sanity cap for an incoming frame body; real packets stay far below it.
 const MAX_BODY: usize = 16 * 1024 * 1024;
@@ -267,6 +267,32 @@ impl Client {
             }
         }
         Ok(())
+    }
+
+    /// Sends one packet by numeric id and records it (the walk bot's
+    /// play loop needs plain sends outside the step script).
+    ///
+    /// The packet is framed exactly like a scripted `Step::Send`.
+    pub async fn send_packet(&mut self, id: u32, payload: &[u8]) -> Result<(), ClientError> {
+        self.send(id, payload).await
+    }
+
+    /// Reads one packet until `until` (`None` = the deadline passed,
+    /// exactly like the internal waits see it). Play keep-alives are
+    /// acknowledged automatically on the way in.
+    ///
+    /// Used by the walk bot, which must both read continuously and keep
+    /// its own 50 ms send cadence.
+    pub async fn recv_packet(
+        &mut self,
+        until: tokio::time::Instant,
+    ) -> Result<Option<(u32, Vec<u8>)>, ClientError> {
+        self.recv_until(until).await
+    }
+
+    /// The most recently recorded packet, if any.
+    pub fn last_entry(&self) -> Option<&TraceEntry> {
+        self.trace.packets.last()
     }
 
     /// The finished recording.
