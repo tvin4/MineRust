@@ -66,6 +66,15 @@ const BLOCK_X: (f64, f64) = (50.0, 157.0);
 /// Allowed block positions, z: block edges -80..=31 minus a 2-block reserve.
 const BLOCK_Z: (f64, f64) = (-78.0, 29.0);
 
+/// ЧАСТЬ 3 раунда 5, allowed central chunk of a v3 walk, x axis.
+///
+/// The v3 world is a full 65×65 chunk square (x −26..38, z −34..30); keeping
+/// the centre inside this rectangle with a 2-chunk reserve keeps the radius-10
+/// send window (centre ± 10) entirely inside the prepared area.
+const CHUNK_X_V3: (i32, i32) = (-14, 26);
+/// ЧАСТЬ 3 раунда 5, allowed central chunk of a v3 walk, z axis.
+const CHUNK_Z_V3: (i32, i32) = (-22, 18);
+
 /// Serverbound ids, resolved by name from the packets report (default ids
 /// matter only when no report is configured).
 const KEY_ACCEPT: PacketKey =
@@ -194,6 +203,20 @@ pub enum WalkMode {
     LiveFirstMoves {
         /// Idle time after the third move.
         idle: Duration,
+    },
+    /// ЧАСТЬ 3 раунда 5: the same scripted walk as [`WalkMode::WalkLoaded`]
+    /// (`on_ground: true`, no rotation alternation, tick-coupled), but on the
+    /// frozen v3 world. Its accepted zone is the v3 chunk rectangle
+    /// ([`CHUNK_X_V3`] × [`CHUNK_Z_V3`]) instead of the П2/П3 v2 zone, so the
+    /// radius-10 window of the centre stays inside the prepared 65×65 area
+    /// with a 2-chunk reserve.
+    WalkV3 {
+        /// `true` — diagonal +x/+z; `false` — straight +x.
+        diagonal: bool,
+        /// Movement packets to send.
+        steps: u32,
+        /// Idle time after the last step.
+        settle: Duration,
     },
 }
 
@@ -611,6 +634,7 @@ async fn play(
         WalkMode::Straight { steps, settle } => (Duration::ZERO, steps, settle, None),
         WalkMode::Diagonal { steps, settle } => (Duration::ZERO, steps, settle, None),
         WalkMode::WalkLoaded { steps, settle, .. } => (Duration::ZERO, steps, settle, None),
+        WalkMode::WalkV3 { steps, settle, .. } => (Duration::ZERO, steps, settle, None),
         WalkMode::LiveFirstMoves { idle } => (Duration::ZERO, 0, idle, None),
         WalkMode::Preload {
             chunks, timeout, ..
@@ -766,7 +790,7 @@ async fn play(
                     WalkMode::WalkLoaded {
                         tick_coupled: true,
                         ..
-                    }
+                    } | WalkMode::WalkV3 { .. }
                 ) && movement_allowed(mode, loaded_sent)
                 {
                     if let Some(reason) = send_move(
@@ -824,6 +848,7 @@ async fn play(
                         tick_coupled: true,
                         ..
                     }
+                    | WalkMode::WalkV3 { .. }
             ) && movement_allowed(mode, loaded_sent);
             if grid_moves {
                 if let Some(reason) = send_move(
@@ -1148,6 +1173,18 @@ fn next_step(mode: WalkMode, pos: Option<[f64; 3]>, moved: u32) -> Option<[f64; 
             steps,
             ..
         } if moved < steps => Some([current[0] + DIAG, current[1], current[2] + DIAG]),
+        // ЧАСТЬ 3 раунда 5: v3 walks use the same step geometry as the
+        // П2/П3 modes (straight +x; diagonal +x/+z).
+        WalkMode::WalkV3 {
+            diagonal: false,
+            steps,
+            ..
+        } if moved < steps => Some([current[0] + STRAIGHT, current[1], current[2]]),
+        WalkMode::WalkV3 {
+            diagonal: true,
+            steps,
+            ..
+        } if moved < steps => Some([current[0] + DIAG, current[1], current[2] + DIAG]),
         _ => None,
     }
 }
@@ -1156,7 +1193,9 @@ fn next_step(mode: WalkMode, pos: Option<[f64; 3]>, moved: u32) -> Option<[f64; 
 /// for `player_loaded` stay silent until that packet is out.
 fn movement_allowed(mode: WalkMode, loaded_sent: bool) -> bool {
     match mode {
-        WalkMode::WalkLoaded { .. } | WalkMode::LiveFirstMoves { .. } => loaded_sent,
+        WalkMode::WalkLoaded { .. } | WalkMode::LiveFirstMoves { .. } | WalkMode::WalkV3 { .. } => {
+            loaded_sent
+        }
         _ => true,
     }
 }
@@ -1171,6 +1210,7 @@ fn move_packet(mode: WalkMode, target: &[f64; 3], moved: u32) -> (PacketKey, Vec
             ..
         } if moved % 2 == 1 => (KEY_MOVE_POS_ROT, move_payload_rot(target, on_ground)),
         WalkMode::WalkLoaded { on_ground, .. } => (KEY_MOVE_POS, move_payload(target, on_ground)),
+        WalkMode::WalkV3 { .. } => (KEY_MOVE_POS, move_payload(target, true)),
         _ => (KEY_MOVE_POS, move_payload(target, false)),
     }
 }
@@ -1196,7 +1236,7 @@ async fn send_move(
     settle_at: &mut Option<tokio::time::Instant>,
 ) -> Result<Option<Stop>, WalkError> {
     match next_step(mode, *pos, *moved) {
-        Some(target) if in_zone(target[0], target[2]) => {
+        Some(target) if zone_ok(mode, target[0], target[2]) => {
             let (key, payload) = move_packet(mode, &target, *moved);
             send(client, ids.id(key), &payload).await?;
             *pos = Some(target);
@@ -1223,6 +1263,23 @@ fn in_zone(x: f64, z: f64) -> bool {
         && (BLOCK_Z.0..=BLOCK_Z.1).contains(&z)
         && (CHUNK_X.0..=CHUNK_X.1).contains(&cx)
         && (CHUNK_Z.0..=CHUNK_Z.1).contains(&cz)
+}
+
+/// ЧАСТЬ 3 раунда 5: whether a v3 walk may occupy this block position. Only
+/// the central chunk is bounded (the radius-10 window is the criterion), and
+/// the accepted rectangle keeps that window inside the prepared area.
+fn in_zone_v3(x: f64, z: f64) -> bool {
+    let cx = (x.floor() as i64).div_euclid(16) as i32;
+    let cz = (z.floor() as i64).div_euclid(16) as i32;
+    (CHUNK_X_V3.0..=CHUNK_X_V3.1).contains(&cx) && (CHUNK_Z_V3.0..=CHUNK_Z_V3.1).contains(&cz)
+}
+
+/// The zone check that goes with the mode (asserted before every send).
+fn zone_ok(mode: WalkMode, x: f64, z: f64) -> bool {
+    match mode {
+        WalkMode::WalkV3 { .. } => in_zone_v3(x, z),
+        _ => in_zone(x, z),
+    }
 }
 
 /// Payload of `minecraft:move_player_pos`: 3 big-endian doubles plus the

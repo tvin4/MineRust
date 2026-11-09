@@ -8,6 +8,8 @@
 //!
 //! `MINECRAFT_WINDOW_PROBE=p2` — v2, straight +x, 302 steps (ЧАСТЬ I П2)
 //! `MINECRAFT_WINDOW_PROBE=p3` — v2, diagonal +x/+z, 427 steps (ЧАСТЬ I П3)
+//! `MINECRAFT_WINDOW_PROBE=p4` — v3, straight +x, 600 steps (~120 blocks)
+//! `MINECRAFT_WINDOW_PROBE=p5` — v3, diagonal +x/+z, 600 steps (~120 blocks)
 //!
 //! The run itself repeats the Part I winner exactly (`on_ground: true`,
 //! `alternate_rot: false`, `tick_coupled: true`, 0.2 steps on the 50 ms
@@ -27,6 +29,9 @@ use parity::{
 
 const TRACE_DIR: &str = r"C:\MineRust-data\traces";
 const WORLD_ROOT: &str = r"C:\MineRust-data";
+/// The frozen v3 world: 65×65 full chunks (x −26..38, z −34..30). ЧАСТЬ 3
+/// никогда не изменяет его — только копирует под прогон.
+const V3_TEMPLATE: &str = r"C:\MineRust-data\world-template-v3";
 /// Idle after the last step (Part I kept 5 s).
 const SETTLE: Duration = Duration::from_secs(5);
 
@@ -73,6 +78,24 @@ fn probe(name: &str) -> Option<(WalkMode, &'static str)> {
                 tick_coupled: true,
             },
             "П3: diagonal +x/+z, 427 steps",
+        )),
+        // ЧАСТЬ 3 раунда 5: 600 steps × 0.2 = ~120 blocks on the frozen v3
+        // world, same bot scheme as П2/П3 (tick_coupled, 50 ms deadline grid).
+        "p4" => Some((
+            WalkMode::WalkV3 {
+                diagonal: false,
+                steps: 600,
+                settle: SETTLE,
+            },
+            "П4: straight +x, 600 steps (~120 blocks) on v3",
+        )),
+        "p5" => Some((
+            WalkMode::WalkV3 {
+                diagonal: true,
+                steps: 600,
+                settle: SETTLE,
+            },
+            "П5: diagonal +x/+z, 600 steps (~120 blocks) on v3",
         )),
         _ => None,
     }
@@ -149,7 +172,15 @@ async fn window_probe() {
     let ids = Arc::new(env.packet_ids().expect("packet ids"));
     std::fs::create_dir_all(TRACE_DIR).expect("traces dir");
 
-    let server = match Vanilla::start(&env).await {
+    // ЧАСТЬ 3: П4/П5 start on a fresh copy of the frozen v3 world; П2/П3 keep
+    // the default v2 template. `start_from` copies the template, so the
+    // template itself is never touched.
+    let template = if name == "p4" || name == "p5" {
+        Path::new(V3_TEMPLATE)
+    } else {
+        &env.world_template
+    };
+    let server = match Vanilla::start_from(&env, template).await {
         Ok(server) => server,
         Err(error) => {
             eprintln!("vanilla did not start: {error}");

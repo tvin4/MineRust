@@ -247,6 +247,18 @@ async fn one_run(
             WalkMode::LiveFirstMoves { idle } => {
                 format!("live first moves + {}s idle", idle.as_secs())
             }
+            WalkMode::WalkV3 {
+                diagonal, steps, ..
+            } => {
+                format!(
+                    "walk-v3 {} {steps} steps",
+                    if diagonal {
+                        "diagonal +x/+z"
+                    } else {
+                        "straight +x"
+                    }
+                )
+            }
             // Not part of the three walk runs: ЧАСТЬ III's wait uses its own
             // test driver (`tests/preload_measure.rs`).
             WalkMode::Preload { .. } => "preload (ЧАСТЬ III)".to_owned(),

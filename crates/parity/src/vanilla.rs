@@ -5,7 +5,7 @@
 //! readiness line in `logs/latest.log`, and stops the server by piping
 //! `stop` to stdin (a graceful shutdown that persists the world).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use tokio::io::AsyncWriteExt;
@@ -109,8 +109,16 @@ impl Vanilla {
     /// `Done (...)`, so on success the server is fully ready to accept
     /// connections.
     pub async fn start(env: &ParityEnv) -> Result<Self, VanillaError> {
+        Self::start_from(env, &env.world_template).await
+    }
+
+    /// Starts the vanilla server on a fresh copy of an explicit world
+    /// template (ЧАСТЬ 3, round 5: the walk runs copy the frozen v3 world
+    /// instead of the default `env.world_template`). The template is copied
+    /// verbatim, so the template itself is never modified.
+    pub async fn start_from(env: &ParityEnv, template: &Path) -> Result<Self, VanillaError> {
         let vanilla_dir = env.vanilla_dir.clone();
-        prepare_world(env)?;
+        prepare_world_from(&vanilla_dir, template)?;
 
         let log_path = vanilla_dir.join("logs").join("latest.log");
         if log_path.exists() {
@@ -232,16 +240,16 @@ impl Drop for Vanilla {
     }
 }
 
-/// Replaces `vanilla_dir/world` with a copy of the frozen world template.
-fn prepare_world(env: &ParityEnv) -> Result<(), VanillaError> {
-    let world = env.vanilla_dir.join("world");
+/// Replaces `vanilla_dir/world` with a copy of `template` (the frozen world).
+fn prepare_world_from(vanilla_dir: &Path, template: &Path) -> Result<(), VanillaError> {
+    let world = vanilla_dir.join("world");
     if world.exists() {
         std::fs::remove_dir_all(&world).map_err(|source| VanillaError::WorldRemove {
             path: world.clone(),
             source,
         })?;
     }
-    copy_dir_all(&env.world_template, &world).map_err(|source| VanillaError::WorldCopy {
+    copy_dir_all(template, &world).map_err(|source| VanillaError::WorldCopy {
         path: world,
         source,
     })
