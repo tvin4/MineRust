@@ -16,6 +16,9 @@
 //! * `minecraft:move_player_pos` goes out once per 50 ms absolute deadline,
 //!   step ≤ 0.2 blocks, constant height, and any step that would leave the
 //!   owner's zone is refused *before* it is sent;
+//! * every JSONL line carries the packet's monotonic wire time — elapsed
+//!   since the connection attempt, stamped by [`Client`] at the socket
+//!   read/write, never at the moment the line happens to be written;
 //! * every server `player_position` after the first one is a rollback and
 //!   ends the run immediately, as does a disconnect, a closed connection
 //!   or the safety deadline.
@@ -135,7 +138,8 @@ pub enum Stop {
 /// One finished chunk batch (pace stream).
 #[derive(Debug, Clone)]
 pub struct Batch {
-    /// Monotonic milliseconds since the play loop started.
+    /// Monotonic milliseconds since the connection attempt: the wire time
+    /// of the closing `chunk_batch_finished` (the trace's `t_ms`).
     pub t_ms: f64,
     /// `level_chunk_with_light` packets since the previous `start`.
     pub chunks: u64,
@@ -144,7 +148,8 @@ pub struct Batch {
 }
 
 /// One window-move of the server's loaded-chunk view, with the bot's
-/// monotonic time (tick number = t_ms / 50 in the report).
+/// monotonic time (tick number = t_ms / 50 in the report; the clock is
+/// the connection one, so tick 0 is the connection, not the join).
 ///
 /// Coordinates come from decoding the recorded payload as two VarInts
 /// `(x, z)` — the layout observed in the live trace (`06feffffff0f` = the
@@ -152,7 +157,8 @@ pub struct Batch {
 /// [`UNKNOWN_CHUNK`] and the report prints it as unparsed.
 #[derive(Debug, Clone)]
 pub struct CacheMove {
-    /// Monotonic milliseconds since the play loop (trace file) started.
+    /// Monotonic milliseconds since the connection attempt: the wire time
+    /// of the packet (the trace's `t_ms`).
     pub t_ms: f64,
     /// Packet name (`set_chunk_cache_center` / `forget_level_chunk`).
     pub name: String,
@@ -215,12 +221,16 @@ pub enum WalkError {
     /// A recorded packet could not be turned back into bytes.
     #[error("recorded payload is not hex: {0}")]
     Hex(#[from] crate::trace::HexError),
+    /// A trace entry has no socket timestamp: packets and stamps are
+    /// pushed together by [`Client::record`], so a gap would fake the
+    /// whole timeline of the run.
+    #[error("trace entry {0} has no socket stamp")]
+    Stamp(usize),
 }
 
-/// The JSONL trace writer: one line per packet, monotonic time.
+/// The JSONL trace writer: one line per packet, monotonic wire time.
 struct Jsonl {
     file: std::io::BufWriter<std::fs::File>,
-    started: std::time::Instant,
     seq: u64,
 }
 
@@ -240,17 +250,20 @@ impl Jsonl {
         })?;
         Ok(Self {
             file: std::io::BufWriter::new(file),
-            started: std::time::Instant::now(),
             seq: 0,
         })
     }
 
     /// Appends one packet line: time, direction, state, id, name, base64.
-    fn record(&mut self, entry: &TraceEntry) -> Result<(), WalkError> {
+    ///
+    /// `stamp` is the packet's socket time (elapsed since the connection
+    /// attempt), taken by [`Client`] when the packet crossed the wire —
+    /// the line's own write moment never enters the trace.
+    fn record(&mut self, entry: &TraceEntry, stamp: Duration) -> Result<(), WalkError> {
         self.seq += 1;
         let line = serde_json::json!({
             "seq": self.seq,
-            "t_ms": (self.started.elapsed().as_secs_f64() * 1000.0).round() / 1000.0,
+            "t_ms": ms(stamp),
             "dir": direction_name(entry.direction),
             "state": state_name(entry.state),
             "id": entry.id,
@@ -266,11 +279,6 @@ impl Jsonl {
             source,
         })?;
         Ok(())
-    }
-
-    /// Monotonic milliseconds since the trace file was opened.
-    fn t_ms(&self) -> f64 {
-        (self.started.elapsed().as_secs_f64() * 1000.0).round() / 1000.0
     }
 
     /// Flushes buffered lines before the handle is closed.
@@ -448,11 +456,17 @@ async fn process_recorded(
     chunking: &mut Batch,
 ) -> Result<Option<Stop>, WalkError> {
     while *emitted < client.trace().len() {
+        // The wire time of this packet: `stamps` and `trace.packets`
+        // grow together, so the indexes match — a gap is an invariant
+        // break, never something to paper over with a default.
+        let Some(stamp) = client.stamps().get(*emitted).copied() else {
+            return Err(WalkError::Stamp(*emitted));
+        };
         let entry = client.trace().packets[*emitted].clone();
         *emitted += 1;
         let key = count_key(&entry);
         *stats.counts.entry(key).or_insert(0) += 1;
-        jsonl.record(&entry)?;
+        jsonl.record(&entry, stamp)?;
 
         if entry.direction != TraceDirection::Clientbound {
             if entry.name.as_deref() == Some("minecraft:move_player_pos") {
@@ -496,7 +510,7 @@ async fn process_recorded(
                         bytes: 0,
                     },
                 );
-                done.t_ms = jsonl.t_ms();
+                done.t_ms = ms(stamp);
                 stats.batches.push(done);
             }
             Some("minecraft:level_chunk_with_light") => {
@@ -506,7 +520,7 @@ async fn process_recorded(
             Some(name @ ("minecraft:set_chunk_cache_center" | "minecraft:forget_level_chunk")) => {
                 let (x, z) = chunk_center(&payload);
                 stats.cache_moves.push(CacheMove {
-                    t_ms: jsonl.t_ms(),
+                    t_ms: ms(stamp),
                     name: name.to_owned(),
                     x,
                     z,
@@ -542,6 +556,12 @@ fn new_stats() -> RunStats {
         spawn: None,
         last: None,
     }
+}
+
+/// Monotonic milliseconds of a socket stamp, rounded to microseconds
+/// (the wire clock of the JSONL trace and of the report tables).
+fn ms(stamp: Duration) -> f64 {
+    (stamp.as_secs_f64() * 1000.0).round() / 1000.0
 }
 
 /// Counter key of one recorded packet: direction plus name (or raw id).

@@ -388,8 +388,8 @@ fn write_report(outcome: &RunOutcome, evidence: &[String]) {
                 text.push_str(&format!("{key}: {value}\n"));
             }
             text.push_str(
-                "\n## Chunk batches (tick = t_ms / 50; timings possibly \
-                 distorted by generation)\n",
+                "\n## Chunk batches (t_ms = packet wire time since connect; \
+                 tick = t_ms / 50; timings possibly distorted by generation)\n",
             );
             if stats.batches.is_empty() {
                 text.push_str("(no finished batch)\n");
@@ -404,8 +404,8 @@ fn write_report(outcome: &RunOutcome, evidence: &[String]) {
                 ));
             }
             text.push_str(
-                "\n## Server window moves (tick = t_ms / 50; timings possibly \
-                 distorted by generation)\n",
+                "\n## Server window moves (t_ms = packet wire time since connect; \
+                 tick = t_ms / 50; timings possibly distorted by generation)\n",
             );
             for mv in &stats.cache_moves {
                 text.push_str(&format!(

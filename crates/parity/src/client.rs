@@ -182,6 +182,14 @@ pub struct Client {
     /// field comparisons against vanilla, while a test can still ask how
     /// long taking the recording took (part A 2, first and last chunk).
     arrivals: Vec<(u32, Duration)>,
+    /// Elapsed [`Self::opened`] for **every** recorded packet (both
+    /// directions): `stamps[i]` is the wire time of `trace.packets[i]`.
+    ///
+    /// Captured immediately after the frame left the socket (or arrived on
+    /// it), never when the packet is later processed — a trace line keeps
+    /// its real moment even when packets are emitted in a burst long after
+    /// the receipt (the walk bot's JSONL trace).
+    stamps: Vec<Duration>,
 }
 
 impl Client {
@@ -230,6 +238,7 @@ impl Client {
             read_pos: 0,
             opened,
             arrivals: Vec::new(),
+            stamps: Vec::new(),
         })
     }
 
@@ -237,6 +246,13 @@ impl Client {
     /// connection attempt started)`, in arrival order.
     pub fn arrivals(&self) -> &[(u32, Duration)] {
         &self.arrivals
+    }
+
+    /// Monotonic time of the socket read/write of every recorded packet:
+    /// elapsed since the connection attempt, one per packet, in trace
+    /// order (`stamps()[i]` belongs to `trace().packets[i]`).
+    pub fn stamps(&self) -> &[Duration] {
+        &self.stamps
     }
 
     /// Runs the whole script in order.
@@ -322,13 +338,18 @@ impl Client {
                 state: self.state,
                 source,
             })?;
-        self.record(Direction::Serverbound, id, payload);
+        // The stamp belongs to the moment the packet left the wire.
+        let stamp = self.opened.elapsed();
+        self.record(Direction::Serverbound, id, payload, stamp);
         Ok(())
     }
 
-    /// Records one outgoing packet with its resolved name.
-    fn record(&mut self, direction: Direction, id: u32, payload: &[u8]) {
+    /// Records one packet with the wire time it was read/written at and
+    /// its resolved name: `stamps` and `trace.packets` grow together, so
+    /// index `i` addresses the same packet in both.
+    fn record(&mut self, direction: Direction, id: u32, payload: &[u8], stamp: Duration) {
         self.trace.record(self.state, direction, id, payload);
+        self.stamps.push(stamp);
         let key = (self.state.index() as u8, direction.index() as u8, id);
         if let Some(name) = self.names.get(&key) {
             if let Some(entry) = self.trace.packets.last_mut() {
@@ -440,6 +461,10 @@ impl Client {
                 Err(_) => return Ok(None),
             };
 
+        // Taken at the socket, before decompression: a heavy chunk's
+        // timestamp is the moment its bytes hit the wire, not the moment
+        // the payload was inflated.
+        let stamp = self.opened.elapsed();
         let state = self.state;
         let body = match self.threshold {
             None => body,
@@ -448,8 +473,8 @@ impl Client {
         let (id, payload) =
             split_packet(&body).map_err(|source| ClientError::Malformed { state, source })?;
 
-        self.record(Direction::Clientbound, id, &payload);
-        self.arrivals.push((id, self.opened.elapsed()));
+        self.record(Direction::Clientbound, id, &payload, stamp);
+        self.arrivals.push((id, stamp));
         self.apply_set_compression(id, &payload)?;
         // Transport level, like compression: a real client acknowledges
         // play keep-alives, and without an acknowledgement vanilla drops an
