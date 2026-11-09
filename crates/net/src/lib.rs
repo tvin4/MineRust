@@ -8,6 +8,7 @@
 mod connection;
 mod error;
 mod frame;
+pub mod game;
 pub mod loader;
 pub mod trace;
 

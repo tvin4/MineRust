@@ -1,0 +1,264 @@
+//! The game thread: one 20 TPS tick that owns the players (ARCH-M4 §0/§1).
+//!
+//! M4.1 runs a single region on a dedicated `std::thread`. Connections
+//! stay thin: they decode packets, keep keep-alives and hand the world's
+//! chunk batches to `batch.rs`; everything that is game state — who is
+//! online, whether their teleport is confirmed, the newest movement —
+//! lives here and is only reached through channels.
+//!
+//! The tick waits for an absolute deadline (`start + i·50 ms`), reads the
+//! incoming channel with `try_recv` and never waits on a connection. Axis
+//! choices, thresholds and the replay format are M4.1 **[hypothesis]**
+//! where no trace backs them (see `docs/ARCH-M4.md` §0/§1/§3).
+
+mod messages;
+mod metrics;
+mod region;
+mod scheduler;
+
+#[cfg(test)]
+mod tests;
+
+pub use messages::{
+    KickFlag, KickReason, MoveSlot, MoveState, PlayerConnection, PlayerId, PlayerJoin,
+    ServerMessage, ToGame,
+};
+pub use metrics::{TickMetrics, TickMetricsHandle};
+pub use region::{Kick, Player, Region, RegionId, SINGLE_REGION};
+pub use scheduler::Scheduler;
+
+use std::io;
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::Arc;
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+use tokio::sync::mpsc;
+use tracing::{info, warn};
+
+use metrics::Recorder;
+
+/// One game tick: 20 TPS.
+pub const TICK_PERIOD: Duration = Duration::from_millis(50);
+
+/// How often the tick metrics are logged.
+const LOG_EVERY: Duration = Duration::from_secs(5);
+
+/// Default capacity of the connection → game channel.
+const JOIN_CAPACITY: usize = 256;
+
+/// Default capacity of each connection's outbound queue.
+pub const OUTBOUND_CAPACITY: usize = 256;
+
+/// Configuration of the game thread.
+///
+/// Every field is a plain scalar so M4.6's benchmark can shape the thread
+/// without touching the loop. `reset_after` is the "[hypothesis] N ticks"
+/// of ARCH-M4 §3 (reset the deadline when the tick falls this far behind);
+/// `ticks_limit` stops the loop after a fixed count (bench and tests).
+#[derive(Debug, Clone, Copy)]
+pub struct GameConfig {
+    /// Period of one tick.
+    pub period: Duration,
+    /// Reset the deadline when the tick is this many periods behind.
+    pub reset_after: u32,
+    /// Capacity of the connection → game channel.
+    pub join_capacity: usize,
+    /// Capacity of each connection's outbound queue.
+    pub outbound_capacity: usize,
+    /// Stop after this many ticks; `None` runs until the channel closes.
+    pub ticks_limit: Option<u64>,
+}
+
+impl Default for GameConfig {
+    fn default() -> Self {
+        Self {
+            period: TICK_PERIOD,
+            reset_after: 5,
+            join_capacity: JOIN_CAPACITY,
+            outbound_capacity: OUTBOUND_CAPACITY,
+            ticks_limit: None,
+        }
+    }
+}
+
+/// The game thread is gone; a message could not be delivered.
+#[derive(Debug, thiserror::Error)]
+#[error("the game thread is not running")]
+pub struct GameClosed;
+
+/// The spawned game thread. Keep it to `join` (tests); the server drops it
+/// and lets the thread end when every [`GameHandle`] is gone.
+#[derive(Debug)]
+pub struct GameThread {
+    join: Option<JoinHandle<()>>,
+}
+
+impl GameThread {
+    /// Waits for the thread to finish.
+    pub fn join(mut self) -> std::thread::Result<()> {
+        match self.join.take() {
+            Some(join) => join.join(),
+            None => Ok(()),
+        }
+    }
+}
+
+/// A cloneable handle on the game thread, held by every connection.
+#[derive(Clone)]
+pub struct GameHandle {
+    to_game: mpsc::Sender<ToGame>,
+    next_id: Arc<AtomicI32>,
+    metrics: Arc<TickMetricsHandle>,
+}
+
+impl GameHandle {
+    /// Starts the game thread.
+    ///
+    /// The id counter starts at one, so the first player of a server keeps
+    /// the entity id the join sequence always announced.
+    pub fn spawn(config: GameConfig) -> io::Result<(GameThread, Self)> {
+        let capacity = config.join_capacity.max(1);
+        let (to_game, incoming) = mpsc::channel(capacity);
+        let metrics = Arc::new(TickMetricsHandle::default());
+        let thread_metrics = Arc::clone(&metrics);
+        let join = std::thread::Builder::new()
+            .name("minecraft-game".to_owned())
+            .spawn(move || game_loop(incoming, config, &thread_metrics))?;
+        let handle = Self {
+            to_game,
+            next_id: Arc::new(AtomicI32::new(1)),
+            metrics,
+        };
+        Ok((GameThread { join: Some(join) }, handle))
+    }
+
+    /// The next free player id.
+    pub fn next_player_id(&self) -> PlayerId {
+        self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// The last published tick metrics.
+    pub fn metrics(&self) -> TickMetrics {
+        self.metrics.snapshot()
+    }
+
+    /// The metrics handle, so a reader can outlive the handle clones.
+    pub fn metrics_handle(&self) -> Arc<TickMetricsHandle> {
+        Arc::clone(&self.metrics)
+    }
+
+    /// Delivers a reliable message; waits only when the queue is full.
+    pub async fn send(&self, message: ToGame) -> Result<(), GameClosed> {
+        self.to_game.send(message).await.map_err(|_| GameClosed)
+    }
+}
+
+/// The tick loop: wait for the absolute deadline, apply incoming messages,
+/// tick the regions, publish the metrics, repeat.
+fn game_loop(
+    mut incoming: mpsc::Receiver<ToGame>,
+    config: GameConfig,
+    metrics: &TickMetricsHandle,
+) {
+    let mut scheduler = Scheduler::new(vec![Region::new(SINGLE_REGION)]);
+    let mut recorder = Recorder::new(config.period);
+    let mut deadline = Instant::now() + config.period;
+    let mut last_log = Instant::now();
+    let mut tick: u64 = 0;
+    let mut disconnected = false;
+    loop {
+        sleep_until(deadline);
+        let woke = Instant::now();
+        let work = Instant::now();
+        while let Some(message) = next_message(&mut incoming, &mut disconnected) {
+            apply(&mut scheduler, message);
+        }
+        for kick in scheduler.tick(tick, deadline) {
+            warn!(
+                player = kick.id,
+                reason = kick.reason.message(),
+                "kicking a slow player"
+            );
+        }
+        recorder.record(tick, deadline, woke, work.elapsed(), metrics);
+        tick += 1;
+        deadline += config.period;
+        if config.ticks_limit.is_some_and(|limit| tick >= limit) {
+            break;
+        }
+        let now = Instant::now();
+        if now.saturating_duration_since(deadline) > config.period * config.reset_after {
+            let behind = now.saturating_duration_since(deadline);
+            warn!(
+                behind_ms = behind.as_secs_f64() * 1000.0,
+                "tick fell behind, resetting the deadline"
+            );
+            deadline = now + config.period;
+        }
+        if now.saturating_duration_since(last_log) >= LOG_EVERY {
+            last_log = now;
+            info!(ticks = tick, metrics = ?metrics.snapshot(), "game tick");
+        }
+        if disconnected {
+            break;
+        }
+    }
+    recorder.finish(metrics);
+    info!(ticks = tick, metrics = ?metrics.snapshot(), "game thread stopped");
+}
+
+/// Pops one incoming message without waiting; `Err(Disconnected)` sets the
+/// flag and yields `None`.
+fn next_message(incoming: &mut mpsc::Receiver<ToGame>, disconnected: &mut bool) -> Option<ToGame> {
+    match incoming.try_recv() {
+        Ok(message) => Some(message),
+        Err(mpsc::error::TryRecvError::Empty) => None,
+        Err(mpsc::error::TryRecvError::Disconnected) => {
+            *disconnected = true;
+            None
+        }
+    }
+}
+
+/// Applies one incoming message to the single region.
+fn apply(scheduler: &mut Scheduler, message: ToGame) {
+    match message {
+        ToGame::Join(join) => {
+            // M4.3 routes joins by chunk; M4.1 puts everyone in one region.
+            match scheduler.region_mut(SINGLE_REGION) {
+                Some(region) => {
+                    if region.insert(*join).is_some() {
+                        warn!("a join reused an id that was still online");
+                    }
+                }
+                None => warn!("a join arrived for a missing region"),
+            }
+        }
+        ToGame::TeleportAck { id, teleport_id } => {
+            let region_id = scheduler.region_of(id);
+            match region_id.and_then(|region_id| scheduler.region_mut(region_id)) {
+                Some(region) => match region.get_mut(id) {
+                    Some(player) => player.confirm_teleport(),
+                    None => warn!(player = id, "teleport ack for an unknown player"),
+                },
+                None => warn!(player = id, "teleport ack for an unknown region"),
+            }
+            info!(player = id, teleport_id, "teleport confirmed");
+        }
+        ToGame::Quit { id } => {
+            let region_id = scheduler.region_of(id);
+            if let Some(region) = region_id.and_then(|region_id| scheduler.region_mut(region_id)) {
+                region.remove(id);
+            }
+        }
+    }
+}
+
+/// Sleeps until `deadline`; returns at once when it has already passed.
+fn sleep_until(deadline: Instant) {
+    let now = Instant::now();
+    if deadline > now {
+        std::thread::sleep(deadline - now);
+    }
+}
