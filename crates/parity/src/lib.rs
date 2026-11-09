@@ -19,6 +19,7 @@
 mod client;
 mod diff;
 mod env;
+mod preload;
 mod steps;
 mod trace;
 mod vanilla;
@@ -27,11 +28,15 @@ mod walk;
 pub use client::{Client, ClientError, Step};
 pub use diff::{diff_traces, normalize, render_report, CountRow, PayloadRow, TracesDiff};
 pub use env::{load_parity_env, EnvError, ParityEnv, PACKETS_REPORT_VAR, SERVER_TOML_VAR};
+pub use preload::{
+    min_median_max, PreloadError, PreloadMetrics, PRELOAD_TIMEOUT, VIEW_DISTANCE_CHUNKS,
+};
 pub use steps::{join_steps, join_steps_with_view};
 pub use trace::{
     from_hex, to_hex, HexError, Trace, TraceDirection, TraceEntry, TraceIoError, TraceState,
 };
 pub use vanilla::{copy_dir_all, Vanilla, VanillaError};
 pub use walk::{
-    run_walk, Batch, CacheMove, RunStats, Stop, WalkError, WalkMode, UNKNOWN_CHUNK, VIEW_DISTANCE,
+    run_walk, run_walk_at, Batch, CacheMove, RunStats, Stop, WalkError, WalkMode, UNKNOWN_CHUNK,
+    VIEW_DISTANCE,
 };

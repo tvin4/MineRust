@@ -233,6 +233,9 @@ async fn one_run(
         WalkMode::Stand { hold } => format!("stand {:.0}s", hold.as_secs()),
         WalkMode::Straight { steps, .. } => format!("straight {steps} steps"),
         WalkMode::Diagonal { steps, .. } => format!("diagonal {steps} steps"),
+        // Not part of the three walk runs: ЧАСТЬ III's wait uses its own
+        // test driver (`tests/preload_measure.rs`).
+        WalkMode::Preload { .. } => "preload (ЧАСТЬ III)".to_owned(),
     };
     let mut outcome = RunOutcome {
         name,

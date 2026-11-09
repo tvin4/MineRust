@@ -116,6 +116,20 @@ pub enum WalkMode {
         /// Idle time after the last step.
         settle: Duration,
     },
+    /// ЧАСТЬ III (замеры скорости входа): движения нет вообще — бот ждёт,
+    /// пока сервер пришлёт `chunks` пакетов `level_chunk_with_light`, либо
+    /// покидает сервер, когда выходит `timeout`.
+    ///
+    /// Проверка режима (ЧАСТЬ I, п. 4) здесь намеренно **не** применяется:
+    /// на пункте заказчика наш сервер принимает бота контролом (survival)
+    /// и не шлёт `player_abilities`. Это факт прогона, а не ловушка;
+    /// прогоны П1-П3 проверку режима сохраняют.
+    Preload {
+        /// How many `level_chunk_with_light` packets finish the run.
+        chunks: u64,
+        /// How long the bot may stay if the server never gets there.
+        timeout: Duration,
+    },
 }
 
 /// Why the play loop ended — every value here is a report fact, never a
@@ -161,6 +175,12 @@ pub enum Stop {
     Mode {
         /// The offending fact, human-readable (report line).
         detail: String,
+    },
+    /// ЧАСТЬ III: the preload time budget ran out before the server had
+    /// sent the requested number of chunks (a fact, not a failure).
+    PreloadTimeout {
+        /// Chunks seen at the moment the budget expired.
+        chunks: u64,
     },
 }
 
@@ -225,6 +245,9 @@ pub struct RunStats {
     pub cache_moves: Vec<CacheMove>,
     /// Finished chunk batches with their sizes.
     pub batches: Vec<Batch>,
+    /// `level_chunk_with_light` packets seen in play: the ЧАСТЬ III target
+    /// and the answer to "how much terrain actually arrived".
+    pub chunks: u64,
     /// Why the loop ended.
     pub stop: Stop,
     /// Monotonic milliseconds from the play loop start to the quit.
@@ -345,6 +368,22 @@ pub async fn run_walk(
     trace_path: &Path,
 ) -> Result<RunStats, WalkError> {
     let port = env.vanilla_port()?;
+    run_walk_at(env, ids, port, mode, trace_path).await
+}
+
+/// The same walk joined at an explicit port (ЧАСТЬ III): vanilla on the
+/// port of its own `server.properties`, our own server on 25565.
+///
+/// Everything else — view distance, the scripted [`join_steps_with_view`],
+/// the JSONL trace — is identical, so a measurement differs from the next
+/// one only in which server answered.
+pub async fn run_walk_at(
+    env: &ParityEnv,
+    ids: Arc<PacketIds>,
+    port: u16,
+    mode: WalkMode,
+    trace_path: &Path,
+) -> Result<RunStats, WalkError> {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let mut client = Client::connect("vanilla-walk", addr, Arc::clone(&ids))
         .await
@@ -365,10 +404,13 @@ async fn play(
     mode: WalkMode,
     jsonl: &mut Jsonl,
 ) -> Result<RunStats, WalkError> {
-    let (hold, steps, settle) = match mode {
-        WalkMode::Stand { hold } => (hold, 0, Duration::ZERO),
-        WalkMode::Straight { steps, settle } => (Duration::ZERO, steps, settle),
-        WalkMode::Diagonal { steps, settle } => (Duration::ZERO, steps, settle),
+    let (hold, steps, settle, goal) = match mode {
+        WalkMode::Stand { hold } => (hold, 0, Duration::ZERO, None),
+        WalkMode::Straight { steps, settle } => (Duration::ZERO, steps, settle, None),
+        WalkMode::Diagonal { steps, settle } => (Duration::ZERO, steps, settle, None),
+        WalkMode::Preload { chunks, timeout } => {
+            (Duration::ZERO, 0, Duration::ZERO, Some((chunks, timeout)))
+        }
     };
     let started = std::time::Instant::now();
     let safety = TICK * steps + hold + settle + Duration::from_secs(60);
@@ -385,11 +427,16 @@ async fn play(
         chunks: 0,
         bytes: 0,
     };
-    let mut settle_at = if steps == 0 {
+    // ЧАСТЬ III: a preload waits for its chunk target, never for the stand
+    // timer — `steps == 0` without a goal is still the P1 hold.
+    let mut settle_at = if steps == 0 && goal.is_none() {
         Some(tokio::time::Instant::now() + hold)
     } else {
         None
     };
+    // ЧАСТЬ I, п. 4 judges the walking runs; a preload only records the
+    // mode facts, because our own server is survival on purpose.
+    let enforce_mode = !matches!(mode, WalkMode::Preload { .. });
     let mut deadline = tokio::time::Instant::now() + TICK;
 
     loop {
@@ -434,11 +481,26 @@ async fn play(
             &mut pos,
             &mut timers,
             &mut chunking,
+            enforce_mode,
         )
         .await?;
         if let Some(reason) = processed {
             stop = Some(reason);
             break;
+        }
+        // ЧАСТЬ III: the two exits of a preload run — the chunk target
+        // reached, or the time budget spent (the report tells them apart).
+        if let Some((goal_chunks, budget)) = goal {
+            if stats.chunks >= goal_chunks {
+                stop = Some(Stop::Completed);
+                break;
+            }
+            if started.elapsed() >= budget {
+                stop = Some(Stop::PreloadTimeout {
+                    chunks: stats.chunks,
+                });
+                break;
+            }
         }
         if spawn.is_none() {
             spawn = pos;
@@ -508,6 +570,7 @@ async fn play(
             &mut pos,
             &mut timers,
             &mut chunking,
+            enforce_mode,
         )
         .await?;
         if let Some(reason) = last {
@@ -534,6 +597,7 @@ async fn process_recorded(
     pos: &mut Option<[f64; 3]>,
     timers: &mut Timers,
     chunking: &mut Batch,
+    enforce_mode: bool,
 ) -> Result<Option<Stop>, WalkError> {
     while *emitted < client.trace().len() {
         // The wire time of this packet: `stamps` and `trace.packets`
@@ -597,6 +661,7 @@ async fn process_recorded(
             Some("minecraft:level_chunk_with_light") => {
                 chunking.chunks += 1;
                 chunking.bytes += payload.len() as u64;
+                stats.chunks += 1;
             }
             Some(name @ ("minecraft:set_chunk_cache_center" | "minecraft:forget_level_chunk")) => {
                 let (x, z) = chunk_center(&payload);
@@ -609,35 +674,50 @@ async fn process_recorded(
             }
             Some("minecraft:login") => {
                 // ЧАСТЬ I, п. 5: the mode is proven by the trace itself —
-                // the login (play) field, never by console probes.
-                let Some(mode) = login_game_mode(&payload) else {
-                    return Ok(Some(Stop::Mode {
-                        detail: format!("login payload ({} bytes) did not decode", payload.len()),
-                    }));
-                };
-                stats.game_mode = Some(mode);
-                if mode != SPECTATOR_GAME_MODE {
-                    return Ok(Some(Stop::Mode {
-                        detail: format!(
-                            "login game_mode {mode}; expected {SPECTATOR_GAME_MODE} (spectator)"
-                        ),
-                    }));
+                // the login (play) field, never by console probes. A preload
+                // (ЧАСТЬ III) records the fact and moves on.
+                stats.game_mode = login_game_mode(&payload);
+                if enforce_mode {
+                    match stats.game_mode {
+                        Some(SPECTATOR_GAME_MODE) => {}
+                        Some(mode) => {
+                            return Ok(Some(Stop::Mode {
+                                detail: format!(
+                                    "login game_mode {mode}; expected \
+                                     {SPECTATOR_GAME_MODE} (spectator)"
+                                ),
+                            }));
+                        }
+                        None => {
+                            return Ok(Some(Stop::Mode {
+                                detail: format!(
+                                    "login payload ({} bytes) did not decode",
+                                    payload.len()
+                                ),
+                            }));
+                        }
+                    }
                 }
             }
             Some("minecraft:player_abilities") => {
-                let Some(flags) = payload.first().copied() else {
-                    return Ok(Some(Stop::Mode {
-                        detail: "player_abilities payload is empty".to_owned(),
-                    }));
-                };
-                stats.abilities_flags = Some(flags);
-                if flags != SPECTATOR_FLAGS {
-                    return Ok(Some(Stop::Mode {
-                        detail: format!(
-                            "player_abilities flags 0x{flags:02X}; expected \
-                             0x{SPECTATOR_FLAGS:02X} (spectator)"
-                        ),
-                    }));
+                stats.abilities_flags = payload.first().copied();
+                if enforce_mode {
+                    match stats.abilities_flags {
+                        Some(SPECTATOR_FLAGS) => {}
+                        Some(flags) => {
+                            return Ok(Some(Stop::Mode {
+                                detail: format!(
+                                    "player_abilities flags 0x{flags:02X}; expected \
+                                     0x{SPECTATOR_FLAGS:02X} (spectator)"
+                                ),
+                            }));
+                        }
+                        None => {
+                            return Ok(Some(Stop::Mode {
+                                detail: "player_abilities payload is empty".to_owned(),
+                            }));
+                        }
+                    }
                 }
             }
             Some("minecraft:disconnect") => {
@@ -674,6 +754,7 @@ fn new_stats() -> RunStats {
         moves: 0,
         cache_moves: Vec::new(),
         batches: Vec::new(),
+        chunks: 0,
         stop: Stop::Completed,
         elapsed_ms: 0.0,
         spawn: None,
