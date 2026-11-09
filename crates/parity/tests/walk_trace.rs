@@ -11,14 +11,23 @@
 //! diffed against the template snapshot taken as the baseline (the copy
 //! starts byte-identical; while the server runs it holds the copy's
 //! files open on Windows, so no before-hash of the copy exists).
-//! Any changed `region/*.mca` aborts the sequence, `level.dat`/
-//! `playerdata`/`session.lock` are expected noise, `entities/` and `poi/`
-//! are listed separately. The server's gamemode is proven from the trace
-//! itself — `login.game_mode` and the `player_abilities` flags byte (ЧАСТЬ
-//! I, п. 4): anything but spectator aborts the sequence too.
+//!
+//! The server's gamemode is proven from the trace itself — `login.game_mode`
+//! and the `player_abilities` flags byte (ЧАСТЬ I, п. 4): anything but
+//! spectator aborts the sequence too.
+//!
+//! The world criterion is `chunk_status.py compare <template> <copy>` (ЧАСТЬ
+//! I, п. 5): only *new* chunks outside x −7..19 / z −15..11 stop it, while
+//! `status_diffs` inside the zone are listed without stopping. The SHA-256
+//! tree diff stays informational (`region/` compared that way, `entities/`
+//! and `poi/` listed separately); the frozen template is still checked by
+//! SHA before and after every run.
 //!
 //! Traces (JSONL, monotonic time, base64 payloads) and per-run reports land
 //! in `C:\MineRust-data\traces\`; the repository keeps only this source.
+
+#[path = "common/world_criterion.rs"]
+mod world_criterion;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -46,6 +55,19 @@ const EXPECTED_GAME_MODE: i32 = 3;
 const EXPECTED_ABILITIES: u8 = 0x07;
 /// Violation-line prefix of a failed mode check (used by the final assert).
 const MODE_VIOLATION: &str = "mode check:";
+/// Violation-line prefix of a failed world criterion (final assert too).
+const WORLD_VIOLATION: &str = "world criterion:";
+
+/// The world-criterion helper next to this test script, under the
+/// workspace root (ЧАСТЬ I, п. 5).
+fn chunk_status_script() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("target")
+        .join("parity")
+        .join("chunk_status.py")
+}
 
 /// Reads the parity environment or explains why the test is skipped.
 fn parity_env_or_skip() -> Option<ParityEnv> {
@@ -116,10 +138,11 @@ fn bucket(rel: &str) -> &'static str {
     }
 }
 
-/// The classified SHA-256 diff of one run's world copy.
+/// The classified SHA-256 diff of one run's world copy — information for
+/// the report (the stop comes from [`world_criterion`]).
 #[derive(Debug, Default)]
 struct Diff {
-    /// Changed `region/*.mca` — a hard stop for the whole sequence.
+    /// Changed `region/*.mca` (informational: the chunk criterion above).
     region: Vec<String>,
     /// Changed `entities/` files (listed separately, per the owner).
     entities: Vec<String>,
@@ -180,8 +203,10 @@ struct RunOutcome {
     stats: Option<RunStats>,
     /// Fatal error (connect/join/stop), if any.
     fatal: Option<String>,
-    /// Classified world diff of the copy.
+    /// Classified world diff of the copy (SHA-256, informational).
     diff: Diff,
+    /// Parsed `chunk_status.py compare <template> <copy>` facts (п. 5).
+    world: Option<world_criterion::WorldCriterion>,
     /// Mode facts from the trace (`game_mode` / `abilities_flags`), as
     /// printed in the report.
     mode_facts: String,
@@ -193,8 +218,8 @@ struct RunOutcome {
 }
 
 /// Runs one walk on a fresh copy: start → hash → play → flush stop →
-/// hash → diff → log probes → report file. Never panics: a dead server
-/// becomes a violation like any other stop condition.
+/// hash → diff → `chunk_status.py compare` → report file. Never panics: a
+/// dead server becomes a violation like any other stop condition.
 async fn one_run(
     env: &ParityEnv,
     ids: Arc<PacketIds>,
@@ -217,6 +242,7 @@ async fn one_run(
         stats: None,
         fatal: None,
         diff: Diff::default(),
+        world: None,
         mode_facts: "no facts (run failed before play)".to_owned(),
         mode_ok: false,
         violations: Vec::new(),
@@ -265,6 +291,13 @@ async fn one_run(
     };
     let after = hash_tree(&world);
     outcome.diff = diff(&baseline, &after);
+    // ЧАСТЬ I, п. 5: the world criterion — which chunks the run created,
+    // read from the diagnostic script and checked against the zone.
+    outcome.world = Some(world_criterion::compare(
+        &chunk_status_script(),
+        &env.world_template,
+        &world,
+    ));
 
     // The owner's stop conditions, evaluated once with fixed criteria.
     match walk_res {
@@ -314,11 +347,24 @@ async fn one_run(
     if let Err(error) = stop_res {
         outcome.violations.push(format!("server stop: {error}"));
     }
-    if outcome.diff.region_dirty() {
-        outcome.violations.push(format!(
-            "region/*.mca changed: {}",
-            outcome.diff.region.join(", ")
-        ));
+    // ЧАСТЬ I, п. 5: only new chunks outside the zone — or a world
+    // criterion that could not run at all — stop the sequence. Every
+    // status change is reported as a fact, never as a stop by itself.
+    if let Some(case) = &outcome.world {
+        if let Some(error) = &case.error {
+            outcome
+                .violations
+                .push(format!("{WORLD_VIOLATION} {error}"));
+        } else if !case.new_outside_zone().is_empty() {
+            outcome.violations.push(format!(
+                "{WORLD_VIOLATION} new chunks outside x {}..{} / z {}..{}: {}",
+                world_criterion::ZONE_X.0,
+                world_criterion::ZONE_X.1,
+                world_criterion::ZONE_Z.0,
+                world_criterion::ZONE_Z.1,
+                fmt_coords(&case.new_outside_zone())
+            ));
+        }
     }
 
     write_report(&outcome);
@@ -391,7 +437,62 @@ fn write_report(outcome: &RunOutcome) {
             }
         }
     }
-    text.push_str("\n## World diff after save-all flush + stop (SHA-256)\n");
+    text.push_str(
+        "\n## World criterion (chunk_status.py compare <template> <copy>, ЧАСТЬ I, п. 5)\n",
+    );
+    match &outcome.world {
+        None => text.push_str("not run (vanilla never started)\n"),
+        Some(case) => {
+            if let Some(error) = &case.error {
+                text.push_str(&format!("error: {error}\n"));
+            } else {
+                text.push_str(&format!(
+                    "chunks: template {} | copy {} | new (only_in_B) {} | missing \
+                     (only_in_A) {}\n",
+                    case.template_chunks,
+                    case.copy_chunks,
+                    case.new_chunks.len(),
+                    case.missing_chunks.len()
+                ));
+                text.push_str(&format!(
+                    "zone: x {}..{} | z {}..{}\n",
+                    world_criterion::ZONE_X.0,
+                    world_criterion::ZONE_X.1,
+                    world_criterion::ZONE_Z.0,
+                    world_criterion::ZONE_Z.1,
+                ));
+                text.push_str(&format!(
+                    "new chunks inside the zone (no stop): {}\n",
+                    fmt_coords(&case.new_inside_zone())
+                ));
+                text.push_str(&format!(
+                    "new chunks outside the zone (STOP): {}\n",
+                    fmt_coords(&case.new_outside_zone())
+                ));
+                text.push_str(&format!(
+                    "chunks missing from the copy (info): {}\n",
+                    fmt_coords(&case.missing_chunks)
+                ));
+                text.push_str(&format!(
+                    "status_diffs inside the zone ({}): {}\n",
+                    case.status_inside_zone().len(),
+                    fmt_status(&case.status_inside_zone())
+                ));
+                text.push_str(&format!(
+                    "status_diffs outside the zone ({}): {}\n",
+                    case.status_outside_zone().len(),
+                    fmt_status(&case.status_outside_zone())
+                ));
+                text.push_str(&format!(
+                    "heightmap_diffs: {} | light_presence_diffs: {}\n",
+                    case.heightmap_diffs, case.light_diffs
+                ));
+            }
+        }
+    }
+    text.push_str(
+        "\n## World SHA-256 tree diff (informational; template checked by SHA separately)\n",
+    );
     text.push_str(&format!("region: {}\n", joined(&outcome.diff.region)));
     text.push_str(&format!("entities: {}\n", joined(&outcome.diff.entities)));
     text.push_str(&format!("poi: {}\n", joined(&outcome.diff.poi)));
@@ -429,6 +530,43 @@ fn joined(items: &[String]) -> String {
     } else {
         items.join(", ")
     }
+}
+
+/// `"none"` or one `(x, z) from→to` group per Status change.
+fn fmt_status(items: &[&world_criterion::StatusDiff]) -> String {
+    if items.is_empty() {
+        return "none".to_owned();
+    }
+    items
+        .iter()
+        .map(|row| format!("({}, {}) {}→{}", row.at.0, row.at.1, row.from, row.to))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// One-line console verdict of the world criterion: the zone split of the
+/// new chunks, or the error why there is none.
+fn world_short(case: &world_criterion::WorldCriterion) -> String {
+    match &case.error {
+        Some(error) => format!("error: {error}"),
+        None => format!(
+            "new {} in-zone / {} out-of-zone",
+            case.new_inside_zone().len(),
+            case.new_outside_zone().len()
+        ),
+    }
+}
+
+/// `"none"` or `"(x, z), (x, z), ..."` for the report's chunk lists.
+fn fmt_coords(items: &[world_criterion::Coord]) -> String {
+    if items.is_empty() {
+        return "none".to_owned();
+    }
+    items
+        .iter()
+        .map(|(x, z)| format!("({x}, {z})"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The owner's three fixed runs; the first violating run stops the rest.
@@ -477,7 +615,7 @@ async fn walk_trace_three_runs() {
         }
         let outcome = one_run(&env, Arc::clone(&ids), name, mode, first_run).await;
         eprintln!(
-            "{}: stop={:?} teleports={} region={} mode_ok={}",
+            "{}: stop={:?} teleports={} mode_ok={} world={} region={}",
             outcome.name,
             outcome
                 .stats
@@ -485,8 +623,13 @@ async fn walk_trace_three_runs() {
                 .map(|stats| format!("{:?}", stats.stop))
                 .unwrap_or_else(|| "n/a".to_owned()),
             outcome.stats.as_ref().map_or(0, |s| s.teleports),
-            joined(&outcome.diff.region),
-            outcome.mode_ok
+            outcome.mode_ok,
+            outcome
+                .world
+                .as_ref()
+                .map(world_short)
+                .unwrap_or_else(|| "n/a".to_owned()),
+            joined(&outcome.diff.region)
         );
         performed.push(outcome);
     }
@@ -507,6 +650,9 @@ async fn walk_trace_three_runs() {
             run.report.display(),
             run.trace.display()
         ));
+        if let Some(case) = &run.world {
+            summary.push_str(&format!("  world: {}\n", world_short(case)));
+        }
     }
     summary.push_str(&format!(
         "\ntemplate region changed ({} files): {}\n",
@@ -532,11 +678,21 @@ async fn walk_trace_three_runs() {
     eprintln!("summary: {}", summary_path.display());
 
     // Report everything, panic only on the hard invariants the owner set.
-    let region_dirty =
-        performed.iter().any(|run| run.diff.region_dirty()) || template_diff.region_dirty();
+    // The template is still byte-identical (checked by SHA); per-run world
+    // copies are judged by `chunk_status.py compare` and the zone (п. 5) —
+    // `region/*.mca` changes there are reported, never asserted.
     assert!(
-        !region_dirty,
-        "STOP: region/*.mca changed — see walk-summary.md"
+        !template_diff.region_dirty(),
+        "STOP: the frozen template's region/*.mca changed — see walk-summary.md"
+    );
+    let world_violated = performed.iter().any(|run| {
+        run.violations
+            .iter()
+            .any(|v| v.starts_with(WORLD_VIOLATION))
+    });
+    assert!(
+        !world_violated,
+        "STOP: the world criterion failed — see walk-summary.md"
     );
     let mode_violated = performed
         .iter()
