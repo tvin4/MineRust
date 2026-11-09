@@ -954,6 +954,33 @@ warnings`, `cargo test --workspace` — зелёные.
   `docs/LIVE-CHECK-M4.1.md` (не выполнялся), инструкция по батникам — в
   README.
 
+## Раунд 7: остановка игрового потока + окно чанков (выполнено)
+
+- **Остановка игрового потока (ЧАСТЬ 1, `c7bfa68`).** Поток был **detached**
+  (`serve` дропал `GameThread`, сигнала остановки не было; поток кончался
+  только при закрытии канала — то есть при живом сервере никогда). Добавлен
+  `Arc<AtomicBool>`-флаг: `game_loop` читает его **раз за тик** и выходит
+  (`stop requested, leaving the tick loop`); `GameThread::join_timeout(2 с)`
+  ставит флаг и ждёт `is_finished()` (опрос 5 мс), `join()` (тестовый путь)
+  флаг **не** ставит (иначе ломается тест `ticks_limit`). `net::serve` —
+  `tokio::select!` между accept-циклом и `shutdown_signal()` (Ctrl+C везде,
+  на Windows ещё Ctrl+Break и закрытие окна через `tokio::signal::windows`),
+  после выхода `join_timeout`. Фича tokio `signal`. Тесты на остановку:
+  `the_thread_stops_on_request_within_the_timeout`,
+  `join_timeout_reports_a_thread_that_did_not_stop`.
+- **Живая проверка (выполнено).** Процессу (создан с
+  `CREATE_NEW_PROCESS_GROUP`) послан `CTRL_BREAK_EVENT`: лог
+  `shutdown signal received` → `stop requested, leaving the tick loop
+  (ticks=11)` → `game thread stopped`, выход с кодом 0 за <1 с. Ctrl+C
+  адресно группе процессов на Windows не послать (тот же
+  `SetConsoleCtrlHandler`), закрытие окна — `CTRL_CLOSE_EVENT`.
+- **Окно чанков (ЧАСТЬ 2, только доки).** `docs/ARCH-M4.md` §4 и
+  `docs/DECISIONS.md`: формула окна (`|dx|,|dz| ≤ R+1`, `dx²+dz² ≤ 162`)
+  проверена **только** при `view_distance=10` (единственный трейс), для
+  других значений — **гипотеза**; наш `send_radius` шлёт 21×21 = 441, ваниль
+  473, расхождение закрывается в **M4.4**.
+- Код M4.1 не менялся; **M4.2 не начинался** (ждём «M4.2 можно»).
+
 ## Что дальше
 
 - **M4 — план показан владельцу, код НЕ пишется до «план принят».**
