@@ -1,13 +1,16 @@
 # HANDOFF (state for the next session)
 
 ## Done
-- Step 0: repo checked. ARCH-M4.md diff (+92/−14) and tools/tickbench — no garbage,
-  no revert needed. tools/tickbench/target/ untracked, needs a .gitignore entry.
-- AGENTS.md «Процесс работы» — committed (5f822db).
+- Draft leftovers committed (c3f5163). B: §6 table re-checked — M4.0 rows
+  `Status=full` criterion + measure size/time; M4.3 criterion adds
+  second-region+Transfer on synthetic. Committed.
+- Task order from owner: B → C → D → E → F → A → G (A = tick measurement last).
 
 ## In progress
-- Point A: tick measurement (§3) — rebuild + 2 runs of tools/tickbench, then table.
+- (none — B commit is next to make/push, then C)
 
 ## Next
-- B §6 plan table (done in draft, re-check), C v3 template (draft row exists), D packet names,
-  E §7 decisions, F risks, G names/fmt/clippy/test/push. See the owner's task list.
+- C: v3 template wording in M4.0/M4.4 + §4/§5 synthetic allowance, re-check 100-chunk
+  claim on v2 .mca. D packet names M4.5. E §7 decisions. F risks. A tickbench re-run.
+- G: names/hypotheses/fmt/clippy/test/push. `tools/tickbench/` still untracked,
+  needs .gitignore entry (task A).
