@@ -138,6 +138,82 @@ fn a_tick_that_falls_behind_resets_its_deadline() {
     assert!(overdue_by(deadline, deadline + Duration::from_millis(10), &config).is_none());
 }
 
+/// Applies a fixed scenario through the real per-tick code path and returns
+/// the replay journal it wrote.
+fn run_scenario(messages: Vec<ToGame>, tick: u64) -> String {
+    let mut scheduler = Scheduler::new(vec![Region::new(SINGLE_REGION)]);
+    let (sender, mut incoming) = mpsc::channel(64);
+    for message in messages {
+        sender.try_send(message).expect("the queue has room");
+    }
+    drop(sender);
+    let mut replay = Replay::new(Some(Vec::new()));
+    let mut disconnected = false;
+    apply_queued(
+        &mut scheduler,
+        &mut replay,
+        tick,
+        &mut incoming,
+        &mut disconnected,
+    );
+    assert!(disconnected, "the scenario drains and then sees the end");
+    let bytes = replay.into_sink().expect("the sink was enabled");
+    String::from_utf8(bytes).expect("the journal is UTF-8")
+}
+
+/// A fresh join → teleport_ack → quit scenario.
+fn join_ack_quit() -> Vec<ToGame> {
+    let (join, _receiver, _kick) = join_fixture_with(1, OUTBOUND_CAPACITY);
+    vec![
+        ToGame::Join(Box::new(join)),
+        ToGame::TeleportAck {
+            id: 1,
+            teleport_id: 1,
+        },
+        ToGame::Quit { id: 1 },
+    ]
+}
+
+#[test]
+fn the_same_scenario_is_recorded_twice_identically() {
+    let first = run_scenario(join_ack_quit(), 3);
+    let second = run_scenario(join_ack_quit(), 3);
+    assert_eq!(
+        first, second,
+        "the same scenario must record the same bytes"
+    );
+
+    let lines: Vec<&str> = first.lines().collect();
+    assert_eq!(lines.len(), 3, "one line per applied event");
+
+    let join: serde_json::Value = serde_json::from_str(lines[0]).expect("a JSON line");
+    assert_eq!(join["tick"], 3);
+    assert_eq!(join["seq"], 0);
+    assert_eq!(join["kind"], "join");
+    assert_eq!(join["src"], 1);
+    assert_eq!(join["region"], SINGLE_REGION);
+    assert_eq!(join["payload"]["name"], "player-1");
+
+    let ack: serde_json::Value = serde_json::from_str(lines[1]).expect("a JSON line");
+    assert_eq!(ack["seq"], 1, "order grows inside the tick");
+    assert_eq!(ack["kind"], "teleport_ack");
+    assert_eq!(ack["payload"]["teleport_id"], 1);
+
+    let quit: serde_json::Value = serde_json::from_str(lines[2]).expect("a JSON line");
+    assert_eq!(quit["seq"], 2);
+    assert_eq!(quit["kind"], "quit");
+    assert_eq!(quit["region"], SINGLE_REGION, "the player was still known");
+}
+
+#[test]
+fn a_disabled_journal_records_nothing() {
+    let mut replay: Replay<Vec<u8>> = Replay::new(None);
+    assert!(!replay.enabled());
+    replay.start_tick();
+    replay.record(0, Some(SINGLE_REGION), 1, "join", serde_json::json!({}));
+    assert!(replay.into_sink().is_none(), "no sink, no journal");
+}
+
 #[test]
 fn the_loop_runs_the_configured_number_of_ticks() {
     let config = GameConfig {

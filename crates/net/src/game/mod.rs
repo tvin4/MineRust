@@ -14,6 +14,7 @@
 mod messages;
 mod metrics;
 mod region;
+mod replay;
 mod scheduler;
 
 #[cfg(test)]
@@ -25,6 +26,7 @@ pub use messages::{
 };
 pub use metrics::{TickMetrics, TickMetricsHandle};
 pub use region::{Kick, Player, Region, RegionId, SINGLE_REGION};
+pub use replay::{Replay, ReplayRecord};
 pub use scheduler::Scheduler;
 
 use std::io;
@@ -43,6 +45,10 @@ pub const TICK_PERIOD: Duration = Duration::from_millis(50);
 
 /// How often the tick metrics are logged.
 const LOG_EVERY: Duration = Duration::from_secs(5);
+
+/// Environment variable that turns the replay journal on; its value is the
+/// path of the JSONL file (ARCH-M4 §1).
+const REPLAY_ENV: &str = "MINERUST_REPLAY";
 
 /// Default capacity of the connection → game channel.
 const JOIN_CAPACITY: usize = 256;
@@ -168,6 +174,7 @@ fn game_loop(
 ) {
     let mut scheduler = Scheduler::new(vec![Region::new(SINGLE_REGION)]);
     let mut recorder = Recorder::new(config.period);
+    let mut replay = Replay::new(open_replay());
     let mut deadline = Instant::now() + config.period;
     let mut last_log = Instant::now();
     let mut tick: u64 = 0;
@@ -176,9 +183,13 @@ fn game_loop(
         sleep_until(deadline);
         let woke = Instant::now();
         let work = Instant::now();
-        while let Some(message) = next_message(&mut incoming, &mut disconnected) {
-            apply(&mut scheduler, message);
-        }
+        apply_queued(
+            &mut scheduler,
+            &mut replay,
+            tick,
+            &mut incoming,
+            &mut disconnected,
+        );
         for kick in scheduler.tick(tick, deadline) {
             warn!(
                 player = kick.id,
@@ -209,7 +220,29 @@ fn game_loop(
         }
     }
     recorder.finish(metrics);
+    if let Err(err) = replay.flush() {
+        warn!(%err, "could not flush the replay journal");
+    }
     info!(ticks = tick, metrics = ?metrics.snapshot(), "game thread stopped");
+}
+
+/// Opens the replay journal named by [`REPLAY_ENV`], if the variable is set.
+fn open_replay() -> Option<std::fs::File> {
+    let path = std::env::var_os(REPLAY_ENV)?;
+    if path.is_empty() {
+        return None;
+    }
+    let path = std::path::PathBuf::from(path);
+    match std::fs::File::create(&path) {
+        Ok(file) => {
+            info!(path = %path.display(), "replay journal enabled");
+            Some(file)
+        }
+        Err(err) => {
+            warn!(%err, path = %path.display(), "could not open the replay journal");
+            None
+        }
+    }
 }
 
 /// Pops one incoming message without waiting; `Err(Disconnected)` sets the
@@ -225,10 +258,39 @@ fn next_message(incoming: &mut mpsc::Receiver<ToGame>, disconnected: &mut bool) 
     }
 }
 
-/// Applies one incoming message to the single region.
-fn apply(scheduler: &mut Scheduler, message: ToGame) {
+/// Applies everything queued for one tick, recording each applied event.
+///
+/// The tick number is fixed for the whole batch and the replay order counter
+/// restarts at zero, so `(tick, seq)` is the deterministic position of the
+/// event inside the run (ARCH-M4 §1).
+fn apply_queued<W: std::io::Write>(
+    scheduler: &mut Scheduler,
+    replay: &mut Replay<W>,
+    tick: u64,
+    incoming: &mut mpsc::Receiver<ToGame>,
+    disconnected: &mut bool,
+) {
+    replay.start_tick();
+    while let Some(message) = next_message(incoming, disconnected) {
+        apply(scheduler, replay, tick, message);
+    }
+}
+
+/// Applies one incoming message to the single region and records it.
+fn apply<W: std::io::Write>(
+    scheduler: &mut Scheduler,
+    replay: &mut Replay<W>,
+    tick: u64,
+    message: ToGame,
+) {
     match message {
         ToGame::Join(join) => {
+            let payload = serde_json::json!({
+                "name": &join.name,
+                "view_distance": join.view_distance,
+                "spawn": { "x": join.spawn.x, "y": join.spawn.y, "z": join.spawn.z },
+            });
+            replay.record(tick, Some(SINGLE_REGION), join.id, "join", payload);
             // M4.3 routes joins by chunk; M4.1 puts everyone in one region.
             match scheduler.region_mut(SINGLE_REGION) {
                 Some(region) => {
@@ -241,6 +303,13 @@ fn apply(scheduler: &mut Scheduler, message: ToGame) {
         }
         ToGame::TeleportAck { id, teleport_id } => {
             let region_id = scheduler.region_of(id);
+            replay.record(
+                tick,
+                region_id,
+                id,
+                "teleport_ack",
+                serde_json::json!({ "teleport_id": teleport_id }),
+            );
             match region_id.and_then(|region_id| scheduler.region_mut(region_id)) {
                 Some(region) => match region.get_mut(id) {
                     Some(player) => player.confirm_teleport(),
@@ -252,6 +321,7 @@ fn apply(scheduler: &mut Scheduler, message: ToGame) {
         }
         ToGame::Quit { id } => {
             let region_id = scheduler.region_of(id);
+            replay.record(tick, region_id, id, "quit", serde_json::json!({}));
             if let Some(region) = region_id.and_then(|region_id| scheduler.region_mut(region_id)) {
                 region.remove(id);
             }
