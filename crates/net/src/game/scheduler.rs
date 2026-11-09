@@ -7,7 +7,7 @@
 use std::time::Instant;
 
 use super::messages::PlayerId;
-use super::region::{Kick, Region, RegionId};
+use super::region::{Region, RegionId, TickOutcome};
 
 /// Ticks every region once per tick, in order.
 #[derive(Debug, Default)]
@@ -44,12 +44,17 @@ impl Scheduler {
             .map(Region::id)
     }
 
-    /// Ticks every region once and collects the kicks they produced.
-    pub fn tick(&mut self, tick: u64, now: Instant) -> Vec<Kick> {
-        let mut kicks = Vec::new();
+    /// Ticks every region once and merges what they produced.
+    ///
+    /// Regions tick in order and each result keeps its own region id, so the
+    /// merged outcome is deterministic (the replay order depends on it).
+    pub fn tick(&mut self, tick: u64, now: Instant) -> TickOutcome {
+        let mut outcome = TickOutcome::default();
         for region in &mut self.regions {
-            kicks.extend(region.tick(tick, now));
+            let produced = region.tick(tick, now);
+            outcome.moves.extend(produced.moves);
+            outcome.kicks.extend(produced.kicks);
         }
-        kicks
+        outcome
     }
 }

@@ -13,6 +13,7 @@
 
 mod messages;
 mod metrics;
+mod movement;
 mod region;
 mod replay;
 mod scheduler;
@@ -21,11 +22,14 @@ mod scheduler;
 mod tests;
 
 pub use messages::{
-    KickFlag, KickReason, MoveSlot, MoveState, PlayerConnection, PlayerId, PlayerJoin,
+    KickFlag, KickReason, MoveKind, MoveSlot, MoveState, PlayerConnection, PlayerId, PlayerJoin,
     ServerMessage, ToGame,
 };
 pub use metrics::{TickMetrics, TickMetricsHandle};
-pub use region::{Kick, Player, Region, RegionId, SINGLE_REGION};
+pub use movement::MoveUpdate;
+pub use region::{
+    AppliedMove, Kick, Player, PlayerPos, Region, RegionId, TickOutcome, SINGLE_REGION,
+};
 pub use replay::{Replay, ReplayRecord};
 pub use scheduler::Scheduler;
 
@@ -245,7 +249,12 @@ fn game_loop(
             &mut incoming,
             &mut disconnected,
         );
-        for kick in scheduler.tick(tick, deadline) {
+        let outcome = scheduler.tick(tick, deadline);
+        // Positions the tick applied (M4.2) are recorded after the queued
+        // messages, so `seq` continues the per-tick counter that
+        // `apply_queued` opened.
+        record_moves(&mut replay, tick, &outcome.moves);
+        for kick in &outcome.kicks {
             warn!(
                 player = kick.id,
                 reason = kick.reason.message(),
@@ -381,6 +390,29 @@ fn apply<W: std::io::Write>(
                 region.remove(id);
             }
         }
+    }
+}
+
+/// Records the positions one tick applied to the replay journal (M4.2).
+///
+/// Shared by the live loop and the replay test so both write the same
+/// `move` line; `tick` is the tick the positions were applied in.
+fn record_moves<W: std::io::Write>(replay: &mut Replay<W>, tick: u64, moves: &[AppliedMove]) {
+    for applied in moves {
+        replay.record(
+            tick,
+            Some(applied.region),
+            applied.id,
+            "move",
+            serde_json::json!({
+                "x": applied.position.x,
+                "y": applied.position.y,
+                "z": applied.position.z,
+                "yaw": applied.position.yaw,
+                "pitch": applied.position.pitch,
+                "on_ground": applied.position.on_ground,
+            }),
+        );
     }
 }
 

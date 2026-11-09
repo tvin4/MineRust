@@ -17,8 +17,9 @@ use chunk_pace::ChunkPace;
 use data::{GameData, PacketIds};
 use protocol::{
     decode_frame, ChunkBatchReceived, ClientInformation, ConfirmTeleportation, KeepAlive,
-    LevelChunkWithLight, Position, ProtocolState, StatusInfo, MAX_STRING_CHARS, MOVE_PLAYER_POS,
-    MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT, MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
+    LevelChunkWithLight, PacketReader, Position, ProtocolState, StatusInfo, MAX_STRING_CHARS,
+    MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT, MOVE_PLAYER_STATUS_ONLY,
+    PLAY_PLUGIN_MESSAGE,
 };
 use std::sync::Arc;
 
@@ -30,7 +31,7 @@ use tracing::{debug, info, trace, warn};
 use crate::error::ConnectionError;
 use crate::frame::{read_tracked, write_tracked};
 use crate::game::{
-    GameHandle, KickFlag, MoveSlot, MoveState, PlayerConnection, PlayerId, PlayerJoin,
+    GameHandle, KickFlag, MoveKind, MoveSlot, MoveState, PlayerConnection, PlayerId, PlayerJoin,
     ServerMessage, ToGame, OUTBOUND_CAPACITY,
 };
 use crate::loader::{LoadError, Loader};
@@ -426,22 +427,21 @@ where
                         let channel = payload.read_string(MAX_STRING_CHARS)?;
                         debug!(%channel, "plugin message received, ignored");
                     }
-                    // Movement: the newest packet goes into the player's
-                    // slot in the game thread; M4.1 stores it and applies
-                    // nothing (positions are M4.2).
-                    id
-                        if id == ids.id(MOVE_PLAYER_POS)
-                            || id == ids.id(MOVE_PLAYER_POS_ROT)
-                            || id == ids.id(MOVE_PLAYER_ROT)
-                            || id == ids.id(MOVE_PLAYER_STATUS_ONLY) =>
-                    {
-                        let length = payload.remaining();
-                        let bytes = payload.read_bytes(length)?.to_vec();
-                        last_move.store(MoveState {
-                            packet_id: id,
-                            payload: bytes,
-                        });
-                        trace!(id, length, "movement stored in the last-move slot");
+                    // Movement: the connection only classifies the packet
+                    // (it matched the runtime id); the newest one goes into
+                    // the player's slot and the game thread decodes and
+                    // applies it in the tick (M4.2, ARCH-M4 §0).
+                    id if id == ids.id(MOVE_PLAYER_POS) => {
+                        store_move(&last_move, MoveKind::Pos, &mut payload, id)?;
+                    }
+                    id if id == ids.id(MOVE_PLAYER_POS_ROT) => {
+                        store_move(&last_move, MoveKind::PosRot, &mut payload, id)?;
+                    }
+                    id if id == ids.id(MOVE_PLAYER_ROT) => {
+                        store_move(&last_move, MoveKind::Rot, &mut payload, id)?;
+                    }
+                    id if id == ids.id(MOVE_PLAYER_STATUS_ONLY) => {
+                        store_move(&last_move, MoveKind::StatusOnly, &mut payload, id)?;
                     }
                     // M2 has no gameplay: unknown or not-yet-handled
                     // serverbound packets must not drop the connection.
@@ -469,6 +469,27 @@ impl Drop for PlayerGuard {
     fn drop(&mut self) {
         self.game.quit_now(self.id);
     }
+}
+
+/// Copies the newest movement payload into the player's slot.
+///
+/// The connection classifies the packet and keeps the bytes; the game thread
+/// decodes them in the tick (M4.2). The whole payload is copied as-is, so a
+/// malformed one is caught by the decoder, not here.
+fn store_move(
+    slot: &MoveSlot,
+    kind: MoveKind,
+    payload: &mut PacketReader<'_>,
+    id: u32,
+) -> Result<(), ConnectionError> {
+    let length = payload.remaining();
+    let bytes = payload.read_bytes(length)?.to_vec();
+    slot.store(MoveState {
+        kind,
+        payload: bytes,
+    });
+    trace!(id, ?kind, length, "movement stored in the last-move slot");
+    Ok(())
 }
 
 /// The one-shot answer of the loader pool: the shared batch of ready

@@ -9,10 +9,12 @@ use std::time::Instant;
 
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
+use tracing::warn;
 
 use super::messages::{
     KickFlag, KickReason, MoveState, PlayerConnection, PlayerId, PlayerJoin, ServerMessage,
 };
+use super::movement::MoveUpdate;
 
 /// Id of a region. M4.1 has exactly one, with the id in [`SINGLE_REGION`].
 pub type RegionId = i32;
@@ -20,8 +22,61 @@ pub type RegionId = i32;
 /// The only region of M4.1. M4.3 replaces it with a chunk → region map.
 pub const SINGLE_REGION: RegionId = 0;
 
-/// A player the game thread owns. M4.1 keeps enough to route messages and
-/// to know whether movement may be trusted; positions are not applied yet.
+/// Precise position and orientation of a player, as the movement packets
+/// carry it (double coordinates, float angles, ARCH-M4 §0/§2).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlayerPos {
+    /// X coordinate in blocks.
+    pub x: f64,
+    /// Y coordinate (feet) in blocks.
+    pub y: f64,
+    /// Z coordinate in blocks.
+    pub z: f64,
+    /// Yaw in degrees.
+    pub yaw: f32,
+    /// Pitch in degrees.
+    pub pitch: f32,
+    /// Whether the client claims to stand on the ground.
+    pub on_ground: bool,
+}
+
+impl PlayerPos {
+    /// The entry position: the centre of the spawn block, the same point the
+    /// join teleport sends (`join.rs`).
+    fn entry(spawn: protocol::Position) -> Self {
+        Self {
+            x: f64::from(spawn.x) + 0.5,
+            y: f64::from(spawn.y),
+            z: f64::from(spawn.z) + 0.5,
+            yaw: 0.0,
+            pitch: 0.0,
+            on_ground: false,
+        }
+    }
+
+    /// Overlays the axes a movement packet carries onto this position.
+    fn apply(&mut self, update: &MoveUpdate) {
+        if let Some(x) = update.x {
+            self.x = x;
+        }
+        if let Some(y) = update.y {
+            self.y = y;
+        }
+        if let Some(z) = update.z {
+            self.z = z;
+        }
+        if let Some(yaw) = update.yaw {
+            self.yaw = yaw;
+        }
+        if let Some(pitch) = update.pitch {
+            self.pitch = pitch;
+        }
+        self.on_ground = update.on_ground;
+    }
+}
+
+/// A player the game thread owns: routing, whether movement may be trusted
+/// and the newest applied position (M4.2).
 #[derive(Debug)]
 pub struct Player {
     id: PlayerId,
@@ -29,6 +84,7 @@ pub struct Player {
     view_distance: i32,
     teleport_confirmed: bool,
     spawn: protocol::Position,
+    position: PlayerPos,
     connection: PlayerConnection,
 }
 
@@ -41,6 +97,7 @@ impl Player {
             view_distance: join.view_distance,
             teleport_confirmed: false,
             spawn: join.spawn,
+            position: PlayerPos::entry(join.spawn),
             connection: join.connection,
         }
     }
@@ -76,6 +133,19 @@ impl Player {
         self.teleport_confirmed = true;
     }
 
+    /// The newest applied position and orientation (M4.2).
+    pub fn position(&self) -> PlayerPos {
+        self.position
+    }
+
+    /// Applies a decoded movement packet to this player.
+    ///
+    /// No movement is validated in M4 (ARCH-M4 §0): the values are accepted
+    /// as they arrive.
+    pub fn apply_move(&mut self, update: &MoveUpdate) {
+        self.position.apply(update);
+    }
+
     /// The connection's outbound queue.
     pub fn outbound(&self) -> &mpsc::Sender<ServerMessage> {
         &self.connection.outbound
@@ -86,7 +156,7 @@ impl Player {
         &self.connection.kick
     }
 
-    /// Takes the newest movement packet; M4.1 only drops it (M4.2 applies).
+    /// Takes the newest movement packet, leaving the slot empty.
     pub fn take_move(&self) -> Option<MoveState> {
         self.connection.last_move.take()
     }
@@ -99,6 +169,30 @@ pub struct Kick {
     pub id: PlayerId,
     /// Reason it was removed.
     pub reason: KickReason,
+}
+
+/// A position a region applied from a movement packet this tick (M4.2).
+///
+/// The tick returns these instead of writing the replay itself, so the
+/// region stays generic over the journal sink and the game loop owns the
+/// recording order (`(tick, seq)` is per event, ARCH-M4 §1).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AppliedMove {
+    /// Region that applied the move.
+    pub region: RegionId,
+    /// Player whose position moved.
+    pub id: PlayerId,
+    /// The player's position after the move.
+    pub position: PlayerPos,
+}
+
+/// Everything the regions produced in one tick.
+#[derive(Debug, Default)]
+pub struct TickOutcome {
+    /// Positions applied from movement packets, in region then player order.
+    pub moves: Vec<AppliedMove>,
+    /// Players kicked this tick.
+    pub kicks: Vec<Kick>,
 }
 
 /// One region: its id and the players it owns.
@@ -157,16 +251,41 @@ impl Region {
         self.players.get_mut(&id)
     }
 
-    /// Ticks the region once.
+    /// Ticks the region once: applies the newest movement of every player.
     ///
-    /// M4.1 has nothing to apply: the movement slots are drained and the
-    /// values dropped (M4.2 applies them). No player is kicked here yet —
-    /// kicks come from [`Region::deliver`], which M4.4's streaming calls.
-    pub fn tick(&mut self, _tick: u64, _now: Instant) -> Vec<Kick> {
-        for player in self.players.values() {
-            let _ignored = player.take_move();
+    /// A movement packet is applied only after the client confirmed the
+    /// entry teleport ([`Player::teleport_confirmed`]); until then it is
+    /// dropped (ARCH-M4 §0). No movement is validated in M4. Kicks are not
+    /// produced here — they come from [`Region::deliver`], which M4.4's
+    /// streaming calls.
+    pub fn tick(&mut self, _tick: u64, _now: Instant) -> TickOutcome {
+        let mut outcome = TickOutcome::default();
+        for player in self.players.values_mut() {
+            let Some(state) = player.take_move() else {
+                continue;
+            };
+            if !player.teleport_confirmed() {
+                // Movement is untrusted until the entry teleport is acked.
+                continue;
+            }
+            match state.decode() {
+                Ok(update) => {
+                    player.apply_move(&update);
+                    outcome.moves.push(AppliedMove {
+                        region: self.id,
+                        id: player.id(),
+                        position: player.position(),
+                    });
+                }
+                Err(err) => warn!(
+                    player = player.id(),
+                    kind = ?state.kind,
+                    %err,
+                    "dropping an undecodable movement packet"
+                ),
+            }
         }
-        Vec::new()
+        outcome
     }
 
     /// Sends a message to one player without ever blocking the tick.

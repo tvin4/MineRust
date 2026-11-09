@@ -132,15 +132,33 @@ impl KickFlag {
     }
 }
 
-/// The newest movement packet of one player, kept exactly as it arrived.
+/// Which movement packet filled a [`MoveSlot`] entry (M4.2).
 ///
-/// M4.1 only stores the newest packet; M4.2 decodes it and applies the
-/// position. Keeping the raw payload here means M4.1 touches no movement
-/// semantics at all.
+/// The connection already matched the numeric id against the runtime packet
+/// ids, so it knows the kind; parsing the payload itself happens on the game
+/// thread ([`MoveState::decode`](super::MoveState::decode)), keeping movement
+/// semantics off the network task (ARCH-M4 §0).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MoveKind {
+    /// `minecraft:move_player_pos`: absolute position, no rotation.
+    Pos,
+    /// `minecraft:move_player_pos_rot`: absolute position and rotation.
+    PosRot,
+    /// `minecraft:move_player_rot`: rotation only.
+    Rot,
+    /// `minecraft:move_player_status_only`: the on-ground flag only.
+    StatusOnly,
+}
+
+/// The newest movement packet of one player: its kind and raw payload.
+///
+/// M4.1 only stored the newest packet; M4.2 decodes it in the tick and
+/// applies the position. Keeping the payload raw here means the connection
+/// touches no movement semantics at all.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MoveState {
-    /// Numeric packet id of the movement packet.
-    pub packet_id: u32,
+    /// Which movement packet this is.
+    pub kind: MoveKind,
     /// Payload of the movement packet (packet id excluded).
     pub payload: Vec<u8>,
 }
