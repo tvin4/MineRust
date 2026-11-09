@@ -1,18 +1,20 @@
 # HANDOFF (state for the next session)
 
 ## Done
-- B: §6 table (c951efa). Draft leftovers (c3f5163).
-- C: v2 re-checked on `.mca` (729=625+104, bbox 27×27, 100-chunk
-  impossible); M4.4 criteria split; §4/§5 synthetic allowance (5a60af8).
-- D: real packet names in M4.5 from packets.json (20a3c16).
-- E: §7 → decisions table D1–D8 (D4 provisional until tick re-measure).
+- B: §6 table (c951efa). C: v2 data re-checked, M4.4 split, §4/§5
+  synthetic (5a60af8). D: packet names (20a3c16). E: §7 D1–D8 (510d1bb).
+- F: §7 «Риски»: (а) static split vs window crossing region borders,
+  M5/Folia dynamic merge; (б) side-64 = template in one region,
+  parallelism only on synthetic.
 
 ## In progress
 - (none)
 
 ## Next
-- F: §7 «Риски» add (а) static region split vs window crossing region
-  borders (blocks need updates in M5), (б) side 64 = template fits one
-  region → parallelism only on synthetic. A: 2 foreground tickbench runs
-  (50 ms × 1000, release, output to file) → §3 + D4 final; verify tokio
-  -7 ms drift baseline; .gitignore for tools/tickbench/target. G: final check.
+- A (last): tick measurement for §3 — foreground `cargo run --release`
+  (tools/tickbench?, check), 1000 × 50 ms, 2 scenarios (idle/loaded),
+  3 methods (absolute deadline sleep / hybrid deadline−1-2ms sleep+spin /
+  tokio::interval), output to file, report min/median/p99/p99.9/max;
+  re-check past numbers (tokio −7 ms drift suspicious = baseline bug?),
+  finalize §3 table + D4, add .gitignore for tools/tickbench/target.
+- G: names exist in repo, «гипотеза» markers, fmt/clippy/test, commit, push.
