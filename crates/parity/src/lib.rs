@@ -37,6 +37,6 @@ pub use trace::{
 };
 pub use vanilla::{copy_dir_all, Vanilla, VanillaError};
 pub use walk::{
-    run_walk, run_walk_at, Batch, CacheMove, RunStats, Stop, WalkError, WalkMode, PACE,
-    UNKNOWN_CHUNK, VIEW_DISTANCE,
+    run_walk, run_walk_at, run_walk_metrics_at, Batch, CacheMove, RunStats, Stop, WalkError,
+    WalkMode, PACE, UNKNOWN_CHUNK, VIEW_DISTANCE,
 };

@@ -17,7 +17,7 @@ use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
 use flate2::Compression;
 use protocol::{decode_varint, encode_varint, Direction, KeepAlive, ProtocolState, SetCompression};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::time::Instant;
 
@@ -155,7 +155,10 @@ pub enum ClientError {
 /// A scripted connection to one server that records a [`Trace`].
 #[derive(Debug)]
 pub struct Client {
-    stream: TcpStream,
+    /// The socket, read through a buffer so one frame costs one syscall
+    /// instead of one per length byte and one per body (ЧАСТЬ II: the bot
+    /// must not be the slow side by accident).
+    stream: BufReader<TcpStream>,
     state: ProtocolState,
     /// `None` until vanilla sends Set Compression (or it is disabled).
     threshold: Option<i32>,
@@ -207,6 +210,7 @@ impl Client {
             state: ProtocolState::Handshake,
             source,
         })?;
+        let stream = BufReader::new(stream);
 
         // A report gives names to every traceable packet; without one only
         // the compiled keys are known (the trace then keeps raw ids).
@@ -607,7 +611,9 @@ fn build_frame(
 }
 
 /// Reads one VarInt-prefixed frame body off the stream.
-async fn read_varint_prefixed(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
+async fn read_varint_prefixed<R: tokio::io::AsyncRead + Unpin>(
+    stream: &mut R,
+) -> std::io::Result<Vec<u8>> {
     let mut length = 0usize;
     let mut shift = 0;
     loop {

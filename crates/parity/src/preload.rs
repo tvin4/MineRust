@@ -17,7 +17,9 @@
 
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+use crate::trace::{TraceDirection, TraceState};
 
 /// Target of the wait as the owner set it: the chunks a `view-distance=10`
 /// server is expected to send, `(2 * 10 + 1)^2`.
@@ -59,9 +61,9 @@ struct Row {
     /// Monotonic milliseconds since the connection attempt.
     t_ms: f64,
     /// Protocol state of the row.
-    state: String,
-    /// `"serverbound"` / `"clientbound"`.
-    dir: String,
+    state: TraceState,
+    /// `clientbound` / `serverbound`.
+    dir: TraceDirection,
     /// Packet name, absent when the trace has only the raw id.
     name: Option<String>,
     /// Standard base64 payload (padding included); the size is measured
@@ -73,7 +75,10 @@ struct Row {
 /// milliseconds since the connect; subtract the `intention` of
 /// [`Self::intention_ms`] to get the spans the owner asked for (they are
 /// also available as methods).
-#[derive(Debug, Clone, Default, PartialEq)]
+///
+/// One value also lands in the metrics-only file ЧАСТЬ II writes after a
+/// run; the two accumulator fields are internal and skipped there.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PreloadMetrics {
     /// Serverbound `intention`: where every measurement starts.
     pub intention_ms: Option<f64>,
@@ -106,8 +111,16 @@ pub struct PreloadMetrics {
     pub batch_gaps_ms: Vec<f64>,
     /// Lines that were blank (the writer ends a row with an empty line). A line
     /// that is neither blank nor the expected JSONL shape stops the reading
-    /// with [`PreloadError::Json`] instead of being counted here.
+    /// with [`PreloadError::Json`] instead of being counted here. Kept only
+    /// by [`Self::from_trace`]; the metrics-only bot has no lines.
     pub blank_lines: u64,
+    /// Chunks counted since the previous `chunk_batch_start`. Internal to
+    /// the folding of packet sequences; not a fact of the run.
+    #[serde(skip)]
+    since_finish: u64,
+    /// Wire time of the previous `chunk_batch_finished`, for the gaps.
+    #[serde(skip)]
+    last_finish_ms: Option<f64>,
 }
 
 impl PreloadMetrics {
@@ -126,8 +139,6 @@ impl PreloadMetrics {
         use std::io::BufRead as _;
 
         let mut metrics = Self::default();
-        let mut since_finish = 0u64;
-        let mut last_finish: Option<f64> = None;
         for (index, line) in reader.lines().enumerate() {
             let line_no = index + 1;
             let line = line.map_err(|source| PreloadError::Read {
@@ -143,44 +154,75 @@ impl PreloadMetrics {
                 line: line_no,
                 source,
             })?;
-            let name = row.name.as_deref().unwrap_or_default();
             let bytes = row.b64.as_deref().map_or(0, b64_bytes);
-            if row.dir == "serverbound" {
-                metrics.serverbound_bytes += bytes;
-                if name == "minecraft:intention" {
-                    metrics.intention_ms = Some(row.t_ms);
-                }
-                continue;
-            }
-            match name {
-                "minecraft:login" if row.state == "play" => metrics.login_ms = Some(row.t_ms),
-                "minecraft:level_chunk_with_light" => {
-                    metrics.chunks += 1;
-                    metrics.chunk_bytes += bytes;
-                    since_finish += 1;
-                    metrics.first_chunk_ms = Some(metrics.first_chunk_ms.unwrap_or(row.t_ms));
-                    metrics.last_chunk_ms = Some(row.t_ms);
-                    if metrics.chunks == target_chunks {
-                        metrics.target_chunk_ms = Some(row.t_ms);
-                    }
-                }
-                "minecraft:chunk_batch_start" => {
-                    metrics.batch_starts += 1;
-                    since_finish = 0;
-                }
-                "minecraft:chunk_batch_finished" => {
-                    metrics.batch_finishes += 1;
-                    metrics.batch_sizes.push(since_finish);
-                    if let Some(previous) = last_finish {
-                        metrics.batch_gaps_ms.push(row.t_ms - previous);
-                    }
-                    last_finish = Some(row.t_ms);
-                    metrics.last_batch_ms = Some(row.t_ms);
-                }
-                _ => {}
-            }
+            metrics.record(
+                row.dir,
+                row.state,
+                row.name.as_deref(),
+                bytes,
+                row.t_ms,
+                target_chunks,
+            );
         }
         Ok(metrics)
+    }
+
+    /// Folds one recorded packet into the run's facts.
+    ///
+    /// The JSONL reader ([`Self::from_trace`]) and the ЧАСТЬ II metrics-only
+    /// bot both go through here, so their numbers are comparable by
+    /// construction — the metrics-only mode differs only in *not* writing a
+    /// file or base64 during the run, never in what it counts.
+    ///
+    /// `bytes` is the payload size and `t_ms` the packet's monotonic wire
+    /// time (milliseconds since the connection attempt); `target_chunks` is
+    /// the N of "the N-th chunk".
+    pub fn record(
+        &mut self,
+        direction: TraceDirection,
+        state: TraceState,
+        name: Option<&str>,
+        bytes: u64,
+        t_ms: f64,
+        target_chunks: u64,
+    ) {
+        let name = name.unwrap_or_default();
+        if direction == TraceDirection::Serverbound {
+            self.serverbound_bytes += bytes;
+            if name == "minecraft:intention" {
+                self.intention_ms = Some(t_ms);
+            }
+            return;
+        }
+        match name {
+            "minecraft:login" if state == TraceState::Play => self.login_ms = Some(t_ms),
+            "minecraft:level_chunk_with_light" => {
+                self.chunks += 1;
+                self.chunk_bytes += bytes;
+                self.since_finish += 1;
+                if self.first_chunk_ms.is_none() {
+                    self.first_chunk_ms = Some(t_ms);
+                }
+                self.last_chunk_ms = Some(t_ms);
+                if self.chunks == target_chunks {
+                    self.target_chunk_ms = Some(t_ms);
+                }
+            }
+            "minecraft:chunk_batch_start" => {
+                self.batch_starts += 1;
+                self.since_finish = 0;
+            }
+            "minecraft:chunk_batch_finished" => {
+                self.batch_finishes += 1;
+                self.batch_sizes.push(self.since_finish);
+                if let Some(previous) = self.last_finish_ms {
+                    self.batch_gaps_ms.push(t_ms - previous);
+                }
+                self.last_finish_ms = Some(t_ms);
+                self.last_batch_ms = Some(t_ms);
+            }
+            _ => {}
+        }
     }
 
     /// Span `intention → login` in milliseconds, or `None` when one of the

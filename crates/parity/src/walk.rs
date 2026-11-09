@@ -319,6 +319,11 @@ pub struct RunStats {
     pub stop: Stop,
     /// Monotonic milliseconds from the play loop start to the quit.
     pub elapsed_ms: f64,
+    /// ЧАСТЬ II: cumulative time the bot was parked inside
+    /// `recv_packet` (i.e. reading or waiting on the socket). The rest of
+    /// the run it was busy elsewhere (base64/JSONL in the traced mode);
+    /// `elapsed_ms - socket_read_ms` is the share it did not read.
+    pub socket_read_ms: f64,
     /// The acknowledged spawn position, when one arrived.
     pub spawn: Option<[f64; 3]>,
     /// The last position the bot sent.
@@ -363,6 +368,67 @@ pub enum WalkError {
     /// whole timeline of the run.
     #[error("trace entry {0} has no socket stamp")]
     Stamp(usize),
+}
+
+/// Where a run's recorded packets go (ЧАСТЬ II).
+///
+/// The traced mode writes one JSONL line per packet (base64 payload); the
+/// metrics-only mode keeps counters, sizes and monotonic receive stamps in
+/// memory and writes a single file after the loop ends. Both fold their
+/// facts through [`PreloadMetrics::record`], so the two are comparable by
+/// construction.
+enum Sink<'a> {
+    /// One JSONL line per packet (every ЧАСТЬ I–III trace).
+    Jsonl(&'a mut Jsonl),
+    /// Metrics only: no file and no base64 during the run.
+    Metrics(&'a mut MetricSink),
+}
+
+impl Sink<'_> {
+    /// Consumes one recorded packet with its wire time.
+    fn record(&mut self, entry: &TraceEntry, stamp: Duration) -> Result<(), WalkError> {
+        match self {
+            Sink::Jsonl(jsonl) => jsonl.record(entry, stamp),
+            Sink::Metrics(sink) => {
+                sink.record(entry, stamp);
+                Ok(())
+            }
+        }
+    }
+}
+
+/// The metrics-only recorder (ЧАСТЬ II): counters, payload sizes and the
+/// monotonic receive stamps of the chunk stream, without a file or base64.
+struct MetricSink {
+    /// The same facts [`crate::preload::PreloadMetrics`] reads back from a
+    /// JSONL trace, folded live.
+    metrics: crate::preload::PreloadMetrics,
+    /// The N of "the N-th chunk" the run waits for.
+    target_chunks: u64,
+}
+
+impl MetricSink {
+    /// A sink that answers `target_chunks`.
+    fn new(target_chunks: u64) -> Self {
+        Self {
+            metrics: crate::preload::PreloadMetrics::default(),
+            target_chunks,
+        }
+    }
+
+    /// Folds one packet. The payload size is the hex length the client
+    /// kept (two hex digits per byte), so no base64 is ever computed.
+    fn record(&mut self, entry: &TraceEntry, stamp: Duration) {
+        let bytes = (entry.payload.len() / 2) as u64;
+        self.metrics.record(
+            entry.direction,
+            entry.state,
+            entry.name.as_deref(),
+            bytes,
+            ms(stamp),
+            self.target_chunks,
+        );
+    }
 }
 
 /// The JSONL trace writer: one line per packet, monotonic wire time.
@@ -469,9 +535,68 @@ pub async fn run_walk_at(
     client.run(&steps).await.map_err(WalkError::Join)?;
 
     let mut jsonl = Jsonl::create(trace_path)?;
-    let stats = play(&mut client, &ids, mode, &mut jsonl).await;
+    let mut sink = Sink::Jsonl(&mut jsonl);
+    let stats = play(&mut client, &ids, mode, &mut sink).await;
     jsonl.finish()?;
     stats
+}
+
+/// ЧАСТЬ II: the same run, but the bot records only metrics.
+///
+/// No JSONL file and no base64 during the run: counters, payload sizes and
+/// monotonic receive stamps stay in memory, and one JSON file with the
+/// [`crate::preload::PreloadMetrics`] facts is written *after* the bot left
+/// (the caller decides where). Everything else — the join, the view
+/// distance, the play loop — is byte-for-byte the traced path, so a time
+/// difference between the two modes is the recording cost alone.
+pub async fn run_walk_metrics_at(
+    env: &ParityEnv,
+    ids: Arc<PacketIds>,
+    port: u16,
+    mode: WalkMode,
+    metrics_path: &Path,
+) -> Result<(RunStats, crate::preload::PreloadMetrics), WalkError> {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let mut client = Client::connect("vanilla-walk", addr, Arc::clone(&ids))
+        .await
+        .map_err(WalkError::Connect)?;
+    let probe_wait = match env.vanilla_port() {
+        Ok(vanilla) if vanilla == port => crate::steps::PROBE_WAIT,
+        _ => crate::steps::PROBE_WAIT_NO_PROBE,
+    };
+    let steps = join_steps_with_view(env, &ids, port, VIEW_DISTANCE, probe_wait);
+    client.run(&steps).await.map_err(WalkError::Join)?;
+
+    // The metrics-only mode only ever waits for chunks; its target is the
+    // one the mode itself carries (0 for any other mode: no target metric).
+    let target_chunks = match mode {
+        WalkMode::Preload { chunks, .. } => chunks,
+        _ => 0,
+    };
+    let mut sink = MetricSink::new(target_chunks);
+    let mut recording = Sink::Metrics(&mut sink);
+    let stats = play(&mut client, &ids, mode, &mut recording).await?;
+    write_metrics(metrics_path, &sink.metrics)?;
+    Ok((stats, sink.metrics))
+}
+
+/// Writes the metrics-only run's facts to one JSON file, after the run.
+fn write_metrics(path: &Path, metrics: &crate::preload::PreloadMetrics) -> Result<(), WalkError> {
+    let display = path.display().to_string();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|source| WalkError::Jsonl {
+            path: display.clone(),
+            source,
+        })?;
+    }
+    let text = serde_json::to_string_pretty(metrics).map_err(|source| WalkError::Jsonl {
+        path: display.clone(),
+        source: std::io::Error::other(source),
+    })?;
+    std::fs::write(path, text).map_err(|source| WalkError::Jsonl {
+        path: display,
+        source,
+    })
 }
 
 /// The play loop: read, react, keep the 50 ms send grid, quit on stop.
@@ -479,7 +604,7 @@ async fn play(
     client: &mut Client,
     ids: &PacketIds,
     mode: WalkMode,
-    jsonl: &mut Jsonl,
+    sink: &mut Sink<'_>,
 ) -> Result<RunStats, WalkError> {
     let (hold, steps, settle, goal) = match mode {
         WalkMode::Stand { hold } => (hold, 0, Duration::ZERO, None),
@@ -527,6 +652,8 @@ async fn play(
     // mode facts, because our own server is survival on purpose.
     let enforce_mode = !matches!(mode, WalkMode::Preload { .. });
     let mut deadline = tokio::time::Instant::now() + TICK;
+    // ЧАСТЬ II: how much of the run was spent parked on the socket.
+    let mut socket_read_ms = 0.0f64;
 
     // ЧАСТЬ I: the load gate and the Э2 script. `loaded_at` is the wire
     // time of `player_loaded`; the scripted moves are due at fixed offsets
@@ -572,6 +699,7 @@ async fn play(
                 wake = wake.min(t0 + *offset);
             }
         }
+        let read_started = std::time::Instant::now();
         match client.recv_packet(wake).await {
             Ok(_) => {}
             Err(error) => {
@@ -581,10 +709,11 @@ async fn play(
                 break;
             }
         }
+        socket_read_ms += ms(read_started.elapsed());
         let processed = process_recorded(
             client,
             ids,
-            jsonl,
+            sink,
             &mut stats,
             &mut emitted,
             &mut pos,
@@ -728,7 +857,7 @@ async fn play(
         let last = process_recorded(
             client,
             ids,
-            jsonl,
+            sink,
             &mut stats,
             &mut emitted,
             &mut pos,
@@ -744,6 +873,7 @@ async fn play(
     }
     stats.stop = stop.unwrap_or(Stop::Completed);
     stats.elapsed_ms = ms(started.elapsed());
+    stats.socket_read_ms = socket_read_ms;
     stats.spawn = spawn;
     if stats.moves > 0 {
         stats.last = pos;
@@ -756,7 +886,7 @@ async fn play(
 async fn process_recorded(
     client: &mut Client,
     ids: &PacketIds,
-    jsonl: &mut Jsonl,
+    sink: &mut Sink<'_>,
     stats: &mut RunStats,
     emitted: &mut usize,
     pos: &mut Option<[f64; 3]>,
@@ -776,7 +906,7 @@ async fn process_recorded(
         *emitted += 1;
         let key = count_key(&entry);
         *stats.counts.entry(key).or_insert(0) += 1;
-        jsonl.record(&entry, stamp)?;
+        sink.record(&entry, stamp)?;
 
         if entry.direction != TraceDirection::Clientbound {
             if entry.name.as_deref() == Some("minecraft:move_player_pos") {
@@ -923,6 +1053,7 @@ fn new_stats() -> RunStats {
         chunks: 0,
         stop: Stop::Completed,
         elapsed_ms: 0.0,
+        socket_read_ms: 0.0,
         spawn: None,
         last: None,
         game_mode: None,

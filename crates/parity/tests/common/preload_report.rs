@@ -109,6 +109,18 @@ fn in_run_median_gap(metrics: &PreloadMetrics) -> Option<f64> {
     median(&metrics.batch_gaps_ms)
 }
 
+/// Share of the run the bot spent **not** parked on the socket, in percent
+/// (ЧАСТЬ II): the work it did between reads — base64 and JSONL in the
+/// traced mode, only counters in the metrics-only one. `None` without a
+/// run or without a positive lifetime.
+pub fn not_read_percent(stats: &RunStats) -> Option<f64> {
+    if stats.elapsed_ms <= 0.0 {
+        return None;
+    }
+    let busy = (stats.elapsed_ms - stats.socket_read_ms).max(0.0);
+    Some(busy / stats.elapsed_ms * 100.0)
+}
+
 /// Every metric of the owner's table, in order: label, one value per run
 /// (`None` when that run did not produce it), printed precision, unit.
 fn metrics(scene: &Scene) -> Vec<(String, Vec<Option<f64>>, usize, &'static str)> {
@@ -116,6 +128,11 @@ fn metrics(scene: &Scene) -> Vec<(String, Vec<Option<f64>>, usize, &'static str)
     let pick = |f: fn(&PreloadMetrics) -> Option<f64>| -> Vec<Option<f64>> {
         runs.iter()
             .map(|run| run.metrics.as_ref().and_then(f))
+            .collect()
+    };
+    let pick_stats = |f: fn(&RunStats) -> Option<f64>| -> Vec<Option<f64>> {
+        runs.iter()
+            .map(|run| run.stats.as_ref().and_then(f))
             .collect()
     };
     vec![
@@ -173,6 +190,18 @@ fn metrics(scene: &Scene) -> Vec<(String, Vec<Option<f64>>, usize, &'static str)
             1,
             "ms",
         ),
+        (
+            "play lifetime (bot's own clock)".to_owned(),
+            pick_stats(|stats| Some(stats.elapsed_ms)),
+            1,
+            "ms",
+        ),
+        (
+            "share of the run the bot did not read the socket".to_owned(),
+            pick_stats(not_read_percent),
+            1,
+            "%",
+        ),
     ]
 }
 
@@ -220,7 +249,7 @@ pub fn scene_block(scene: &Scene) -> String {
 /// faster/slower conclusion without handling the differences first
 /// (`docs/ROUND2-CONTEXT.md`, п. 4), and this file cannot draw it anyway.
 pub fn render(header: &str, scenes: &[Scene]) -> String {
-    let mut text = String::from("# M4.0 (а), ЧАСТЬ III — entry speed: facts only\n\n");
+    let mut text = String::from("# M4.0 (а) — entry speed: facts only\n\n");
     text.push_str(header);
     text.push_str(
         "\nEvery time below is the walk bot's own monotonic clock, in milliseconds \
