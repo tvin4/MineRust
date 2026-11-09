@@ -4,10 +4,13 @@
 //! `docs/ARCH-M4.md`, §6 «M4.0 (а)»): tuned nothing, stopped at the first
 //! violation and reported what exists.
 //!
-//! Every run hashes the world copy before, stops with `save-all flush` +
-//! `stop`, hashes after and classifies the diff: any changed `region/*.mca`
-//! aborts the sequence, `level.dat`/`playerdata`/`session.lock` are
-//! expected noise, `entities/` and `poi/` are listed separately. The
+//! Every run stops with `save-all flush` + `stop`, then hashes the world
+//! copy and diffs it against the template snapshot taken as the baseline
+//! (the copy starts byte-identical; while the server runs it holds the
+//! copy's files open on Windows, so no before-hash of the copy exists).
+//! Any changed `region/*.mca` aborts the sequence, `level.dat`/
+//! `playerdata`/`session.lock` are expected noise, `entities/` and `poi/`
+//! are listed separately. The
 //! server's gamemode is probed with `execute ... run say ...` markers read
 //! back from `logs/latest.log` while the bot is still online.
 //!
@@ -73,7 +76,10 @@ fn hash_tree(dir: &Path) -> BTreeMap<String, String> {
                 .to_string_lossy()
                 .replace('\\', "/");
             let mut hasher = Sha256::new();
-            hasher.update(std::fs::read(&path).expect("read world file"));
+            hasher.update(
+                std::fs::read(&path)
+                    .unwrap_or_else(|error| panic!("read world file {path:?}: {error}")),
+            );
             let hex: String = hasher
                 .finalize()
                 .iter()
@@ -231,7 +237,12 @@ async fn one_run(
     };
     let log_path = vanilla.log_path().to_path_buf();
     let world = env.vanilla_dir.join("world");
-    let before = hash_tree(&world);
+    // The baseline is the template itself: `Vanilla::start` made the copy
+    // from it byte-for-byte moments ago, and while the server runs it
+    // holds the copy's files open (Windows locks the read below). Hashing
+    // the copy before play is therefore impossible; the diff afterwards
+    // compares the stopped copy against this snapshot instead.
+    let baseline = hash_tree(&env.world_template);
 
     // The bot plays while the server future probes the gamemode and,
     // once the bot is done (`quit`), performs `save-all flush` + `stop`.
@@ -277,7 +288,7 @@ async fn one_run(
         tokio::join!(walk, probes)
     };
     let after = hash_tree(&world);
-    outcome.diff = diff(&before, &after);
+    outcome.diff = diff(&baseline, &after);
 
     // Log verdict: both markers keep their raw lines as evidence.
     let log_text = std::fs::read_to_string(&log_path).unwrap_or_default();
