@@ -1,12 +1,11 @@
 # HANDOFF (state for the next session)
 
-## Done — M4.0 (а) round 2 and round 3 part I.1 (070783e..ec6f12b)
-- Round 2 accepted: tool fixes, P1-P3, ЧАСТЬ III table, final report given.
-- Round 3,I.1: first/last bot move_player_pos (25 B, 3 BE doubles + 1 byte,
-  tails 0x00, all finite) and three live-client packets decoded; kick facts
-  in `C:\MineRust-data\traces\part1-move-bytes.md` (no disconnect packet in
-  the trace: os error 10054; vanilla log line kept in run2-vanilla-latest).
+## Done — round 2 (ec6f12b) and round 3 parts I.1-I.2 (bc72232)
+- Round 2 accepted; round 3 I.1: move_player_pos bytes vs the live client
+  and kick facts, in `C:\MineRust-data\traces\part1-move-bytes.md`.
+- I.2 verdict: no encoding defect (25 B, 3 BE doubles + byte 0x00, finite,
+  spawn-close); owner's stop honoured: I.3 (P2/P3 runs) not executed.
 
 ## Next
-- Owner reviews; server code untouched (M4 plan still not accepted).
-- Pitfall: bot `PROBE_WAIT` adds ~3000 ms of self-wait to our series.
+- Owner decides on P2/P3; parts II/III/IV of round 3 pending, server code
+  (crates/server, net, world, protocol) must stay untouched.
