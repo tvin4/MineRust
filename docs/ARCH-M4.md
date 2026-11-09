@@ -304,6 +304,48 @@ idle; единичные выбросы до ~15 мс — планировщик
 | M4.5 | **Видимость других игроков (опционально, после M4.4)** — имена реальные, из `reports/packets.json` (`play.clientbound`): `minecraft:add_entity`, `minecraft:remove_entities`, `minecraft:player_info_update`, `minecraft:player_info_remove`, `minecraft:move_entity_pos`, `minecraft:move_entity_pos_rot`, `minecraft:move_entity_rot`, `minecraft:rotate_head`, `minecraft:teleport_entity`; пакета `minecraft:move_entity` **без суффикса нет** (проверено по отчёту). Состав, порядок и содержимое — **только по трейсу ванили с двумя ботами**, не по памяти и не по вики | трейс «два бота у ванили» записан и разобран (реальный список пакетов и их поля); два наших клиента видят друг друга вживую |
 | M4.6 | `crates/bench`: боты, синтетический провайдер, TPS на 1/2/4/6/12 потоках, проверка гипотезы «повышенный приоритет потока тика снижает выбросы» | отчёт `target/bench/*.md` с p50/p99/p999, дрейфом и метрикой «длительность тика» p50/p99/max (idle-сценарий — основной, нагрузочный см. §3); решение о числе потоков и о приоритете потока |
 
+### M4.0 (а): трейс ходьбы ванили — план (принят с правками 09.11.2026)
+
+**Инструмент (факт по коду).** TCP-прокси в крейте `parity` нет; готов
+записывающий скриптованный клиент `parity::Client` (записывает каждый
+пакет как state/direction/id/сырые байты, авто-ответ на keep-alive,
+`join_steps` до play, ответ `chunk_batch_received` в
+`chunk_batch_slice.rs`). Нет: play-loop с подтверждением телепорта,
+отправки движения, траекторий, assert границ и монотонного времени в
+трейсе — это пишем отдельно. Запасной путь — живой клиент владельца
+через TCP-прокси на порту 25566 **[гипотеза: оба пути]**.
+
+**Пакеты (только из `reports/packets.json`):** clientbound
+`minecraft:player_position` (серверная позиция/телепорт),
+`minecraft:set_chunk_cache_center`, `minecraft:forget_level_chunk`,
+`minecraft:level_chunk_with_light`, `minecraft:chunk_batch_start`,
+`minecraft:chunk_batch_finished`; serverbound
+`minecraft:accept_teleportation` (id 0), `minecraft:player_loaded`
+(id 44), `minecraft:chunk_batch_received`, `minecraft:move_player_pos`,
+`minecraft:move_player_pos_rot`, `minecraft:move_player_rot`,
+`minecraft:move_player_status_only`.
+
+**Правила прогона:** бот после входа подтверждает первый телепорт,
+отвечает на keep-alive и `chunk_batch_finished`; режим spectator / полёт
+на постоянной высоте (нет откатов от рельефа), шаг ≤ 0.2 блока за тик;
+траектории — прямая вдоль x и диагональ. Границы: центральный чанк
+только x 3..9, z −5..1 (блоки x 48..159, z −80..31), запас 2 блока,
+assert диапазона **до отправки** каждого move; выход за зону
+недопустим.
+
+**Копия и чистота:** свежая копия v2; SHA256 файлов копии сверяется с
+шаблоном до прогона; после остановки ванили (`save-all flush`, `stop`)
+перечисляются изменённые `.mca`; v1/v2 не менять, jar не трогать.
+
+**Откат = стоп:** если в трейсе во время ходьбы появился серверный
+`minecraft:player_position` — прогон останавливается, место в трейсе
+показывается, параметры не подбираются.
+
+**Запись:** монотонное время, направление, state, id, сырые байты —
+трейсы в `C:\MineRust-data\traces\`, в репозиторий только сводка.
+Тайминги выдачи чанков на v2 помечать «возможно искажены догенерацией»;
+итог разделять на «решено по трейсу» и «осталось гипотезой».
+
 **Данные по шаблону v2 (перепроверено `chunk_status.py scan` по `.mca`
 09.11.2026):** записей в `.mca` — 2209 (bbox 47×47), готовых к отправке
 (`full` 625 + `initialize_light` 104 = **729**, bbox **27×27**:

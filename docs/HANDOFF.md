@@ -1,16 +1,15 @@
 # HANDOFF (state for the next session)
 
 ## Done
-- Part 1 fully complete: C1–C7 all committed and pushed —
-  C1 349eb74 §0 channel (send().await/try_recv, Move slot, overflow=count),
-  C2 77e7ea2 overloaded-tick policy + tick-duration metric,
-  C3 780add6 §3 rewrite (drift «не объяснён», load excluded, priority hg),
-  C4 e551428 replay nondeterminism inputs,
-  C5 a8b3e52 «Что даёт параллелизм» §1/§5,
-  C6 e8210f8 unchecked position + TeleportAck gate (ARCH + DECISIONS),
-  C7 8bca6f2 ECS deferred to M7 → DECISIONS.md.
+- Part 1 complete (C1–C7), all pushed.
+- M4.0 (а) plan v2 accepted with corrections — plan written into
+  docs/ARCH-M4.md §6 «M4.0 (а)»: no TCP-proxy in parity, scripted
+  Client exists (no play-loop); packet names verified from
+  packets.json (player_position, accept_teleportation id 0,
+  player_loaded id 44, move_player_*); boundaries x 3..9/z −5..1,
+  step ≤0.2, stop on server player_position (=rollback).
 
 ## Next
-- Part 2: M4.0 plan given in chat (walk trace on v2, v3 template
-  acquisition) — awaiting owner's «план принят».
-- M4.1 code starts only after «M4.1 можно».
+- Await owner's acceptance of step (а) plan; then step (б) plan (v3
+  template) as a separate message.
+- M4.1 code only after «M4.1 можно». No M4.1 code in this stage.
