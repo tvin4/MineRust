@@ -1,0 +1,11 @@
+[package]
+name = "tickbench"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["rt", "time"] }
+
+# Standalone on purpose: excluded from the workspace so that the design
+# measurement never affects the server build or its gate.
+[workspace]
