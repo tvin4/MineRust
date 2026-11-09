@@ -810,6 +810,36 @@ warnings`, `cargo test --workspace` — зелёные.
   картами высот, x −5…18, z −14…10), `light_presence_diffs=1614`.
   v2: 2209 чанков, 14.69 MB (регион 14.20 MB).
 
+## Часть M4.0 (а), раунд 4: ЧАСТЬ IV — пишущий прокси (выполнено)
+
+Инструмент `crates/parity`, код сервера не менялся. Файлы:
+`crates/parity/src/proxy.rs` (модуль библиотеки, `run_proxy`/`ProxyConfig`/
+`ProxyError`), `crates/parity/src/bin/mcproxy.rs` (бинарь
+`--listen 127.0.0.1:25565 --out <dir>`), `crates/parity/tests/proxy_verify.rs`.
+
+- Прокси слушает 25565 и ходит в ваниль 25566, пишет по файлу на соединение
+  `proxy-conn-N.jsonl`: `seq`, `dir`, `state`, `name`, `id`, `b64`, плюс
+  `read_ms`/`write_ms` — монотонные миллисекунды от старта соединения
+  (`Instant::elapsed`) на момент чтения и записи пакета соответственно.
+- Состояние определяется по трафику: `minecraft:intention` (serverbound) →
+  Login/Status, `minecraft:login_acknowledged` (serverbound) →
+  Configuration, `minecraft:finish_configuration` (clientbound) → Play.
+- Запуск только при «непрозрачном» канале: отказ, если
+  `network-compression-threshold` не отрицательный или `online-mode` включён;
+  аварийный выход, если ваниль всё-таки шлёт `minecraft:login_compression`
+  (сжатие) или `minecraft:hello` (шифрование).
+- Проверка (`cargo test -p parity --test proxy_verify -- --ignored`): стоящий
+  бот через прокси 10 с, без живого клиента. Итог — бот `Completed`,
+  473 чанка, 10 030 мс; запись `proxy-conn-2.jsonl` = 14 287 строк,
+  `seq` строго растёт, `read_ms` неубывает в каждом направлении,
+  `write_ms >= read_ms` в каждой строке, диапазон меток 0.1…10 735 мс.
+  Гистограмма `(dir, state)`: clientbound play 13 937, serverbound play 307,
+  clientbound configuration 37, serverbound configuration 3,
+  serverbound handshake 1, login 1, clientbound login 1. Непустой `b64`
+  в 13 649 строках. Тронута только та копия мира, на которой работает
+  ваниль (`Vanilla::start` каждый раз копирует свежий v2 в свой рабочий
+  каталог); v1/v2/v3 не изменялись.
+
 ## Что дальше
 
 - **M4 — план показан владельцу, код НЕ пишется до «план принят».**

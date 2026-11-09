@@ -20,6 +20,7 @@ mod client;
 mod diff;
 mod env;
 mod preload;
+mod proxy;
 mod steps;
 mod trace;
 mod vanilla;
@@ -31,6 +32,7 @@ pub use env::{load_parity_env, EnvError, ParityEnv, PACKETS_REPORT_VAR, SERVER_T
 pub use preload::{
     min_median_max, PreloadError, PreloadMetrics, PRELOAD_TIMEOUT, VIEW_DISTANCE_CHUNKS,
 };
+pub use proxy::{run_proxy, ProxyConfig, ProxyError};
 pub use steps::{join_steps, join_steps_with_view};
 pub use trace::{
     from_hex, to_hex, HexError, Trace, TraceDirection, TraceEntry, TraceIoError, TraceState,
