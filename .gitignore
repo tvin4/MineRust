@@ -16,6 +16,10 @@
 # Local knowledge graph built by graphify (rebuilt by the git hook).
 /graphify-out/
 
+# Python bytecode from the trace analyzer tools.
+__pycache__/
+*.pyc
+
 # IDE / OS
 /.idea/
 /.vscode/

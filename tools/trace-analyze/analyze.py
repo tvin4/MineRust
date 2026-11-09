@@ -13,6 +13,8 @@ Payload bodies are never printed.
     python tools/trace-analyze/analyze.py outside <trace.jsonl>
                                                   --before SCAN --after SCAN
                                                   [--radius 10] [--list]
+    python tools/trace-analyze/analyze.py shape   <trace.jsonl>
+                                                  [--square 10] [--list]
 
 `SCAN` is a text file produced by
 `python target/parity/chunk_status.py scan <world-dir>`.
@@ -29,6 +31,11 @@ Whats each command answers:
   window (radius `R` around every centre the server set during the run),
   aggregated by `Status` and by Chebyshev distance from the last centre;
   chunks inside the window that changed status/content.
+* `shape`   — the form of the send window per centre shift: the loaded set
+  (delivered minus forgotten), the full set's per-row widths, and per shift
+  the arriving/forgotten set relative to the new/old centre, next to the
+  `2*square+1` edge a `±square` window would predict. Also counts the
+  `player_position` packets (a rollback detector).
 """
 import argparse
 import base64
@@ -50,6 +57,7 @@ BATCH_RECEIVED = 'minecraft:chunk_batch_received'
 CHUNK = 'minecraft:level_chunk_with_light'
 CENTRE = 'minecraft:set_chunk_cache_center'
 FORGET = 'minecraft:forget_level_chunk'
+POSITION = 'minecraft:player_position'
 
 
 def load(path):
@@ -102,10 +110,18 @@ def chunk_centre(row):
 
 
 def forget_coords(row):
-    """(cx, cz) of forget_level_chunk (two big-endian i32), or None."""
+    """(cx, cz) of forget_level_chunk, or None.
+
+    The payload is the packed `ChunkPos` long (8 B). Read as two big-endian
+    i32 it is `(z, x)`: the high word is z, the low word is x. Round 5
+    documented "two big-endian i32" but not the word order; the traces show
+    the first word is z (the trailing edge would otherwise fall outside the
+    loaded set).
+    """
     if len(row['payload']) != 8:
         return None
-    return struct.unpack('>ii', row['payload'])
+    z, x = struct.unpack('>ii', row['payload'])
+    return x, z
 
 
 def chunk_of(block):
@@ -252,6 +268,126 @@ def cmd_window(ctx, args):
     if args.list:
         for batch in ctx.batches:
             print(f'  batch t={batch["t"]:.1f} chunks={batch["chunks"]} gap={batch["gap"]:.1f}')
+
+
+def chunk_coords(row):
+    """(cx, cz) of level_chunk_with_light (two big-endian i32), or None."""
+    if row['name'] != CHUNK or len(row['payload']) < 8:
+        return None
+    return struct.unpack('>ii', row['payload'][:8])
+
+
+def row_widths(cells, centre, axis=0):
+    """axis 0: dx -> sorted dz; axis 1: dz -> sorted dx, relative to centre."""
+    out = {}
+    for (x, z) in cells:
+        key = x - centre[0] if axis == 0 else z - centre[1]
+        value = z - centre[1] if axis == 0 else x - centre[0]
+        out.setdefault(key, []).append(value)
+    return {key: sorted(values) for key, values in out.items()}
+
+
+def compact_counts(rows):
+    """`dx:n dx:n ...` in dx order."""
+    return ' '.join(f'{dx}:{len(dzs)}' for dx, dzs in sorted(rows.items()))
+
+
+def compact_spans(rows):
+    """`dx:dz0..dz1 dx:...` in dx order."""
+    return ' '.join(f'{dx}:{dzs[0]}..{dzs[-1]}' for dx, dzs in sorted(rows.items()))
+
+
+def square_edge(radius, dx, dz):
+    """New cells of a `±radius` square moved by (dx, dz)."""
+    span = abs(dx) + abs(dz)
+    return (2 * radius + 1) * span - abs(dx) * abs(dz)
+
+
+def loaded_sets(ctx):
+    """Per centre interval: delivered/forgotten sets and the running loaded set."""
+    out = []
+    loaded = set()
+    centres = ctx.centres
+    for index, move in enumerate(centres):
+        end = centres[index + 1]['t'] if index + 1 < len(centres) else float('inf')
+        delivered_rows = [r for r in ctx.rows
+                          if r['dir'] == 'clientbound' and r['name'] == CHUNK
+                          and move['t'] <= r['t'] < end]
+        forgotten_rows = [r for r in ctx.rows
+                          if r['dir'] == 'clientbound' and r['name'] == FORGET
+                          and move['t'] <= r['t'] < end]
+        delivered = {chunk_coords(r) for r in delivered_rows}
+        forgotten = {forget_coords(r) for r in forgotten_rows}
+        before = len(loaded)
+        loaded |= delivered
+        loaded -= forgotten
+        delivered_t = [r['t'] for r in delivered_rows]
+        out.append({
+            'index': index,
+            'move': move,
+            'delivered': delivered,
+            'forgotten': forgotten,
+            'before': before,
+            'after': len(loaded),
+            'loaded': set(loaded),
+            'span_t': (min(delivered_t), max(delivered_t)) if delivered_t else None,
+        })
+    return out
+
+
+def cmd_shape(ctx, args):
+    """Window form per centre shift (see module docstring)."""
+    print(f'trace: {args.trace}')
+    positions = [(r['seq'], r['t'], r['payload']) for r in ctx.rows
+                 if r['dir'] == 'clientbound' and r['name'] == POSITION]
+    print(f'player_position packets: {len(positions)}', end='')
+    if positions:
+        seq, when, payload = positions[0]
+        _, at = varint(payload, 0) if payload else (0, 0)
+        coords = (struct.unpack_from('>ddd', payload, at)
+                  if len(payload) >= at + 24 else None)
+        print(f'  first seq={seq} t={when:.1f} pos={coords}')
+    else:
+        print()
+    shifts = loaded_sets(ctx)
+    print(f'centre moves: {len(ctx.centres)}')
+    if not shifts:
+        return
+    final = shifts[-1]
+    centre = final['move']['centre']
+    rows = row_widths(final['loaded'], centre)
+    widths = sorted({len(dzs) for dzs in rows.values()})
+    print(f'loaded window at last centre {centre}: {final["after"]} chunks'
+          f'  row widths seen: {widths}')
+    print(f'  per-dx width: {compact_counts(rows)}')
+    print(f'  per-dz width: {compact_counts(row_widths(final["loaded"], centre, axis=1))}')
+    full = (2 * max(abs(dx) for dx in rows) + 1) ** 2
+    print(f'  a full square of that half-width would be {full};'
+          f' missing {full - final["after"]} (corners)')
+    for shift in shifts:
+        index = shift['index']
+        move = shift['move']
+        prev = ctx.centres[index - 1]['centre'] if index > 0 else None
+        delivered = shift['delivered']
+        forgotten = shift['forgotten']
+        span = f' deliveries t={shift["span_t"][0]:.0f}..{shift["span_t"][1]:.0f}' if shift['span_t'] else ''
+        print(f'-- shift c{index} {prev}->{move["centre"]} t={move["t"]:.1f}'
+              f'  arrived {len(delivered)} forgotten {len(forgotten)}'
+              f'  loaded {shift["before"]}->{shift["after"]}{span}')
+        if prev is None:
+            continue
+        dx = move['centre'][0] - prev[0]
+        dz = move['centre'][1] - prev[1]
+        arrived = row_widths(delivered, move['centre'])
+        left = row_widths(forgotten, prev)
+        expect = square_edge(args.square, dx, dz)
+        print(f'   shift=({dx},{dz})  arriving rel new: {compact_counts(arrived)}')
+        print(f'                          spans: {compact_spans(arrived)}')
+        print(f'   forgotten rel old: {compact_counts(left)}  spans: {compact_spans(left)}')
+        print(f'   a ±{args.square} square edge would be {expect}; observed {len(delivered)}')
+        if args.list:
+            print(f'   arrived: {sorted(delivered)}')
+            print(f'   forgotten: {sorted(forgotten)}')
 
 
 def cmd_gap(ctx, args):
@@ -434,6 +570,14 @@ def main(argv):
     outside.add_argument('--list', action='store_true',
                          help='print raw lists (default: aggregates only)')
     outside.set_defaults(func=cmd_outside)
+
+    shape = sub.add_parser('shape')
+    shape.add_argument('trace')
+    shape.add_argument('--square', type=int, default=10,
+                       help='half-width of the square to compare the edge with')
+    shape.add_argument('--list', action='store_true',
+                       help='print raw lists (default: aggregates only)')
+    shape.set_defaults(func=cmd_shape)
 
     args = parser.parse_args(argv)
     rows = load(args.trace)
