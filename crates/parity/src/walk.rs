@@ -94,6 +94,39 @@ const SPECTATOR_GAME_MODE: i32 = 3;
 const SPECTATOR_FLAGS: u8 = 0x07;
 const KEY_MOVE_POS: PacketKey =
     PacketKey::serverbound(ProtocolState::Play, "minecraft:move_player_pos", 0x1E);
+/// `move_player_pos_rot` (serverbound id 31 in the live trace): the
+/// positional packet that also carries yaw/pitch. ЧАСТЬ I Э3 alternates it
+/// with [`KEY_MOVE_POS`].
+const KEY_MOVE_POS_ROT: PacketKey =
+    PacketKey::serverbound(ProtocolState::Play, "minecraft:move_player_pos_rot", 0x1F);
+
+/// The live client's first three `move_player_pos` (seq 92/114/155 in
+/// `live-session.json`), byte for byte, with the intervals of the live
+/// trace measured from its first move. ЧАСТЬ I Э2 replays exactly these
+/// after the load. The live first move itself sits 22.800 ms after
+/// `player_loaded` (so the absolute offsets are 22.800 / 995.263 /
+/// 2 149.044 ms); the probe keeps the first at ~0 ms and otherwise the same
+/// relative intervals. The flags byte differs on purpose: `00`, then `01`,
+/// then `01`.
+const LIVE_FIRST_MOVES: [(Duration, &str); 3] = [
+    (
+        Duration::from_micros(0),
+        "40582000000000004062200000000000c03f80000000000000",
+    ),
+    (
+        Duration::from_micros(972_463),
+        "40582000000000004062200000000000c03f80000000000001",
+    ),
+    (
+        Duration::from_micros(2_126_244),
+        "4058280fe66364a24062200000000000c03f873183e0b70b01",
+    ),
+];
+
+/// Yaw/pitch bytes of the live `move_player_pos_rot` (seq 148): the bot's
+/// Э3 rotation payload keeps these two f32 bit patterns. SOURCE: the live
+/// trace, not a computed angle.
+const LIVE_ROT_BYTES: [u8; 8] = [0xC1, 0x64, 0x00, 0x08, 0x41, 0xC7, 0x33, 0x3F];
 
 /// What a run was asked to do.
 #[derive(Debug, Clone, Copy)]
@@ -133,6 +166,34 @@ pub enum WalkMode {
         /// Pace float of `chunk_batch_received`, big-endian f32 bits.
         /// [`PACE`] is the live client's bytes; ЧАСТЬ III varies it.
         pace: [u8; 4],
+    },
+    /// ЧАСТЬ I Э1 / П2 / П3: walking whose first move waits for
+    /// `player_loaded` (the live-client order), with the experiment's
+    /// payload type and on-ground flag. `Straight` / `Diagonal` keep the
+    /// old immediate start and are not touched.
+    WalkLoaded {
+        /// `true` — diagonal +x/+z; `false` — straight +x.
+        diagonal: bool,
+        /// Movement packets to send.
+        steps: u32,
+        /// Idle time after the last step.
+        settle: Duration,
+        /// On-ground flag byte (`false` is the old П2 `0x00`).
+        on_ground: bool,
+        /// Alternate `move_player_pos_rot` on odd steps (Э3).
+        alternate_rot: bool,
+        /// Send exactly one move per `client_tick_end` (after it). The
+        /// trace shows every kick right after a movement packet with no
+        /// tick end since the previous move, so П2/П3 turn this on; the
+        /// old П2 experiment (Э1) keeps it off.
+        tick_coupled: bool,
+    },
+    /// ЧАСТЬ I Э2: after `player_loaded`, the live client's first three
+    /// `move_player_pos` byte for byte at their relative offsets, then a
+    /// static idle.
+    LiveFirstMoves {
+        /// Idle time after the third move.
+        idle: Duration,
     },
 }
 
@@ -204,10 +265,12 @@ pub struct Batch {
 /// monotonic time (tick number = t_ms / 50 in the report; the clock is
 /// the connection one, so tick 0 is the connection, not the join).
 ///
-/// Coordinates come from decoding the recorded payload as two VarInts
-/// `(x, z)` — the layout observed in the live trace (`06feffffff0f` = the
-/// spawn chunk 6, −2). A payload that does not decode keeps `x = z =
-/// [`UNKNOWN_CHUNK`] and the report prints it as unparsed.
+/// Coordinates come from the two layouts observed in the traces:
+/// `set_chunk_cache_center` carries two VarInts (`06feffffff0f` = the spawn
+/// chunk 6, −2), `forget_level_chunk` carries two big-endian 32-bit ints
+/// (always 8 bytes, e.g. `fffffff8fffffffd` = (−8, −3)). A payload that does
+/// not decode keeps `x = z = [`UNKNOWN_CHUNK`] and the report prints it as
+/// unparsed.
 #[derive(Debug, Clone)]
 pub struct CacheMove {
     /// Monotonic milliseconds since the connection attempt: the wire time
@@ -422,10 +485,13 @@ async fn play(
         WalkMode::Stand { hold } => (hold, 0, Duration::ZERO, None),
         WalkMode::Straight { steps, settle } => (Duration::ZERO, steps, settle, None),
         WalkMode::Diagonal { steps, settle } => (Duration::ZERO, steps, settle, None),
+        WalkMode::WalkLoaded { steps, settle, .. } => (Duration::ZERO, steps, settle, None),
+        WalkMode::LiveFirstMoves { idle } => (Duration::ZERO, 0, idle, None),
         WalkMode::Preload {
             chunks, timeout, ..
         } => (Duration::ZERO, 0, Duration::ZERO, Some((chunks, timeout))),
     };
+    let limits = WalkLimits { steps, settle };
     // ЧАСТЬ III: only a preload run may carry a different pace float; every
     // other mode answers `chunk_batch_finished` with the live trace bytes.
     let pace = match mode {
@@ -448,16 +514,32 @@ async fn play(
         bytes: 0,
     };
     // ЧАСТЬ III: a preload waits for its chunk target, never for the stand
-    // timer — `steps == 0` without a goal is still the P1 hold.
-    let mut settle_at = if steps == 0 && goal.is_none() {
-        Some(tokio::time::Instant::now() + hold)
-    } else {
-        None
-    };
+    // timer — `steps == 0` without a goal is still the P1 hold. The
+    // scripted Э2 idle starts only after its third move, so it is not
+    // armed here.
+    let mut settle_at =
+        if steps == 0 && goal.is_none() && !matches!(mode, WalkMode::LiveFirstMoves { .. }) {
+            Some(tokio::time::Instant::now() + hold)
+        } else {
+            None
+        };
     // ЧАСТЬ I, п. 4 judges the walking runs; a preload only records the
     // mode facts, because our own server is survival on purpose.
     let enforce_mode = !matches!(mode, WalkMode::Preload { .. });
     let mut deadline = tokio::time::Instant::now() + TICK;
+
+    // ЧАСТЬ I: the load gate and the Э2 script. `loaded_at` is the wire
+    // time of `player_loaded`; the scripted moves are due at fixed offsets
+    // from it. `script` decodes the live payloads once.
+    let mut loaded_sent = false;
+    let mut loaded_at: Option<tokio::time::Instant> = None;
+    let mut script_sent = 0usize;
+    let mut script: Vec<(Duration, Vec<u8>)> = Vec::new();
+    if matches!(mode, WalkMode::LiveFirstMoves { .. }) {
+        for (offset, hex) in LIVE_FIRST_MOVES {
+            script.push((offset, from_hex(hex)?));
+        }
+    }
 
     loop {
         if started.elapsed() > safety {
@@ -482,6 +564,13 @@ async fn play(
         }
         if let Some(at) = timers.loaded {
             wake = wake.min(at);
+        }
+        // ЧАСТЬ I Э2: wake exactly at the next scripted move, not on the
+        // 50 ms movement grid, so the live offsets are kept.
+        if let Some(t0) = loaded_at {
+            if let Some((offset, _)) = script.get(script_sent) {
+                wake = wake.min(t0 + *offset);
+            }
         }
         match client.recv_packet(wake).await {
             Ok(_) => {}
@@ -539,6 +628,33 @@ async fn play(
                     next += TICK;
                 }
                 timers.tick = Some(next);
+                // ЧАСТЬ I: tick-coupled movement — exactly one move after
+                // this tick end. The kick trace shows a movement packet
+                // with no `client_tick_end` since the previous move is what
+                // vanilla rejects, so П2/П3 never let two moves share a tick.
+                if matches!(
+                    mode,
+                    WalkMode::WalkLoaded {
+                        tick_coupled: true,
+                        ..
+                    }
+                ) && movement_allowed(mode, loaded_sent)
+                {
+                    if let Some(reason) = send_move(
+                        client,
+                        ids,
+                        mode,
+                        &mut pos,
+                        &mut moved,
+                        limits,
+                        &mut settle_at,
+                    )
+                    .await?
+                    {
+                        stop = Some(reason);
+                        break;
+                    }
+                }
             }
         }
         if let Some(at) = timers.loaded {
@@ -546,28 +662,55 @@ async fn play(
                 let id = ids.id(KEY_PLAYER_LOADED);
                 send(client, id, &[]).await?;
                 timers.loaded = None;
+                loaded_sent = true;
+                loaded_at = Some(tokio::time::Instant::now());
             }
         }
-        if tokio::time::Instant::now() >= deadline {
-            let next = next_step(mode, pos, moved);
-            match next {
-                Some(target) if in_zone(target[0], target[2]) => {
+        // ЧАСТЬ I Э2: the three live moves at exact offsets from
+        // `player_loaded`; the idle timer starts after the last one.
+        if !script.is_empty() {
+            if let Some(t0) = loaded_at {
+                while let Some((offset, payload)) = script.get(script_sent) {
+                    if tokio::time::Instant::now() < t0 + *offset {
+                        break;
+                    }
                     let id = ids.id(KEY_MOVE_POS);
-                    send(client, id, &move_payload(&target)).await?;
-                    pos = Some(target);
-                    moved += 1;
-                    if moved == steps {
+                    send(client, id, payload).await?;
+                    script_sent += 1;
+                    if script_sent == script.len() {
                         settle_at = Some(tokio::time::Instant::now() + settle);
                     }
                 }
-                Some(target) => {
-                    stop = Some(Stop::Bounds {
-                        x: target[0],
-                        z: target[2],
-                    });
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            // ЧАСТЬ I: the load gate — modes whose first move waits for
+            // `player_loaded` send nothing until it is out. Э2 is driven
+            // by the script above, not by this grid; a tick-coupled mode
+            // moves in the tick block instead, right after its tick end.
+            let grid_moves = !matches!(
+                mode,
+                WalkMode::LiveFirstMoves { .. }
+                    | WalkMode::WalkLoaded {
+                        tick_coupled: true,
+                        ..
+                    }
+            ) && movement_allowed(mode, loaded_sent);
+            if grid_moves {
+                if let Some(reason) = send_move(
+                    client,
+                    ids,
+                    mode,
+                    &mut pos,
+                    &mut moved,
+                    limits,
+                    &mut settle_at,
+                )
+                .await?
+                {
+                    stop = Some(reason);
                     break;
                 }
-                None => {}
             }
             // Absolute grid: a missed slot is skipped, never bursted.
             let mut next_deadline = deadline + TICK;
@@ -687,7 +830,7 @@ async fn process_recorded(
                 stats.chunks += 1;
             }
             Some(name @ ("minecraft:set_chunk_cache_center" | "minecraft:forget_level_chunk")) => {
-                let (x, z) = chunk_center(&payload);
+                let (x, z) = chunk_move(name, &payload);
                 stats.cache_moves.push(CacheMove {
                     t_ms: ms(stamp),
                     name: name.to_owned(),
@@ -855,14 +998,88 @@ fn base64(bytes: &[u8]) -> String {
 fn next_step(mode: WalkMode, pos: Option<[f64; 3]>, moved: u32) -> Option<[f64; 3]> {
     let current = pos?;
     match mode {
-        WalkMode::Stand { .. } => None,
+        WalkMode::Stand { .. } | WalkMode::LiveFirstMoves { .. } => None,
         WalkMode::Straight { steps, .. } if moved < steps => {
             Some([current[0] + STRAIGHT, current[1], current[2]])
         }
         WalkMode::Diagonal { steps, .. } if moved < steps => {
             Some([current[0] + DIAG, current[1], current[2] - DIAG])
         }
+        WalkMode::WalkLoaded {
+            diagonal: false,
+            steps,
+            ..
+        } if moved < steps => Some([current[0] + STRAIGHT, current[1], current[2]]),
+        // ЧАСТЬ I П3: the owner's diagonal is +x/+z (the old `Diagonal`
+        // mode keeps its -z direction untouched).
+        WalkMode::WalkLoaded {
+            diagonal: true,
+            steps,
+            ..
+        } if moved < steps => Some([current[0] + DIAG, current[1], current[2] + DIAG]),
         _ => None,
+    }
+}
+
+/// Whether the movement grid may send now: modes whose first move waits
+/// for `player_loaded` stay silent until that packet is out.
+fn movement_allowed(mode: WalkMode, loaded_sent: bool) -> bool {
+    match mode {
+        WalkMode::WalkLoaded { .. } | WalkMode::LiveFirstMoves { .. } => loaded_sent,
+        _ => true,
+    }
+}
+
+/// The packet type and payload of one grid step. ЧАСТЬ I Э3 alternates
+/// `move_player_pos` (even steps) with `move_player_pos_rot` (odd steps).
+fn move_packet(mode: WalkMode, target: &[f64; 3], moved: u32) -> (PacketKey, Vec<u8>) {
+    match mode {
+        WalkMode::WalkLoaded {
+            on_ground,
+            alternate_rot: true,
+            ..
+        } if moved % 2 == 1 => (KEY_MOVE_POS_ROT, move_payload_rot(target, on_ground)),
+        WalkMode::WalkLoaded { on_ground, .. } => (KEY_MOVE_POS, move_payload(target, on_ground)),
+        _ => (KEY_MOVE_POS, move_payload(target, false)),
+    }
+}
+
+/// How far a grid walk goes and how long it idles after the last step.
+#[derive(Debug, Clone, Copy)]
+struct WalkLimits {
+    /// Movement packets to send.
+    steps: u32,
+    /// Idle time after the last step.
+    settle: Duration,
+}
+
+/// Sends the next grid step if the mode still has one; returns the stop
+/// reason when the step would leave the owner's zone (assert before send).
+async fn send_move(
+    client: &mut Client,
+    ids: &PacketIds,
+    mode: WalkMode,
+    pos: &mut Option<[f64; 3]>,
+    moved: &mut u32,
+    limits: WalkLimits,
+    settle_at: &mut Option<tokio::time::Instant>,
+) -> Result<Option<Stop>, WalkError> {
+    match next_step(mode, *pos, *moved) {
+        Some(target) if in_zone(target[0], target[2]) => {
+            let (key, payload) = move_packet(mode, &target, *moved);
+            send(client, ids.id(key), &payload).await?;
+            *pos = Some(target);
+            *moved += 1;
+            if *moved == limits.steps {
+                *settle_at = Some(tokio::time::Instant::now() + limits.settle);
+            }
+            Ok(None)
+        }
+        Some(target) => Ok(Some(Stop::Bounds {
+            x: target[0],
+            z: target[2],
+        })),
+        None => Ok(None),
     }
 }
 
@@ -878,27 +1095,56 @@ fn in_zone(x: f64, z: f64) -> bool {
 }
 
 /// Payload of `minecraft:move_player_pos`: 3 big-endian doubles plus the
-/// on-ground byte (size 25, as in the live client's trace; `false` — the
-/// bot flies as a spectator).
-fn move_payload(p: &[f64; 3]) -> Vec<u8> {
+/// on-ground byte (size 25, as in the live client's trace; old П2 sent
+/// `false` — the bot flies as a spectator).
+fn move_payload(p: &[f64; 3], on_ground: bool) -> Vec<u8> {
     let mut out = Vec::with_capacity(25);
     for value in p {
         out.extend_from_slice(&value.to_be_bytes());
     }
-    out.push(0);
+    out.push(u8::from(on_ground));
     out
 }
 
-/// Decodes a window-move payload as two VarInts `(x, z)`; anything else
-/// is reported as [`UNKNOWN_CHUNK`] instead of guessed at.
-fn chunk_center(payload: &[u8]) -> (i32, i32) {
-    let Ok((first, used)) = protocol::decode_varint(payload) else {
-        return (UNKNOWN_CHUNK, UNKNOWN_CHUNK);
-    };
-    let Ok((second, _)) = protocol::decode_varint(&payload[used..]) else {
-        return (UNKNOWN_CHUNK, UNKNOWN_CHUNK);
-    };
-    (first, second)
+/// Payload of `minecraft:move_player_pos_rot`: 3 big-endian doubles, the
+/// live yaw/pitch bytes, then the on-ground byte (size 33).
+fn move_payload_rot(p: &[f64; 3], on_ground: bool) -> Vec<u8> {
+    let mut out = Vec::with_capacity(33);
+    for value in p {
+        out.extend_from_slice(&value.to_be_bytes());
+    }
+    out.extend_from_slice(&LIVE_ROT_BYTES);
+    out.push(u8::from(on_ground));
+    out
+}
+
+/// Decodes a window-move payload as a chunk `(x, z)`.
+///
+/// `set_chunk_cache_center` is two VarInts; `forget_level_chunk` is two
+/// big-endian `i32` (its payload is always 8 bytes — the VarInt reading
+/// used to yield garbage here). Every other name, and anything that does
+/// not decode, becomes [`UNKNOWN_CHUNK`] instead of a guess.
+fn chunk_move(name: &str, payload: &[u8]) -> (i32, i32) {
+    match name {
+        "minecraft:forget_level_chunk" => {
+            if payload.len() < 8 {
+                return (UNKNOWN_CHUNK, UNKNOWN_CHUNK);
+            }
+            let x = i32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
+            let z = i32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
+            (x, z)
+        }
+        "minecraft:set_chunk_cache_center" => {
+            let Ok((first, used)) = protocol::decode_varint(payload) else {
+                return (UNKNOWN_CHUNK, UNKNOWN_CHUNK);
+            };
+            let Ok((second, _)) = protocol::decode_varint(&payload[used..]) else {
+                return (UNKNOWN_CHUNK, UNKNOWN_CHUNK);
+            };
+            (first, second)
+        }
+        _ => (UNKNOWN_CHUNK, UNKNOWN_CHUNK),
+    }
 }
 
 /// Parses a server `player_position` and builds the acknowledgment the
@@ -942,5 +1188,44 @@ mod tests {
         // `elapsed_ms` goes through the same helper: the 10 s P1 hold must
         // read as ~10 000 ms, never as ~10.
         assert_eq!(ms(Duration::from_secs_f64(10.8)), 10_800.0);
+    }
+
+    #[test]
+    fn cache_center_is_two_varints() {
+        // The live spawn center: chunk (6, -2), byte for byte.
+        let from_hex = crate::trace::from_hex("06feffffff0f").expect("hex");
+        assert_eq!(
+            chunk_move("minecraft:set_chunk_cache_center", &from_hex),
+            (6, -2)
+        );
+    }
+
+    #[test]
+    fn forget_level_chunk_is_two_big_endian_i32() {
+        // Trace payload `fffffff8fffffffd` is (−8, −3); the old VarInt
+        // reading returned garbage here.
+        let from_hex = crate::trace::from_hex("fffffff8fffffffd").expect("hex");
+        assert_eq!(
+            chunk_move("minecraft:forget_level_chunk", &from_hex),
+            (-8, -3)
+        );
+        // A sign-carrying pair: (5, -1).
+        let from_hex = crate::trace::from_hex("00000005ffffffff").expect("hex");
+        assert_eq!(
+            chunk_move("minecraft:forget_level_chunk", &from_hex),
+            (5, -1)
+        );
+    }
+
+    #[test]
+    fn an_undecodable_move_is_unknown() {
+        assert_eq!(
+            chunk_move("minecraft:forget_level_chunk", &[0, 1, 2]),
+            (UNKNOWN_CHUNK, UNKNOWN_CHUNK)
+        );
+        assert_eq!(
+            chunk_move("minecraft:some_other", &[0x06, 0xfe]),
+            (UNKNOWN_CHUNK, UNKNOWN_CHUNK)
+        );
     }
 }

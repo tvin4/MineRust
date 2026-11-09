@@ -229,14 +229,28 @@ async fn one_run(
 ) -> RunOutcome {
     let trace = Path::new(TRACE_DIR).join(format!("{name}.jsonl"));
     let report = Path::new(TRACE_DIR).join(format!("{name}.report.txt"));
-    let mode_label = match mode {
-        WalkMode::Stand { hold } => format!("stand {:.0}s", hold.as_secs()),
-        WalkMode::Straight { steps, .. } => format!("straight {steps} steps"),
-        WalkMode::Diagonal { steps, .. } => format!("diagonal {steps} steps"),
-        // Not part of the three walk runs: ЧАСТЬ III's wait uses its own
-        // test driver (`tests/preload_measure.rs`).
-        WalkMode::Preload { .. } => "preload (ЧАСТЬ III)".to_owned(),
-    };
+    let mode_label =
+        match mode {
+            WalkMode::Stand { hold } => format!("stand {:.0}s", hold.as_secs()),
+            WalkMode::Straight { steps, .. } => format!("straight {steps} steps"),
+            WalkMode::Diagonal { steps, .. } => format!("diagonal {steps} steps"),
+            WalkMode::WalkLoaded {
+                diagonal,
+                steps,
+                on_ground,
+                alternate_rot,
+                ..
+            } => format!(
+            "walk-loaded {} {steps} steps (on_ground={on_ground}, alternate_rot={alternate_rot})",
+            if diagonal { "diagonal +x/+z" } else { "straight +x" }
+        ),
+            WalkMode::LiveFirstMoves { idle } => {
+                format!("live first moves + {}s idle", idle.as_secs())
+            }
+            // Not part of the three walk runs: ЧАСТЬ III's wait uses its own
+            // test driver (`tests/preload_measure.rs`).
+            WalkMode::Preload { .. } => "preload (ЧАСТЬ III)".to_owned(),
+        };
     let mut outcome = RunOutcome {
         name,
         mode: mode_label,
