@@ -566,9 +566,8 @@ async fn build_world_template_v3() {
     match (&remove, &query) {
         (Ok(removed), Ok(queried)) => {
             // Observed vanilla 26.3 reply: "No force loaded chunks were found
-            // in minecraft:overworld" — the older "No chunks" wording is kept
-            // as well so a wording change makes the check fail loudly.
-            let empty = queried.contains("No force loaded chunks") || queried.contains("No chunks");
+            // in minecraft:overworld" — see `query_is_empty` and its test.
+            let empty = query_is_empty(queried);
             report.push_str(&format!(
                 "\n### force-load cleanup\n\n- remove all: {}\n- query empty: {empty} | {}\n",
                 notable(removed),
@@ -669,6 +668,63 @@ async fn build_world_template_v3() {
     let _ = std::fs::write(Path::new(TRACE_DIR).join("part3-report.md"), &report);
     let _ = std::fs::write(Path::new(TRACE_DIR).join("part3-summary.txt"), &summary);
     eprintln!("report: {TRACE_DIR}\\part3-report.md\n{summary}");
+}
+
+/// Whether vanilla's `forceload query` reply means "nothing is force-loaded".
+///
+/// Observed vanilla 26.3 wording: `No force loaded chunks were found in
+/// minecraft:overworld` — the check must accept it (the first build attempt
+/// used a narrower `No chunks` match and reported a false residual).
+fn query_is_empty(reply: &str) -> bool {
+    reply.contains("No force loaded chunks") || reply.contains("No chunks")
+}
+
+#[test]
+fn watchdog_disables_and_restores_max_tick_time() {
+    let dir = std::env::temp_dir().join(format!(
+        "parity-watchdog-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("server.properties");
+    let original = "level-seed=12345\nmax-tick-time=60000\nonline-mode=false\n";
+    std::fs::write(&path, original).expect("write properties");
+
+    {
+        let _guard = Watchdog::off(&dir).expect("watchdog off");
+        let during = std::fs::read_to_string(&path).expect("read during");
+        assert!(during.contains("max-tick-time=-1"), "{during}");
+        assert_eq!(
+            during.matches("max-tick-time=").count(),
+            1,
+            "the key must stay unique: {during}"
+        );
+    }
+
+    let restored = std::fs::read_to_string(&path).expect("read restored");
+    assert_eq!(
+        restored, original,
+        "the guard must restore the file verbatim"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn query_empty_detector_matches_real_vanilla_lines() {
+    // Real vanilla 26.3 replies, quoted from part3-run.log (09.11.2026).
+    assert!(query_is_empty(
+        "[22:47:58] [Server thread/INFO]: System chat: No force loaded chunks \
+         were found in minecraft:overworld"
+    ));
+    assert!(!query_is_empty(
+        "[22:47:58] [Server thread/INFO]: System chat: Unmarked all force \
+         loaded chunks in minecraft:overworld"
+    ));
+    assert!(!query_is_empty(
+        "[22:45:05] [Server thread/INFO]: System chat: Marked 256 chunks in \
+         minecraft:overworld from [1000, 1000] to [1000, 1255] to be force loaded"
+    ));
 }
 
 /// The raw `chunk_status.py scan` text of one world.
