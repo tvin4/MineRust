@@ -1,11 +1,13 @@
 # HANDOFF (state for the next session)
-Round 5 (M4.0 (а) acceptance) — ЧАСТЬ 0 done in this commit.
-- `tools/trace-analyze/analyze.py`: one Python analyzer, aggregates only
-  (`summary` / `window` / `gap` / `outside`), raw lists only with `--list`;
-  reproduces П3: 137 batches, 535 chunks, 62 forgets, max batch gap 3682 ms.
-- Regression tests (only what broke): `Watchdog` sets `max-tick-time=-1` and
-  restores `server.properties` verbatim; the `forceload query` empty detector
-  accepts the real vanilla 26.3 line. Both in `tests/build_template_v3.rs`.
-- Facts: `C:\MineRust-data\traces\facts.md`, every line marked [трейс]/[гипотеза].
-Next: ЧАСТЬ 1 — the new world criterion (radius-10 send window); re-run П2/П3
-because their worlds are gone, then ЧАСТИ 2–4. Server crates untouched.
+Round 5 (M4.0 (а) acceptance): ЧАСТЬ 0 (`733caf9`) + ЧАСТЬ 1 (this commit).
+- Part 0: `tools/trace-analyze/analyze.py` (aggregates only, `--list` for
+  lists); regression tests for `Watchdog` and the `forceload query` detector.
+- Part 1: the world criterion is now the radius-10 send window;
+  `tests/window_probe.rs` re-runs П2/П3 (`MINECRAFT_WINDOW_PROBE=p2|p3`) and
+  keeps the world in `C:\MineRust-data\world-window-p2|p3`.
+  Outside the window 141/279 new chunks, all `structure_starts`, 21-25 chunks
+  from the last centre; inside 0 new, `initialize_light->full` 21/41, and
+  heightmap/light rewrite of 27/33 already-full chunks (vanilla load/save).
+- Facts: `C:\MineRust-data\traces\facts.md`; scans `window-*-scan.txt`.
+Next: ЧАСТЬ 2 — the 3682 ms batch gap in П3; then П4/П5 on v3 (Part 3).
+Server crates (`server`, `net`, `world`, `protocol`) untouched.

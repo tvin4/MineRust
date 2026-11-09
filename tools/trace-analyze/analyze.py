@@ -33,6 +33,7 @@ Whats each command answers:
 import argparse
 import base64
 import json
+import re
 import statistics
 import struct
 import sys
@@ -290,22 +291,23 @@ def cmd_gap(ctx, args):
 
 def read_scan(path):
     """(x, z) -> (status, sections, block_light, sky_light, heightmap)."""
+    pattern = re.compile(
+        r'\(\s*(-?\d+)\s*,\s*(-?\d+)\)\s+status=(\S+)\s+secs=(\d+)'
+        r'\s+block=\s*(\d+)\s+sky=\s*(\d+)\s+hm=(\S+)'
+    )
     out = {}
     with open(path, encoding='utf-8', errors='replace') as handle:
         for line in handle:
-            line = line.strip()
-            if not line.startswith('('):
+            match = pattern.search(line)
+            if not match:
                 continue
-            head, *fields = line.split(') status=')
-            coords = head.lstrip('(').split(',')
-            x, z = int(coords[0]), int(coords[1])
-            parts = dict(item.split('=') for item in fields[0].split())
-            out[(x, z)] = (
-                parts['status'],
-                int(parts['secs']),
-                int(parts['block']),
-                int(parts['sky']),
-                parts['hm'],
+            x, z, status, secs, block, sky, hm = match.groups()
+            out[(int(x), int(z))] = (
+                status,
+                int(secs),
+                int(block),
+                int(sky),
+                hm,
             )
     return out
 
@@ -350,21 +352,48 @@ def cmd_outside(ctx, args):
         for bucket in sorted(buckets):
             print(f'  {bucket:>3}..{bucket + 1:<3} {buckets[bucket]}')
     changed = []
-    gone = []
     for key in sorted(set(before) & set(after)):
         if key not in cells:
             continue
-        if before[key][0] != after[key][0]:
-            changed.append((key, before[key][0], after[key][0]))
-        elif before[key][4] != after[key][4] or before[key][2:4] != after[key][2:4]:
-            changed.append((key, 'content', 'content'))
-    for key in sorted(set(before) - set(after)):
-        if key in cells:
-            gone.append(key)
-    print(f'inside window: changed status/content {len(changed)}  gone {len(gone)}')
+        old, new = before[key], after[key]
+        if old[0] != new[0]:
+            changed.append((key, old[0], new[0], 'status'))
+        elif old[4] != new[4] or old[2:4] != new[2:4]:
+            changed.append((key, old[0], new[0], 'content'))
+    gone = [key for key in sorted(set(before) - set(after)) if key in cells]
+    inside_before = [key for key in before if key in cells]
+    ready_before = [key for key in inside_before if before[key][0] == 'minecraft:full']
+    status_changed = [item for item in changed if item[3] == 'status']
+    content_changed = [item for item in changed if item[3] == 'content']
+    ready_changed = [item for item in changed if item[1] == 'minecraft:full']
+    print(f'inside window: before {len(inside_before)} chunks '
+          f'(full before {len(ready_before)}); status changed {len(status_changed)}; '
+          f'content-only changed {len(content_changed)}; gone {len(gone)}')
+    if status_changed:
+        transitions = Counter((old, new) for _, old, new, _ in status_changed)
+        print('  status transitions inside window:')
+        for (old, new), count in transitions.most_common():
+            print(f'    {old:<32} -> {new:<20} {count}')
+    print(f'  chunks that were full before and changed: {len(ready_changed)}')
+    if content_changed:
+        hm_only = light_only = both = secs = 0
+        for key in [item[0] for item in content_changed]:
+            old, new = before[key], after[key]
+            hm = old[4] != new[4]
+            light = old[2:4] != new[2:4]
+            if old[1] != new[1]:
+                secs += 1
+            if hm and light:
+                both += 1
+            elif hm:
+                hm_only += 1
+            elif light:
+                light_only += 1
+        print(f'  content changes: heightmap only {hm_only}, light only '
+              f'{light_only}, both {both}, section count changed {secs}')
     if args.list:
-        for key, old, new_status in changed:
-            print(f'  changed {key} {old} -> {new_status}')
+        for key, old, new, kind in changed:
+            print(f'  changed {key} {kind}: {before[key]} -> {after[key]}')
         for key in gone:
             print(f'  gone {key}')
         for key in outside:
@@ -375,22 +404,26 @@ def cmd_outside(ctx, args):
 
 def main(argv):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('--list', action='store_true',
-                        help='print raw lists (default: aggregates only)')
     sub = parser.add_subparsers(dest='command', required=True)
 
     summary = sub.add_parser('summary')
     summary.add_argument('trace')
+    summary.add_argument('--list', action='store_true',
+                         help='print raw lists (default: aggregates only)')
     summary.set_defaults(func=cmd_summary)
 
     window = sub.add_parser('window')
     window.add_argument('trace')
+    window.add_argument('--list', action='store_true',
+                        help='print raw lists (default: aggregates only)')
     window.set_defaults(func=cmd_window)
 
     gap = sub.add_parser('gap')
     gap.add_argument('trace')
     gap.add_argument('--at', type=float, required=True)
     gap.add_argument('--around', type=float, default=500.0)
+    gap.add_argument('--list', action='store_true',
+                     help='print raw lists (default: aggregates only)')
     gap.set_defaults(func=cmd_gap)
 
     outside = sub.add_parser('outside')
@@ -398,6 +431,8 @@ def main(argv):
     outside.add_argument('--before', required=True)
     outside.add_argument('--after', required=True)
     outside.add_argument('--radius', type=int, default=10)
+    outside.add_argument('--list', action='store_true',
+                         help='print raw lists (default: aggregates only)')
     outside.set_defaults(func=cmd_outside)
 
     args = parser.parse_args(argv)
