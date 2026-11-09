@@ -1,15 +1,14 @@
 # HANDOFF (state for the next session)
 
 ## Done
-- Part 1 complete (C1–C7), all pushed.
-- M4.0 (а) plan v2 accepted with corrections — plan written into
-  docs/ARCH-M4.md §6 «M4.0 (а)»: no TCP-proxy in parity, scripted
-  Client exists (no play-loop); packet names verified from
-  packets.json (player_position, accept_teleportation id 0,
-  player_loaded id 44, move_player_*); boundaries x 3..9/z −5..1,
-  step ≤0.2, stop on server player_position (=rollback).
+- M4.0 (а) bot + 3-run test shipped (5e57013, c21cc35, c21cc35-test).
+- П1 STOPPED on 2 fixed conditions: local abort os error 10053 5 ms into
+  play (no disconnect packet) and region/*.mca changed (4 files);
+  teleports=1 clean; spectator only via server log line (execute probes
+  broken — error echo faked the marker, fix pending). П2/П3 not run.
+- Artifacts: C:\MineRust-data\traces\walk-p1.jsonl / walk-p1.report.txt /
+  walk-summary.md. Template dir itself unchanged.
 
 ## Next
-- Await owner's acceptance of step (а) plan; then step (б) plan (v3
-  template) as a separate message.
-- M4.1 code only after «M4.1 можно». No M4.1 code in this stage.
+- Owner reviews the final report; fixes (probe syntax, 10053 autopsy) and
+  step (б) only after owner's word. M4.1 code only after «M4.1 можно».
