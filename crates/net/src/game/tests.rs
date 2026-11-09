@@ -245,6 +245,38 @@ fn player_ids_start_at_one_and_never_repeat() {
     thread.join().expect("the game thread panicked");
 }
 
+#[test]
+fn the_thread_stops_on_request_within_the_timeout() {
+    // No tick limit: on its own this loop would run forever.
+    let (thread, handle) = GameHandle::spawn(GameConfig::default()).expect("spawn the game thread");
+    std::thread::sleep(Duration::from_millis(120));
+
+    let started = Instant::now();
+    thread
+        .join_timeout(Duration::from_secs(2))
+        .expect("the loop stopped in time");
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "the stop must be seen within a tick or two, took {elapsed:?}"
+    );
+    assert!(
+        handle.metrics().ticks >= 1,
+        "the loop had been ticking before the stop"
+    );
+}
+
+#[test]
+fn join_timeout_reports_a_thread_that_did_not_stop() {
+    let (thread, _handle) =
+        GameHandle::spawn(GameConfig::default()).expect("spawn the game thread");
+    // A fresh loop cannot have left before its first 50 ms deadline.
+    let err = thread
+        .join_timeout(Duration::from_millis(0))
+        .expect_err("a fresh loop is still running");
+    assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+}
+
 /// The M4.1 acceptance test: 1000 idle ticks of the real 20 TPS deadline.
 ///
 /// It runs ~50 s of wall clock, so it is ignored by default (D6: CI runs

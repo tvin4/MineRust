@@ -30,7 +30,7 @@ pub use replay::{Replay, ReplayRecord};
 pub use scheduler::Scheduler;
 
 use std::io;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -93,22 +93,53 @@ impl Default for GameConfig {
 #[error("the game thread is not running")]
 pub struct GameClosed;
 
-/// The spawned game thread. Keep it to `join` (tests); the server drops it
-/// and lets the thread end when every [`GameHandle`] is gone.
+/// The spawned game thread. Keep it to `join` or `join_timeout`; the server
+/// joins it with a timeout on shutdown.
 #[derive(Debug)]
 pub struct GameThread {
     join: Option<JoinHandle<()>>,
+    stop: Arc<AtomicBool>,
 }
 
 impl GameThread {
-    /// Waits for the thread to finish.
+    /// Waits for the loop to finish on its own (a tick limit or a closed
+    /// channel); does not ask it to stop.
     pub fn join(mut self) -> std::thread::Result<()> {
         match self.join.take() {
             Some(join) => join.join(),
             None => Ok(()),
         }
     }
+
+    /// Asks the loop to stop and waits at most `timeout` for it to finish.
+    ///
+    /// The loop leaves after its current tick (the stop flag is read once per
+    /// tick), so the wait is short. Returns [`io::ErrorKind::TimedOut`] when
+    /// the thread is still running at the deadline; the caller may then exit
+    /// anyway instead of hanging.
+    pub fn join_timeout(mut self, timeout: Duration) -> io::Result<()> {
+        self.stop.store(true, Ordering::Release);
+        let join = match self.join.take() {
+            Some(join) => join,
+            None => return Ok(()),
+        };
+        let deadline = Instant::now() + timeout;
+        while !join.is_finished() {
+            if Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "the game thread did not stop within the timeout",
+                ));
+            }
+            std::thread::sleep(STOP_POLL);
+        }
+        join.join()
+            .map_err(|_| io::Error::other("the game thread panicked"))
+    }
 }
+
+/// How often [`GameThread::join_timeout`] checks whether the loop has left.
+const STOP_POLL: Duration = Duration::from_millis(5);
 
 /// A cloneable handle on the game thread, held by every connection.
 #[derive(Clone)]
@@ -116,6 +147,7 @@ pub struct GameHandle {
     to_game: mpsc::Sender<ToGame>,
     next_id: Arc<AtomicI32>,
     metrics: Arc<TickMetricsHandle>,
+    stop: Arc<AtomicBool>,
 }
 
 impl GameHandle {
@@ -128,15 +160,24 @@ impl GameHandle {
         let (to_game, incoming) = mpsc::channel(capacity);
         let metrics = Arc::new(TickMetricsHandle::default());
         let thread_metrics = Arc::clone(&metrics);
+        let stop = Arc::new(AtomicBool::new(false));
+        let loop_stop = Arc::clone(&stop);
         let join = std::thread::Builder::new()
             .name("minecraft-game".to_owned())
-            .spawn(move || game_loop(incoming, config, &thread_metrics))?;
+            .spawn(move || game_loop(incoming, config, &thread_metrics, &loop_stop))?;
         let handle = Self {
             to_game,
             next_id: Arc::new(AtomicI32::new(1)),
             metrics,
+            stop: Arc::clone(&stop),
         };
-        Ok((GameThread { join: Some(join) }, handle))
+        Ok((
+            GameThread {
+                join: Some(join),
+                stop,
+            },
+            handle,
+        ))
     }
 
     /// The next free player id.
@@ -163,14 +204,24 @@ impl GameHandle {
     pub fn quit_now(&self, id: PlayerId) {
         let _ = self.to_game.try_send(ToGame::Quit { id });
     }
+
+    /// Asks the game thread to leave after its current tick.
+    pub fn stop(&self) {
+        self.stop.store(true, Ordering::Release);
+    }
 }
 
 /// The tick loop: wait for the absolute deadline, apply incoming messages,
 /// tick the regions, publish the metrics, repeat.
+///
+/// The loop leaves when the incoming channel closes (every [`GameHandle`]
+/// dropped) or when [`GameHandle::stop`] raised the shared flag; the stop
+/// flag is read once per tick, so a shutdown waits at most one period.
 fn game_loop(
     mut incoming: mpsc::Receiver<ToGame>,
     config: GameConfig,
     metrics: &TickMetricsHandle,
+    stop: &AtomicBool,
 ) {
     let mut scheduler = Scheduler::new(vec![Region::new(SINGLE_REGION)]);
     let mut recorder = Recorder::new(config.period);
@@ -181,6 +232,10 @@ fn game_loop(
     let mut disconnected = false;
     loop {
         sleep_until(deadline);
+        if stop.load(Ordering::Acquire) {
+            info!(ticks = tick, "stop requested, leaving the tick loop");
+            break;
+        }
         let woke = Instant::now();
         let work = Instant::now();
         apply_queued(

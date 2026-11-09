@@ -18,7 +18,7 @@ use protocol::{
 };
 use tokio::io::{AsyncRead, AsyncWrite, BufReader};
 use tokio::net::{TcpListener, TcpStream};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::error::ConnectionError;
 use crate::frame::{read_tracked, write_tracked};
@@ -48,7 +48,11 @@ pub(super) struct Client {
 // matching the wiki's suggested intervals; only a live client proves them).
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Accepts connections forever, spawning one task per connection.
+/// How long a shutdown waits for the game thread to leave its tick loop
+/// before the process is allowed to exit anyway.
+const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Accepts connections until Ctrl+C, then stops the game thread.
 ///
 /// The status document, the loaded game data and the packet ids are shared
 /// as immutable `Arc`s; there is no mutable shared state on this path.
@@ -63,29 +67,95 @@ pub async fn serve(
     loader: Option<Loader>,
     world: WorldInfo,
 ) -> std::io::Result<()> {
-    // One game thread owns the players of this server (ARCH-M4 §0). It is
-    // detached: every connection holds a clone of the handle and the thread
-    // ends when the last one is gone.
-    let (_game_thread, game) = game::GameHandle::spawn(game::GameConfig::default())?;
-    loop {
-        let (stream, peer) = listener.accept().await?;
-        let status = Arc::clone(&status);
-        let game_data = Arc::clone(&game_data);
-        let packet_ids = Arc::clone(&packet_ids);
-        let loader = loader.clone();
-        let game = game.clone();
-        tokio::spawn(async move {
-            match handle_connection(stream, status, game_data, packet_ids, loader, world, game)
-                .await
-            {
-                Ok(()) => debug!(%peer, "connection closed"),
-                Err(ConnectionError::TimedOut) => debug!(%peer, "connection timed out"),
-                Err(err) if err.is_client_disconnect() => {
-                    debug!(%peer, %err, "client disconnected");
+    // One game thread owns the players of this server (ARCH-M4 §0). It runs
+    // until this function returns; on shutdown it is asked to stop and
+    // joined with a timeout, so a stuck tick cannot block the exit.
+    let (game_thread, game) = game::GameHandle::spawn(game::GameConfig::default())?;
+    let accepting = async move {
+        loop {
+            let (stream, peer) = listener.accept().await?;
+            let status = Arc::clone(&status);
+            let game_data = Arc::clone(&game_data);
+            let packet_ids = Arc::clone(&packet_ids);
+            let loader = loader.clone();
+            let game = game.clone();
+            tokio::spawn(async move {
+                match handle_connection(stream, status, game_data, packet_ids, loader, world, game)
+                    .await
+                {
+                    Ok(()) => debug!(%peer, "connection closed"),
+                    Err(ConnectionError::TimedOut) => debug!(%peer, "connection timed out"),
+                    Err(err) if err.is_client_disconnect() => {
+                        debug!(%peer, %err, "client disconnected");
+                    }
+                    Err(err) => warn!(%peer, %err, "connection failed"),
                 }
-                Err(err) => warn!(%peer, %err, "connection failed"),
-            }
+            });
+        }
+    };
+    let result = tokio::select! {
+        result = accepting => result,
+        _ = shutdown_signal() => {
+            info!("shutdown signal received");
+            Ok(())
+        }
+    };
+    if let Err(err) = game_thread.join_timeout(SHUTDOWN_JOIN_TIMEOUT) {
+        warn!(%err, "the game thread did not stop in time");
+    }
+    result
+}
+
+/// Resolves when the process is asked to shut down.
+///
+/// Ctrl+C everywhere; on Windows also Ctrl+Break and a console-window close
+/// (CTRL_CLOSE_EVENT), so closing the window stops the game thread instead
+/// of being an unclean kill. Each signal is awaited by its own task, so one
+/// failed handler never disturbs the others.
+async fn shutdown_signal() {
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
+    let ctrl_c_tx = tx.clone();
+    tokio::spawn(async move {
+        ctrl_c_or_pending().await;
+        let _ = ctrl_c_tx.send(()).await;
+    });
+    #[cfg(windows)]
+    watch_windows_signals(&tx);
+    drop(tx);
+    // Every sender is held by a parked task, so this only returns on a
+    // signal (or when the runtime shuts down).
+    let _ = rx.recv().await;
+}
+
+/// Spawns one waiter per Windows control event that means "stop".
+#[cfg(windows)]
+fn watch_windows_signals(tx: &tokio::sync::mpsc::Sender<()>) {
+    if let Ok(mut signal) = tokio::signal::windows::ctrl_break() {
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            signal.recv().await;
+            let _ = tx.send(()).await;
         });
+    } else {
+        warn!("could not listen for Ctrl+Break");
+    }
+    if let Ok(mut signal) = tokio::signal::windows::ctrl_close() {
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            signal.recv().await;
+            let _ = tx.send(()).await;
+        });
+    } else {
+        warn!("could not listen for the window-close signal");
+    }
+}
+
+/// Ctrl+C; never resolves when the handler cannot be installed.
+async fn ctrl_c_or_pending() {
+    if let Err(err) = tokio::signal::ctrl_c().await {
+        warn!(%err, "could not listen for the shutdown signal");
+        // Never resolve: without a signal there is nothing to react to.
+        std::future::pending::<()>().await;
     }
 }
 
