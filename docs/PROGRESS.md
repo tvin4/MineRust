@@ -716,6 +716,12 @@ warnings`, `cargo test --workspace` — зелёные.
   шлёт 24 sky-массива в каждом чанке, ваниль - только непустые (2..7).
   Heightmaps и section blob совпадают. Разбор:
   `C:\MineRust-data\traces\ii3-payload-breakdown.md`.
+- III (float `chunks_per_tick`): ваниль warm и наш warm, pace
+  {4.6715, 15, 50} x3, все 18 — `Completed` по 441. Число порций:
+  ваниль 108/29/12, наш 87/29/9. Время до 441-го (медиана): ваниль
+  5921.6/5671.1/5601.3 мс, наш 8545.5/8537.3/8660.1 мс — float задаёт
+  размер порций, но время входа меняет слабо. Отчёт
+  `C:\MineRust-data\traces\preload-report-float.md`.
 
 ## Что дальше
 

@@ -38,8 +38,8 @@ use std::time::Duration;
 
 use data::PacketIds;
 use parity::{
-    load_parity_env, run_walk_at, ParityEnv, PreloadMetrics, Vanilla, WalkMode, PRELOAD_TIMEOUT,
-    VIEW_DISTANCE_CHUNKS,
+    load_parity_env, run_walk_at, ParityEnv, PreloadMetrics, Vanilla, WalkMode, PACE,
+    PRELOAD_TIMEOUT, VIEW_DISTANCE_CHUNKS,
 };
 use preload_report::{render, Measured, Scene, REPEATS, TRACE_DIR};
 use tokio::net::TcpStream;
@@ -132,9 +132,71 @@ async fn our_series_after_probe_wait_fix() {
     }
 }
 
+/// ЧАСТЬ III: entry time as a function of the client's pace float. Vanilla
+/// warm and our warm, pace in {4.6715 (the live wire bytes), 15, 50}, three
+/// repeats each. The metrics the owner asked for are the time to the 441st
+/// `level_chunk_with_light` and the number of `chunk_batch_finished`.
+#[tokio::test]
+#[ignore = "requires the owner's installation (C:\\MineRust-data)"]
+async fn float_pace_series() {
+    let env = match load_parity_env() {
+        Ok(env) => env,
+        Err(error) => {
+            eprintln!("SKIP: parity environment is not configured: {error}");
+            return;
+        }
+    };
+    if let Err(error) = std::fs::create_dir_all(TRACE_DIR) {
+        eprintln!("SKIP: cannot create {TRACE_DIR}: {error}");
+        return;
+    }
+    let ids = Arc::new(env.packet_ids().expect("packet ids"));
+    let vanilla_port = env
+        .vanilla_port()
+        .expect("server-port in the vanilla server.properties");
+
+    let pace_points = paces();
+    let mut scenes = vanilla_warm_paces(&env, Arc::clone(&ids), vanilla_port, &pace_points).await;
+    scenes.extend(ours_warm_paces(&env, Arc::clone(&ids), &pace_points).await);
+
+    let header = format!(
+        "{}\n\
+         - ЧАСТЬ III: the pace float of `chunk_batch_received` is varied per run. \
+         `4.6715` is the live client's wire bytes `40957d29` (they decode to 4.6715283); \
+         `15` and `50` are the nearest f32 of those decimals (`41700000` / `42480000`). \
+         The bot, the 441-chunk target and the budget are unchanged.\n",
+        conditions(&env, vanilla_port)
+    );
+    let path = Path::new(TRACE_DIR).join("preload-report-float.md");
+    match std::fs::write(&path, render(&header, &scenes)) {
+        Ok(()) => eprintln!("report: {}", path.display()),
+        Err(error) => eprintln!("cannot write {}: {error}", path.display()),
+    }
+}
+
+/// The three pace points: label and big-endian f32 bytes.
+fn paces() -> [(&'static str, [u8; 4]); 3] {
+    [
+        ("4.6715", PACE),
+        ("15", 15.0_f32.to_bits().to_be_bytes()),
+        ("50", 50.0_f32.to_bits().to_be_bytes()),
+    ]
+}
+
 /// One measured join at `port`: the bot waits for the target, then the
 /// trace is read back into the run's facts.
 async fn measurement(env: &ParityEnv, ids: Arc<PacketIds>, port: u16, name: &str) -> Measured {
+    measurement_with_pace(env, ids, port, name, PACE).await
+}
+
+/// The same join with an explicit pace float (ЧАСТЬ III varies it).
+async fn measurement_with_pace(
+    env: &ParityEnv,
+    ids: Arc<PacketIds>,
+    port: u16,
+    name: &str,
+    pace: [u8; 4],
+) -> Measured {
     let trace = Path::new(TRACE_DIR).join(format!("{name}.jsonl"));
     let mut run = Measured::new(name);
     run.trace = trace.clone();
@@ -144,6 +206,7 @@ async fn measurement(env: &ParityEnv, ids: Arc<PacketIds>, port: u16, name: &str
     let mode = WalkMode::Preload {
         chunks: TARGET,
         timeout: BUDGET,
+        pace,
     };
     run.stats = match run_walk_at(env, ids, port, mode, &trace).await {
         Ok(stats) => Some(stats),
@@ -261,6 +324,82 @@ async fn ours_warm(env: &ParityEnv, ids: Arc<PacketIds>, prefix: &str) -> Scene 
     }
     stop_ours(server).await;
     scene
+}
+
+/// Vanilla warm on one live process, a warm-up join then every pace point
+/// with `REPEATS` measured joins (ЧАСТЬ III).
+async fn vanilla_warm_paces(
+    env: &ParityEnv,
+    ids: Arc<PacketIds>,
+    port: u16,
+    pace_points: &[(&str, [u8; 4])],
+) -> Vec<Scene> {
+    let server = match Vanilla::start(env).await {
+        Ok(server) => server,
+        Err(error) => {
+            let mut scene = Scene::new("III) vanilla warm");
+            scene.runs.push(failed("pace-vanilla-warm-0", error));
+            return vec![scene];
+        }
+    };
+    eprintln!("vanilla pace warm-up join (not measured)...");
+    measurement(env, Arc::clone(&ids), port, "pace-vanilla-warm-0").await;
+    let mut scenes = Vec::new();
+    for (label, pace) in pace_points {
+        let mut scene = Scene::new(format!("III) vanilla warm, pace {label}"));
+        for index in 1..=REPEATS {
+            let name = format!("pace-vanilla-{label}-{index}");
+            scene
+                .runs
+                .push(measurement_with_pace(env, Arc::clone(&ids), port, &name, *pace).await);
+        }
+        scenes.push(scene);
+    }
+    if let Err(error) = server.stop().await {
+        eprintln!("vanilla stop failed: {error}");
+    }
+    scenes
+}
+
+/// Our warm on one release process, a warm-up join then every pace point
+/// with `REPEATS` measured joins (ЧАСТЬ III).
+async fn ours_warm_paces(
+    env: &ParityEnv,
+    ids: Arc<PacketIds>,
+    pace_points: &[(&str, [u8; 4])],
+) -> Vec<Scene> {
+    let server = match start_ours().await {
+        Ok(server) => server,
+        Err(error) => {
+            let mut scene = Scene::new("III) our warm");
+            scene.runs.push(failed("pace-ours-warm-0", error));
+            return vec![scene];
+        }
+    };
+    if !wait_for_port(OUR_PORT, OUR_START_TIMEOUT).await {
+        let mut scene = Scene::new("III) our warm");
+        scene.runs.push(failed(
+            "pace-ours-warm-0",
+            "our release server did not listen in time",
+        ));
+        stop_ours(server).await;
+        return vec![scene];
+    }
+    eprintln!("our pace warm-up join (not measured)...");
+    measurement(env, Arc::clone(&ids), OUR_PORT, "pace-ours-warm-0").await;
+    let mut scenes = Vec::new();
+    for (label, pace) in pace_points {
+        let mut scene = Scene::new(format!("III) our warm, pace {label}"));
+        for index in 1..=REPEATS {
+            let name = format!("pace-ours-{label}-{index}");
+            scene
+                .runs
+                .push(measurement_with_pace(env, Arc::clone(&ids), OUR_PORT, &name, *pace).await);
+        }
+        scenes.push(scene);
+    }
+    stop_ours(server).await;
+    scenes
 }
 
 /// One start → join → stop round of the cold series: `None` when our own

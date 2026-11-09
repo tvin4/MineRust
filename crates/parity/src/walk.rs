@@ -44,9 +44,10 @@ use crate::trace::{from_hex, TraceDirection, TraceEntry, TraceState};
 pub const VIEW_DISTANCE: i8 = 10;
 
 /// Pace float of `chunk_batch_received`, byte-exact from the live client
-/// trace (`live-session.json` seq 81, hex `40957d29`, ≈ 4.6715).
+/// trace (`live-session.json` seq 81, hex `40957d29`, ≈ 4.6715283).
 /// **Depends on the bot**: it is what that client happened to send.
-const PACE: [u8; 4] = [0x40, 0x95, 0x7D, 0x29];
+/// ЧАСТЬ III varies it per run; every other mode keeps these bytes.
+pub const PACE: [u8; 4] = [0x40, 0x95, 0x7D, 0x29];
 
 /// One movement tick of the bot (20 per second, absolute deadline grid).
 const TICK: Duration = Duration::from_millis(50);
@@ -129,6 +130,9 @@ pub enum WalkMode {
         chunks: u64,
         /// How long the bot may stay if the server never gets there.
         timeout: Duration,
+        /// Pace float of `chunk_batch_received`, big-endian f32 bits.
+        /// [`PACE`] is the live client's bytes; ЧАСТЬ III varies it.
+        pace: [u8; 4],
     },
 }
 
@@ -418,9 +422,15 @@ async fn play(
         WalkMode::Stand { hold } => (hold, 0, Duration::ZERO, None),
         WalkMode::Straight { steps, settle } => (Duration::ZERO, steps, settle, None),
         WalkMode::Diagonal { steps, settle } => (Duration::ZERO, steps, settle, None),
-        WalkMode::Preload { chunks, timeout } => {
-            (Duration::ZERO, 0, Duration::ZERO, Some((chunks, timeout)))
-        }
+        WalkMode::Preload {
+            chunks, timeout, ..
+        } => (Duration::ZERO, 0, Duration::ZERO, Some((chunks, timeout))),
+    };
+    // ЧАСТЬ III: only a preload run may carry a different pace float; every
+    // other mode answers `chunk_batch_finished` with the live trace bytes.
+    let pace = match mode {
+        WalkMode::Preload { pace, .. } => pace,
+        _ => PACE,
     };
     let started = std::time::Instant::now();
     let safety = TICK * steps + hold + settle + Duration::from_secs(60);
@@ -491,6 +501,7 @@ async fn play(
             &mut pos,
             &mut timers,
             &mut chunking,
+            pace,
             enforce_mode,
         )
         .await?;
@@ -580,6 +591,7 @@ async fn play(
             &mut pos,
             &mut timers,
             &mut chunking,
+            pace,
             enforce_mode,
         )
         .await?;
@@ -607,6 +619,7 @@ async fn process_recorded(
     pos: &mut Option<[f64; 3]>,
     timers: &mut Timers,
     chunking: &mut Batch,
+    pace: [u8; 4],
     enforce_mode: bool,
 ) -> Result<Option<Stop>, WalkError> {
     while *emitted < client.trace().len() {
@@ -656,7 +669,7 @@ async fn process_recorded(
             }
             Some("minecraft:chunk_batch_finished") => {
                 let id = ids.id(protocol::ChunkBatchReceived::KEY);
-                send(client, id, &PACE).await?;
+                send(client, id, &pace).await?;
                 let mut done = std::mem::replace(
                     chunking,
                     Batch {

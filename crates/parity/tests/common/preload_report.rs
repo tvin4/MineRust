@@ -67,16 +67,16 @@ impl Measured {
 /// order they were made.
 pub struct Scene {
     /// Human label, the owner's own wording.
-    pub label: &'static str,
+    pub label: String,
     /// The repeats.
     pub runs: Vec<Measured>,
 }
 
 impl Scene {
     /// A new empty series.
-    pub fn new(label: &'static str) -> Self {
+    pub fn new(label: impl Into<String>) -> Self {
         Self {
-            label,
+            label: label.into(),
             runs: Vec::new(),
         }
     }
