@@ -13,9 +13,9 @@
 //! files open on Windows, so no before-hash of the copy exists).
 //! Any changed `region/*.mca` aborts the sequence, `level.dat`/
 //! `playerdata`/`session.lock` are expected noise, `entities/` and `poi/`
-//! are listed separately. The
-//! server's gamemode is probed with `execute ... run say ...` markers read
-//! back from `logs/latest.log` while the bot is still online.
+//! are listed separately. The server's gamemode is proven from the trace
+//! itself — `login.game_mode` and the `player_abilities` flags byte (ЧАСТЬ
+//! I, п. 4): anything but spectator aborts the sequence too.
 //!
 //! Traces (JSONL, monotonic time, base64 payloads) and per-run reports land
 //! in `C:\MineRust-data\traces\`; the repository keeps only this source.
@@ -38,14 +38,14 @@ const P1_HOLD: Duration = Duration::from_secs(10);
 const WALK_STEPS: u32 = 200;
 /// P2/P3: idle seconds after the last step, then quit.
 const SETTLE: Duration = Duration::from_secs(5);
-/// Interval between the server-side gamemode probes.
-const CHECK_INTERVAL: Duration = Duration::from_secs(2);
-/// How many probes may be sent while the bot is still playing.
-const CHECK_ATTEMPTS: u32 = 8;
-/// `say` marker each probe writes into the log when the bot is spectator.
-const GM_SPECTATOR: &str = "WALK_GM_SPECTATOR";
-/// `say` marker for «the server is not in spectator» — a hard stop.
-const GM_NOT_SPECTATOR: &str = "WALK_GM_NOT_SPECTATOR";
+/// Expected `game_mode` of the clientbound login (play) packet: spectator;
+/// the fact agrees with the live traces, ЧАСТЬ I, п. 4.
+const EXPECTED_GAME_MODE: i32 = 3;
+/// Expected `player_abilities` flags byte under the forced spectator
+/// (`07 3d4ccccd 3dcccccd` in the live trace, ЧАСТЬ I, п. 4).
+const EXPECTED_ABILITIES: u8 = 0x07;
+/// Violation-line prefix of a failed mode check (used by the final assert).
+const MODE_VIOLATION: &str = "mode check:";
 
 /// Reads the parity environment or explains why the test is skipped.
 fn parity_env_or_skip() -> Option<ParityEnv> {
@@ -166,17 +166,6 @@ fn diff(before: &BTreeMap<String, String>, after: &BTreeMap<String, String>) -> 
     d
 }
 
-/// What the log probes could prove about the server's gamemode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GmStatus {
-    /// The spectator marker fired: the server forces spectator.
-    Spectator,
-    /// The «not spectator» marker fired: a hard stop.
-    NotSpectator,
-    /// No marker arrived; the report carries the raw evidence lines.
-    Unverified,
-}
-
 /// Everything one run produced, for the summary and the owner's report.
 struct RunOutcome {
     /// `walk-p1` / `walk-p2` / `walk-p3`.
@@ -193,8 +182,12 @@ struct RunOutcome {
     fatal: Option<String>,
     /// Classified world diff of the copy.
     diff: Diff,
-    /// Gamemode verdict read from the server log.
-    gm: GmStatus,
+    /// Mode facts from the trace (`game_mode` / `abilities_flags`), as
+    /// printed in the report.
+    mode_facts: String,
+    /// Whether the trace's mode facts are spectator (`false` is a stop
+    /// condition of ЧАСТЬ I, п. 4 and aborts the remaining runs).
+    mode_ok: bool,
     /// The owner's stop conditions found by this run.
     violations: Vec<String>,
 }
@@ -224,7 +217,8 @@ async fn one_run(
         stats: None,
         fatal: None,
         diff: Diff::default(),
-        gm: GmStatus::Unverified,
+        mode_facts: "no facts (run failed before play)".to_owned(),
+        mode_ok: false,
         violations: Vec::new(),
     };
 
@@ -234,11 +228,10 @@ async fn one_run(
             let text = format!("vanilla start: {error}");
             outcome.fatal = Some(text.clone());
             outcome.violations.push(text);
-            write_report(&outcome, &[]);
+            write_report(&outcome);
             return outcome;
         }
     };
-    let log_path = vanilla.log_path().to_path_buf();
     let world = env.vanilla_dir.join("world");
     // The baseline is the template itself: `Vanilla::start` made the copy
     // from it byte-for-byte moments ago, and while the server runs it
@@ -247,45 +240,18 @@ async fn one_run(
     // compares the stopped copy against this snapshot instead.
     let baseline = hash_tree(&env.world_template);
 
-    // The bot plays while the server future probes the gamemode and,
-    // once the bot is done (`quit`), performs `save-all flush` + `stop`.
+    // The bot plays while the server future only waits for its `quit` flag
+    // and then performs `save-all flush` + `stop`.
     let quit = Arc::new(AtomicBool::new(false));
-    let mut probe_err: Option<String> = None;
     let (walk_res, stop_res) = {
         let walk_quit = Arc::clone(&quit);
-        let mut server = vanilla;
+        let server = vanilla;
         let walk = async {
             let res = run_walk(env, Arc::clone(&ids), mode, &outcome.trace).await;
             walk_quit.store(true, Ordering::SeqCst);
             res
         };
-        let probes = async {
-            for _ in 0..CHECK_ATTEMPTS {
-                tokio::time::sleep(CHECK_INTERVAL).await;
-                if quit.load(Ordering::SeqCst) {
-                    break;
-                }
-                let spectator = server
-                    .command(&format!(
-                        "execute if entity ParityBot[gamemode=spectator] run say {GM_SPECTATOR}"
-                    ))
-                    .await;
-                let not_spectator = server
-                    .command(&format!(
-                        "execute if entity ParityBot[gamemode=!spectator] run say \
-                         {GM_NOT_SPECTATOR}"
-                    ))
-                    .await;
-                if let Err(error) = spectator.and(not_spectator) {
-                    probe_err = Some(error.to_string());
-                    break;
-                }
-                if let Ok(text) = std::fs::read_to_string(&log_path) {
-                    if text.contains(GM_SPECTATOR) || text.contains(GM_NOT_SPECTATOR) {
-                        break;
-                    }
-                }
-            }
+        let stopper = async {
             // ЧАСТЬ I, п. 3: the console `stop` is issued only after the
             // bot finished on its own: the walk future sets `quit` when
             // `run_walk` returns, and nothing else releases this wait —
@@ -295,29 +261,10 @@ async fn one_run(
             }
             server.stop_with_flush().await
         };
-        tokio::join!(walk, probes)
+        tokio::join!(walk, stopper)
     };
     let after = hash_tree(&world);
     outcome.diff = diff(&baseline, &after);
-
-    // Log verdict: both markers keep their raw lines as evidence.
-    let log_text = std::fs::read_to_string(&log_path).unwrap_or_default();
-    outcome.gm = if log_text.contains(GM_SPECTATOR) {
-        GmStatus::Spectator
-    } else if log_text.contains(GM_NOT_SPECTATOR) {
-        GmStatus::NotSpectator
-    } else {
-        GmStatus::Unverified
-    };
-    let log_evidence: Vec<String> = log_text
-        .lines()
-        .filter(|line| {
-            let lower = line.to_ascii_lowercase();
-            lower.contains("walk_gm") || lower.contains("gamemode") || lower.contains("invalid")
-        })
-        .map(ToOwned::to_owned)
-        .take(40)
-        .collect();
 
     // The owner's stop conditions, evaluated once with fixed criteria.
     match walk_res {
@@ -339,6 +286,23 @@ async fn one_run(
                     stats.teleports
                 ));
             }
+            // ЧАСТЬ I, п. 4: the trace itself must prove spectator — a
+            // parse miss or any other value is a violation like any other
+            // stop condition, and aborts the remaining runs.
+            outcome.mode_facts = format!(
+                "login game_mode {:?} | player_abilities flags {:?} | expected \
+                 game_mode {EXPECTED_GAME_MODE} / flags 0x{EXPECTED_ABILITIES:02X}",
+                stats.game_mode, stats.abilities_flags
+            );
+            outcome.mode_ok = stats.game_mode == Some(EXPECTED_GAME_MODE)
+                && stats.abilities_flags == Some(EXPECTED_ABILITIES);
+            if !outcome.mode_ok {
+                outcome.violations.push(format!(
+                    "{MODE_VIOLATION} game_mode {:?}, player_abilities flags {:?} \
+                     (expected game_mode {EXPECTED_GAME_MODE}, flags 0x{EXPECTED_ABILITIES:02X})",
+                    stats.game_mode, stats.abilities_flags
+                ));
+            }
             outcome.stats = Some(stats);
         }
         Err(error) => {
@@ -347,16 +311,8 @@ async fn one_run(
             outcome.violations.push(text);
         }
     }
-    if let Some(error) = probe_err {
-        outcome.violations.push(format!("gamemode probe: {error}"));
-    }
     if let Err(error) = stop_res {
         outcome.violations.push(format!("server stop: {error}"));
-    }
-    if outcome.gm == GmStatus::NotSpectator {
-        outcome
-            .violations
-            .push("server is not in spectator".to_owned());
     }
     if outcome.diff.region_dirty() {
         outcome.violations.push(format!(
@@ -364,18 +320,13 @@ async fn one_run(
             outcome.diff.region.join(", ")
         ));
     }
-    if outcome.gm == GmStatus::Unverified {
-        // Not one of the owner's stop triggers (nothing proved otherwise);
-        // the report still carries it as an unverified fact.
-        eprintln!("NOTE {name}: gamemode unverified; see the report's evidence");
-    }
 
-    write_report(&outcome, &log_evidence);
+    write_report(&outcome);
     outcome
 }
 
 /// Writes one run's report file (facts only, no conclusions).
-fn write_report(outcome: &RunOutcome, evidence: &[String]) {
+fn write_report(outcome: &RunOutcome) {
     let mut text = String::new();
     text.push_str(&format!(
         "# Walk trace {} ({})\n",
@@ -385,6 +336,17 @@ fn write_report(outcome: &RunOutcome, evidence: &[String]) {
         "fatal: {}\n",
         outcome.fatal.as_deref().unwrap_or("none")
     ));
+    let mode_check = if outcome.mode_ok {
+        "expected spectator (ok)"
+    } else if outcome.stats.is_some() {
+        "VIOLATION"
+    } else {
+        "n/a (no play)"
+    };
+    text.push_str(&format!(
+        "mode from the trace (ЧАСТЬ I, п. 4): {} | check: {}\n",
+        outcome.mode_facts, mode_check
+    ));
     match &outcome.stats {
         None => text.push_str("no play statistics (run failed before play)\n"),
         Some(stats) => {
@@ -392,11 +354,6 @@ fn write_report(outcome: &RunOutcome, evidence: &[String]) {
                 "stop: {:?}\nelapsed: {:.0} ms | server player_position: {} | \
                  movement packets sent: {:?}\nspawn: {:?} | last position: {:?}\n",
                 stats.stop, stats.elapsed_ms, stats.teleports, stats.moves, stats.spawn, stats.last
-            ));
-            text.push_str(&format!(
-                "mode from the trace (ЧАСТЬ I, п. 5): login game_mode {:?} | \
-                 player_abilities flags {:?}\n",
-                stats.game_mode, stats.abilities_flags
             ));
             text.push_str("\n## Packet counts (direction / name: times)\n");
             for (key, value) in &stats.counts {
@@ -443,12 +400,6 @@ fn write_report(outcome: &RunOutcome, evidence: &[String]) {
         joined(&outcome.diff.expected)
     ));
     text.push_str(&format!("other: {}\n", joined(&outcome.diff.other)));
-    text.push_str("\n## Gamemode probes (logs/latest.log)\n");
-    text.push_str(&format!("verdict: {:?}\n", outcome.gm));
-    for line in evidence {
-        text.push_str(line);
-        text.push('\n');
-    }
     text.push_str("\n## Server stop order (ЧАСТЬ I, п. 3)\n");
     text.push_str(
         "vanilla got `save-all flush` + `stop` strictly after the bot's quit flag \
@@ -526,7 +477,7 @@ async fn walk_trace_three_runs() {
         }
         let outcome = one_run(&env, Arc::clone(&ids), name, mode, first_run).await;
         eprintln!(
-            "{}: stop={:?} teleports={} region={} gm={:?}",
+            "{}: stop={:?} teleports={} region={} mode_ok={}",
             outcome.name,
             outcome
                 .stats
@@ -535,7 +486,7 @@ async fn walk_trace_three_runs() {
                 .unwrap_or_else(|| "n/a".to_owned()),
             outcome.stats.as_ref().map_or(0, |s| s.teleports),
             joined(&outcome.diff.region),
-            outcome.gm
+            outcome.mode_ok
         );
         performed.push(outcome);
     }
@@ -548,9 +499,10 @@ async fn walk_trace_three_runs() {
     let mut summary = String::from("# M4.0 (а) walk traces — summary\n\n");
     for run in &performed {
         summary.push_str(&format!(
-            "- {}: fatal={} stop-conditions={:?} report={} trace={}\n",
+            "- {}: fatal={} mode[{}] stop-conditions={:?} report={} trace={}\n",
             run.name,
             run.fatal.is_some(),
+            run.mode_facts,
             run.violations,
             run.report.display(),
             run.trace.display()
@@ -571,8 +523,8 @@ async fn walk_trace_three_runs() {
     ));
     summary.push_str(
         "notes: chunk-batch timings are possibly distorted by generation; \
-         pace 4.6715 depends on the bot; gamemode verdicts come from the \
-         server log probes.\n",
+         pace 4.6715 depends on the bot; the mode comes from the trace's \
+         login game_mode and player_abilities flags (ЧАСТЬ I, п. 4).\n",
     );
     if let Err(error) = std::fs::write(&summary_path, summary) {
         eprintln!("cannot write {}: {error}", summary_path.display());
@@ -586,8 +538,11 @@ async fn walk_trace_three_runs() {
         !region_dirty,
         "STOP: region/*.mca changed — see walk-summary.md"
     );
+    let mode_violated = performed
+        .iter()
+        .any(|run| run.violations.iter().any(|v| v.starts_with(MODE_VIOLATION)));
     assert!(
-        performed.iter().all(|run| run.gm != GmStatus::NotSpectator),
-        "STOP: server is not in spectator — see walk-summary.md"
+        !mode_violated,
+        "STOP: the trace does not prove spectator — see walk-summary.md"
     );
 }
