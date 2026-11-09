@@ -1,11 +1,10 @@
 # HANDOFF (state for the next session)
 
 ## Done
-- ЧАСТЬ I п.1-5: п.5 = world criterion `chunk_status.py compare`, stop only
-  for new chunks outside x -7..19 / z -15..11 (this commit). Checks green.
+- ЧАСТЬ I п.1-5 done (b4d151c, 3ec8b97); `ms()` clock bug fixed (b74ac44:
+  it returned seconds, a 10.8 s run read as t_ms=10.803); checks green.
 
 ## Next
-- Runs П1-П3: `cargo test -p parity --test walk_trace -- --ignored --nocapture`
-  (copy latest.log lines before each run, reports go to traces, П2/П3 auto).
-- Then ЧАСТЬ III (173/441 + timings A/B/В) and one final report. Context:
-  docs/ROUND2-CONTEXT.md.
+- Re-run П1-П3 on fresh v2 copies with the fixed clock; copy the log lines
+  per run into traces/ (rules in ROUND2-CONTEXT.md, п.3).
+- Then ЧАСТЬ III entry timings (A/B/В) and the single final report.
