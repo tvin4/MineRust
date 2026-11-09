@@ -11,5 +11,6 @@
   nearest of movement/tick/loaded deadlines.
 
 ## Next
-- П.3 server future stops vanilla only after quit; П.4 mode from trace;
-  П.5 chunk_status.py zone; then runs П1-П3, ЧАСТЬ III, final report.
+- П.3 (stop waits quit flag, code order + report line) done — commit next.
+- П.4 drop execute probes, mode from trace (login game_mode + abilities
+  flags byte), П.5 chunk_status zone, then runs П1-П3, ЧАСТЬ III, report.

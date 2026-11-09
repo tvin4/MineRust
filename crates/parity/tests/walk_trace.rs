@@ -4,10 +4,13 @@
 //! `docs/ARCH-M4.md`, §6 «M4.0 (а)»): tuned nothing, stopped at the first
 //! violation and reported what exists.
 //!
-//! Every run stops with `save-all flush` + `stop`, then hashes the world
-//! copy and diffs it against the template snapshot taken as the baseline
-//! (the copy starts byte-identical; while the server runs it holds the
-//! copy's files open on Windows, so no before-hash of the copy exists).
+//! Every run stops with `save-all flush` + `stop`, and that stop is
+//! issued strictly after the bot quit on its own (ЧАСТЬ I, п. 3): the
+//! walk future flips a `quit` flag when `run_walk` returns, and only the
+//! flag releases the console `stop`. Then the world copy is hashed and
+//! diffed against the template snapshot taken as the baseline (the copy
+//! starts byte-identical; while the server runs it holds the copy's
+//! files open on Windows, so no before-hash of the copy exists).
 //! Any changed `region/*.mca` aborts the sequence, `level.dat`/
 //! `playerdata`/`session.lock` are expected noise, `entities/` and `poi/`
 //! are listed separately. The
@@ -283,6 +286,13 @@ async fn one_run(
                     }
                 }
             }
+            // ЧАСТЬ I, п. 3: the console `stop` is issued only after the
+            // bot finished on its own: the walk future sets `quit` when
+            // `run_walk` returns, and nothing else releases this wait —
+            // so a running bot can never be killed by the stop.
+            while !quit.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
             server.stop_with_flush().await
         };
         tokio::join!(walk, probes)
@@ -434,6 +444,12 @@ fn write_report(outcome: &RunOutcome, evidence: &[String]) {
         text.push_str(line);
         text.push('\n');
     }
+    text.push_str("\n## Server stop order (ЧАСТЬ I, п. 3)\n");
+    text.push_str(
+        "vanilla got `save-all flush` + `stop` strictly after the bot's quit flag \
+         (set when run_walk returned); the elapsed line above is the bot's own \
+         lifetime the stop waited out\n",
+    );
     text.push_str("\n## Stop conditions found\n");
     if outcome.violations.is_empty() {
         text.push_str("none\n");
