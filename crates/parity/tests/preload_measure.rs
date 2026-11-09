@@ -79,11 +79,53 @@ async fn entry_speed_measurements() {
     let mut scenes = Vec::new();
     scenes.push(vanilla_cold(&env, Arc::clone(&ids), vanilla_port).await);
     scenes.push(vanilla_warm(&env, Arc::clone(&ids), vanilla_port).await);
-    scenes.push(ours_cold(&env, Arc::clone(&ids)).await);
-    scenes.push(ours_warm(&env, Arc::clone(&ids)).await);
+    scenes.push(ours_cold(&env, Arc::clone(&ids), "preload-ours").await);
+    scenes.push(ours_warm(&env, Arc::clone(&ids), "preload-ours").await);
 
     let header = conditions(&env, vanilla_port);
     let path = Path::new(TRACE_DIR).join(REPORT_NAME);
+    match std::fs::write(&path, render(&header, &scenes)) {
+        Ok(()) => eprintln!("report: {}", path.display()),
+        Err(error) => eprintln!("cannot write {}: {error}", path.display()),
+    }
+}
+
+/// ЧАСТЬ II, п. 2: only our own series are re-measured, now that the
+/// scripted known-packs wait is conditional. The vanilla series are
+/// deliberately NOT re-run: they are the previous measurement the fix is
+/// compared against, and the code path they take did not change at all.
+#[tokio::test]
+#[ignore = "requires the owner's installation (C:\\MineRust-data)"]
+async fn our_series_after_probe_wait_fix() {
+    let env = match load_parity_env() {
+        Ok(env) => env,
+        Err(error) => {
+            eprintln!("SKIP: parity environment is not configured: {error}");
+            return;
+        }
+    };
+    if let Err(error) = std::fs::create_dir_all(TRACE_DIR) {
+        eprintln!("SKIP: cannot create {TRACE_DIR}: {error}");
+        return;
+    }
+    let ids = Arc::new(env.packet_ids().expect("packet ids"));
+    let vanilla_port = env
+        .vanilla_port()
+        .expect("server-port in the vanilla server.properties");
+
+    let scenes = vec![
+        ours_cold(&env, Arc::clone(&ids), "preload2-ours").await,
+        ours_warm(&env, Arc::clone(&ids), "preload2-ours").await,
+    ];
+
+    let header = format!(
+        "{}\n\
+         - ЧАСТЬ II, п. 2: the scripted known-packs wait is conditional now (the full budget \n\
+         only for the vanilla port, 100 ms otherwise), so these two series carry no bot-side \n\
+         3 s wait; the vanilla series are NOT re-run and stay as measured before the fix.\n",
+        conditions(&env, vanilla_port)
+    );
+    let path = Path::new(TRACE_DIR).join("preload-report-ours-2.md");
     match std::fs::write(&path, render(&header, &scenes)) {
         Ok(()) => eprintln!("report: {}", path.display()),
         Err(error) => eprintln!("cannot write {}: {error}", path.display()),
@@ -180,10 +222,10 @@ async fn vanilla_warm(env: &ParityEnv, ids: Arc<PacketIds>, port: u16) -> Scene 
 
 /// В) our server, cold: one release process per run, first join of that
 /// process (the server reads the template, it never writes a save).
-async fn ours_cold(env: &ParityEnv, ids: Arc<PacketIds>) -> Scene {
+async fn ours_cold(env: &ParityEnv, ids: Arc<PacketIds>, prefix: &str) -> Scene {
     let mut scene = Scene::new("В) our server cold — fresh release process, first join");
     for index in 1..=REPEATS {
-        let name = format!("preload-ours-cold-{index}");
+        let name = format!("{prefix}-cold-{index}");
         scene.runs.push(then_measure(&name, env, ids.clone()).await);
     }
     scene
@@ -191,27 +233,28 @@ async fn ours_cold(env: &ParityEnv, ids: Arc<PacketIds>) -> Scene {
 
 /// В) our server, warm: one release process, an unmeasured join first,
 /// then the three measured ones on the live process.
-async fn ours_warm(env: &ParityEnv, ids: Arc<PacketIds>) -> Scene {
+async fn ours_warm(env: &ParityEnv, ids: Arc<PacketIds>, prefix: &str) -> Scene {
+    let first = format!("{prefix}-warm-1");
     let mut scene = Scene::new("В) our server warm — one live release process, joins 2..4");
     let server = match start_ours().await {
         Ok(server) => server,
         Err(error) => {
-            scene.runs.push(failed("preload-ours-warm-1", error));
+            scene.runs.push(failed(&first, error));
             return scene;
         }
     };
     if !wait_for_port(OUR_PORT, OUR_START_TIMEOUT).await {
-        scene.runs.push(failed(
-            "preload-ours-warm-1",
-            "our release server did not listen in time",
-        ));
+        scene
+            .runs
+            .push(failed(&first, "our release server did not listen in time"));
         stop_ours(server).await;
         return scene;
     }
     eprintln!("our warm-up join (not measured)…");
-    measurement(env, Arc::clone(&ids), OUR_PORT, "preload-ours-warm-0").await;
+    let warmup = format!("{prefix}-warm-0");
+    measurement(env, Arc::clone(&ids), OUR_PORT, &warmup).await;
     for index in 1..=REPEATS {
-        let name = format!("preload-ours-warm-{index}");
+        let name = format!("{prefix}-warm-{index}");
         scene
             .runs
             .push(measurement(env, Arc::clone(&ids), OUR_PORT, &name).await);
