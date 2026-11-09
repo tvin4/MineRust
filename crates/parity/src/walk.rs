@@ -515,7 +515,7 @@ async fn play(
         }
     }
     stats.stop = stop.unwrap_or(Stop::Completed);
-    stats.elapsed_ms = (started.elapsed().as_secs_f64() * 1000.0).round() / 1000.0;
+    stats.elapsed_ms = ms(started.elapsed());
     stats.spawn = spawn;
     if stats.moves > 0 {
         stats.last = pos;
@@ -684,9 +684,14 @@ fn new_stats() -> RunStats {
 }
 
 /// Monotonic milliseconds of a socket stamp, rounded to microseconds
-/// (the wire clock of the JSONL trace and of the report tables).
+/// (the wire clock of the JSONL trace, of the report tables and of
+/// [`RunStats::elapsed_ms`]).
+///
+/// The rounding happens in microseconds and only then converts to
+/// milliseconds: rounding milliseconds and dividing by 1000 again would
+/// return seconds (a 10.8 s run read as `t_ms = 10.803`).
 fn ms(stamp: Duration) -> f64 {
-    (stamp.as_secs_f64() * 1000.0).round() / 1000.0
+    (stamp.as_secs_f64() * 1_000_000.0).round() / 1000.0
 }
 
 /// Counter key of one recorded packet: direction plus name (or raw id).
@@ -810,4 +815,28 @@ fn teleport_ack(payload: &[u8]) -> Option<([f64; 3], Vec<u8>)> {
     let mut ack = payload[..end].to_vec();
     ack.extend_from_slice(&[0; 8]);
     Some((spawn, ack))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ms_is_milliseconds_with_microsecond_precision() {
+        assert_eq!(ms(Duration::ZERO), 0.0);
+        assert_eq!(ms(Duration::from_millis(50)), 50.0);
+        assert_eq!(ms(Duration::from_micros(1_500)), 1.5);
+        // The bug this guards: a 10.803 s stamp used to read as 10.803 ms.
+        assert_eq!(
+            ms(Duration::from_secs(10) + Duration::from_millis(803)),
+            10_803.0
+        );
+    }
+
+    #[test]
+    fn the_run_lifetime_is_milliseconds_too() {
+        // `elapsed_ms` goes through the same helper: the 10 s P1 hold must
+        // read as ~10 000 ms, never as ~10.
+        assert_eq!(ms(Duration::from_secs_f64(10.8)), 10_800.0);
+    }
 }
