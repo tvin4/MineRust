@@ -1,12 +1,10 @@
 # HANDOFF (state for the next session)
 
-## Done
-- ЧАСТЬ I п.1-5 done, `ms()` clock fixed (b74ac44); P1-P3 re-run on the fixed
-  clock (report in `docs/ROUND2-CONTEXT.md`, traces in `C:\MineRust-data\traces`).
-- ЧАСТЬ III: preload mode + trace metrics (d53bf03), orchestrator
-  (6b91786): `tests/preload_measure.rs` → vanilla cold/warm, ours cold/warm.
+## Done — M4.0 (а) round 2 (070783e, b4d151c, 3ec8b97, b74ac44, d53bf03, 6b91786)
+- Tool fixes, P1-P3 with the fixed clock, ЧАСТЬ III measured (4 series x 3).
+- Report: `C:\MineRust-data\traces\preload-report.md` (+14 JSONL traces);
+  one final report issued to the owner, no faster/slower verdict (differences).
 
 ## Next
-- Run `cargo test -p parity --test preload_measure -- --ignored --nocapture`
-  (12 joins, produces `C:\MineRust-data\traces\preload-report.md`), then the
-  single final report. Structure: `docs/ROUND2-CONTEXT.md` п.5.
+- Owner reviews; server code untouched (M4 plan still not accepted).
+- Pitfall: bot `PROBE_WAIT` adds ~3000 ms of self-wait to our series.
