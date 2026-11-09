@@ -193,8 +193,7 @@ fn game_loop(
             break;
         }
         let now = Instant::now();
-        if now.saturating_duration_since(deadline) > config.period * config.reset_after {
-            let behind = now.saturating_duration_since(deadline);
+        if let Some(behind) = overdue_by(now, deadline, &config) {
             warn!(
                 behind_ms = behind.as_secs_f64() * 1000.0,
                 "tick fell behind, resetting the deadline"
@@ -266,4 +265,16 @@ fn sleep_until(deadline: Instant) {
     if deadline > now {
         std::thread::sleep(deadline - now);
     }
+}
+
+/// How far a tick must fall behind before it gives up on catching up.
+///
+/// The loop never replays missed slots: when the deadline lags by more than
+/// `reset_after` periods it resets once to "now + period" instead of firing
+/// a burst of catch-up ticks (ARCH-M4 §3). Returns the lag when a reset is
+/// due, `None` while the deadline is still within reach.
+#[must_use]
+fn overdue_by(now: Instant, deadline: Instant, config: &GameConfig) -> Option<Duration> {
+    let behind = now.saturating_duration_since(deadline);
+    (behind > config.period * config.reset_after).then_some(behind)
 }

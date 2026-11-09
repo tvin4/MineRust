@@ -1,16 +1,21 @@
 //! Tests of the game thread's timing and bookkeeping.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use protocol::Position;
 use tokio::sync::mpsc;
 
 use super::*;
 
-/// A join registration plus the connection's side of its outbound queue.
-fn join_fixture(id: PlayerId) -> (PlayerJoin, mpsc::Receiver<ServerMessage>) {
-    let (outbound, receiver) = mpsc::channel(OUTBOUND_CAPACITY);
+/// A join registration with a queue of the given capacity, the connection's
+/// side of that queue, and the player's kick flag.
+fn join_fixture_with(
+    id: PlayerId,
+    capacity: usize,
+) -> (PlayerJoin, mpsc::Receiver<ServerMessage>, Arc<KickFlag>) {
+    let (outbound, receiver) = mpsc::channel(capacity.max(1));
+    let kick = Arc::new(KickFlag::default());
     let join = PlayerJoin {
         id,
         name: format!("player-{id}"),
@@ -18,11 +23,25 @@ fn join_fixture(id: PlayerId) -> (PlayerJoin, mpsc::Receiver<ServerMessage>) {
         spawn: Position::default(),
         connection: PlayerConnection {
             outbound,
-            kick: Arc::new(KickFlag::default()),
+            kick: Arc::clone(&kick),
             last_move: Arc::new(MoveSlot::default()),
         },
     };
+    (join, receiver, kick)
+}
+
+/// A join registration plus the connection's side of its outbound queue.
+fn join_fixture(id: PlayerId) -> (PlayerJoin, mpsc::Receiver<ServerMessage>) {
+    let (join, receiver, _kick) = join_fixture_with(id, OUTBOUND_CAPACITY);
     (join, receiver)
+}
+
+/// One small outbound message, so queue slots can be counted.
+fn payload(marker: u8) -> ServerMessage {
+    ServerMessage::Send {
+        id: 0x50,
+        payload: vec![marker],
+    }
 }
 
 #[test]
@@ -57,6 +76,66 @@ fn the_move_slot_keeps_only_the_newest_packet() {
     let newest = slot.take().expect("the newest packet");
     assert_eq!(newest.packet_id, 0x1F, "the older packet is overwritten");
     assert!(slot.take().is_none(), "taking drains the slot");
+}
+
+#[test]
+fn a_full_outbound_queue_kicks_the_player_and_frees_the_region() {
+    let mut region = Region::new(SINGLE_REGION);
+    let (join, _receiver, kick) = join_fixture_with(7, 1);
+    assert!(region.insert(join).is_none(), "a fresh id");
+
+    // Capacity one: the first message fills the queue, the player stays.
+    assert!(region.deliver(7, payload(1)).is_none());
+    assert!(region.contains(7), "one queued message is not too many");
+    assert_eq!(kick.reason(), None, "nothing raised yet");
+
+    // The second message cannot be queued: the player is kicked and gone.
+    let kicked = region.deliver(7, payload(2)).expect("a kick");
+    assert_eq!(kicked.id, 7);
+    assert_eq!(kicked.reason, KickReason::SendQueueOverflow);
+    assert!(!region.contains(7), "the kicked player is removed");
+    assert_eq!(kick.reason(), Some(KickReason::SendQueueOverflow));
+}
+
+#[test]
+fn a_closed_queue_is_not_a_kick() {
+    let mut region = Region::new(SINGLE_REGION);
+    let (join, receiver, kick) = join_fixture_with(9, 1);
+    assert!(region.insert(join).is_none());
+
+    // The connection is gone: its queue is closed, not overflowing.
+    drop(receiver);
+    assert!(region.deliver(9, payload(1)).is_none());
+    assert!(region.contains(9), "a gone connection is not a kick");
+    assert_eq!(kick.reason(), None);
+
+    // An unknown player is silently ignored.
+    assert!(region.deliver(404, payload(1)).is_none());
+}
+
+#[test]
+fn a_tick_that_falls_behind_resets_its_deadline() {
+    let config = GameConfig {
+        period: Duration::from_millis(50),
+        reset_after: 5,
+        ..GameConfig::default()
+    };
+    let deadline = Instant::now();
+
+    // Exactly `reset_after` periods of lag is still catch-up, not a reset.
+    let at_threshold = deadline + config.period * config.reset_after;
+    assert!(overdue_by(at_threshold, deadline, &config).is_none());
+
+    // One millisecond past the threshold the deadline must be reset.
+    let over = overdue_by(at_threshold + Duration::from_millis(1), deadline, &config)
+        .expect("a reset is due");
+    assert_eq!(
+        over,
+        config.period * config.reset_after + Duration::from_millis(1)
+    );
+
+    // A deadline still in the future has no lag at all.
+    assert!(overdue_by(deadline, deadline + Duration::from_millis(10), &config).is_none());
 }
 
 #[test]
