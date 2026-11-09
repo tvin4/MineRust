@@ -152,6 +152,11 @@ impl GameHandle {
     pub async fn send(&self, message: ToGame) -> Result<(), GameClosed> {
         self.to_game.send(message).await.map_err(|_| GameClosed)
     }
+
+    /// Best-effort quit that never waits, for the moment a connection drops.
+    pub fn quit_now(&self, id: PlayerId) {
+        let _ = self.to_game.try_send(ToGame::Quit { id });
+    }
 }
 
 /// The tick loop: wait for the absolute deadline, apply incoming messages,

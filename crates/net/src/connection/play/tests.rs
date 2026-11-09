@@ -13,6 +13,14 @@ use tokio::io::{AsyncWriteExt, BufReader};
 use super::*;
 use crate::frame::read_frame;
 
+/// A game thread for a test. The thread is detached and ends when its
+/// handle is dropped at the end of the test.
+fn test_game() -> GameHandle {
+    GameHandle::spawn(crate::game::GameConfig::default())
+        .expect("spawn the game thread")
+        .1
+}
+
 /// World source whose read parks at a barrier: the pool worker sits in
 /// the "disk read" until the test releases it.
 struct GatedSource {
@@ -181,14 +189,17 @@ async fn reading_the_world_never_defers_the_keep_alive() {
         play_state(
             server_read,
             server_write,
-            &game_data,
-            &status,
-            &client,
-            &ids_in_task,
-            World {
-                loader: Some(loader),
-                info: WorldInfo::default(),
+            Session {
+                game_data: &game_data,
+                status: &status,
+                client: &client,
+                ids: &ids_in_task,
+                world: World {
+                    loader: Some(loader),
+                    info: WorldInfo::default(),
+                },
             },
+            test_game(),
         )
         .await
     });
@@ -456,14 +467,17 @@ async fn the_pace_answer_keeps_the_connection_open() {
         play_state(
             server_read,
             server_write,
-            &game_data,
-            &status,
-            &client,
-            &ids_in_task,
-            World {
-                loader: None,
-                info: WorldInfo::default(),
+            Session {
+                game_data: &game_data,
+                status: &status,
+                client: &client,
+                ids: &ids_in_task,
+                world: World {
+                    loader: None,
+                    info: WorldInfo::default(),
+                },
             },
+            test_game(),
         )
         .await
     });
@@ -550,14 +564,17 @@ async fn the_first_flush_is_nine_then_the_vanilla_paced_tail() {
         play_state(
             server_read,
             server_write,
-            &game_data,
-            &status,
-            &client,
-            &ids_in_task,
-            World {
-                loader: Some(loader),
-                info: WorldInfo::default(),
+            Session {
+                game_data: &game_data,
+                status: &status,
+                client: &client,
+                ids: &ids_in_task,
+                world: World {
+                    loader: Some(loader),
+                    info: WorldInfo::default(),
+                },
             },
+            test_game(),
         )
         .await
     });

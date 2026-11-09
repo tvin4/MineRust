@@ -22,6 +22,7 @@ use tracing::{debug, warn};
 
 use crate::error::ConnectionError;
 use crate::frame::{read_tracked, write_tracked};
+use crate::game::{self, GameHandle};
 use crate::loader::Loader;
 
 pub use play::WorldInfo;
@@ -62,14 +63,21 @@ pub async fn serve(
     loader: Option<Loader>,
     world: WorldInfo,
 ) -> std::io::Result<()> {
+    // One game thread owns the players of this server (ARCH-M4 §0). It is
+    // detached: every connection holds a clone of the handle and the thread
+    // ends when the last one is gone.
+    let (_game_thread, game) = game::GameHandle::spawn(game::GameConfig::default())?;
     loop {
         let (stream, peer) = listener.accept().await?;
         let status = Arc::clone(&status);
         let game_data = Arc::clone(&game_data);
         let packet_ids = Arc::clone(&packet_ids);
         let loader = loader.clone();
+        let game = game.clone();
         tokio::spawn(async move {
-            match handle_connection(stream, status, game_data, packet_ids, loader, world).await {
+            match handle_connection(stream, status, game_data, packet_ids, loader, world, game)
+                .await
+            {
                 Ok(()) => debug!(%peer, "connection closed"),
                 Err(ConnectionError::TimedOut) => debug!(%peer, "connection timed out"),
                 Err(err) if err.is_client_disconnect() => {
@@ -103,6 +111,7 @@ async fn handle_connection(
     packet_ids: Arc<PacketIds>,
     loader: Option<Loader>,
     world: WorldInfo,
+    game: GameHandle,
 ) -> Result<(), ConnectionError> {
     let ids = packet_ids.as_ref();
     let (read_half, write_half) = stream.into_split();
@@ -141,14 +150,17 @@ async fn handle_connection(
             play::play_state(
                 reader,
                 writer,
-                &game_data,
-                &status,
-                &client,
-                ids,
-                play::World {
-                    loader,
-                    info: world,
+                play::Session {
+                    game_data: &game_data,
+                    status: &status,
+                    client: &client,
+                    ids,
+                    world: play::World {
+                        loader,
+                        info: world,
+                    },
                 },
+                game,
             )
             .await
         }

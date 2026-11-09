@@ -28,20 +28,21 @@ use tracing::{info, warn};
 use crate::error::ConnectionError;
 use crate::frame::write_tracked;
 
-use super::{
-    WorldInfo, DIMENSION_TYPE_REGISTRY, ENTITY_ID, JOIN_TELEPORT_ID, OVERWORLD, SEA_LEVEL,
-};
+use super::{WorldInfo, DIMENSION_TYPE_REGISTRY, JOIN_TELEPORT_ID, OVERWORLD, SEA_LEVEL};
 
 /// Sends the whole join sequence described in the module documentation.
 ///
 /// Every packet is recorded by [`crate::trace`] as it goes out, so a live
 /// session shows this exact order with names, ids, sizes and timing.
+/// `entity_id` comes from the game thread's counter, so the first player
+/// of a server keeps the id the join always announced.
 // SOURCE: wiki, unverified (the join order and field values).
 pub(super) async fn send_join<W>(
     writer: &mut W,
     game_data: &GameData,
     status: &StatusInfo,
     player_name: &str,
+    entity_id: i32,
     ids: &PacketIds,
     info: &WorldInfo,
 ) -> Result<(), ConnectionError>
@@ -73,7 +74,7 @@ where
     let dimension_names = vec![OVERWORLD.to_owned()];
 
     let login = LoginPlay {
-        entity_id: ENTITY_ID,
+        entity_id,
         hardcore: false,
         dimension_names,
         max_players: status.max_players,
@@ -196,6 +197,6 @@ where
         &teleport.encode_payload(),
     )
     .await?;
-    info!(player = %player_name, entity_id = ENTITY_ID, "player joined");
+    info!(player = %player_name, %entity_id, "player joined");
     Ok(())
 }

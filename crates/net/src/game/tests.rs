@@ -1,8 +1,63 @@
 //! Tests of the game thread's timing and bookkeeping.
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use protocol::Position;
+use tokio::sync::mpsc;
+
 use super::*;
+
+/// A join registration plus the connection's side of its outbound queue.
+fn join_fixture(id: PlayerId) -> (PlayerJoin, mpsc::Receiver<ServerMessage>) {
+    let (outbound, receiver) = mpsc::channel(OUTBOUND_CAPACITY);
+    let join = PlayerJoin {
+        id,
+        name: format!("player-{id}"),
+        view_distance: 10,
+        spawn: Position::default(),
+        connection: PlayerConnection {
+            outbound,
+            kick: Arc::new(KickFlag::default()),
+            last_move: Arc::new(MoveSlot::default()),
+        },
+    };
+    (join, receiver)
+}
+
+#[test]
+fn a_region_keeps_confirms_and_removes_a_player() {
+    let mut region = Region::new(SINGLE_REGION);
+    let (join, _receiver) = join_fixture(1);
+    assert!(region.insert(join).is_none(), "a fresh id");
+    assert!(region.contains(1));
+    assert_eq!(region.player_count(), 1);
+
+    let player = region.get_mut(1).expect("the player is there");
+    assert!(!player.teleport_confirmed(), "movement is untrusted first");
+    player.confirm_teleport();
+    assert!(region.get(1).expect("still there").teleport_confirmed());
+
+    assert!(region.remove(1).is_some());
+    assert!(region.is_empty(), "removing the only player empties it");
+}
+
+#[test]
+fn the_move_slot_keeps_only_the_newest_packet() {
+    let slot = MoveSlot::default();
+    assert!(slot.take().is_none(), "an untouched slot is empty");
+    slot.store(MoveState {
+        packet_id: 0x1E,
+        payload: vec![1, 2, 3],
+    });
+    slot.store(MoveState {
+        packet_id: 0x1F,
+        payload: vec![4, 5, 6],
+    });
+    let newest = slot.take().expect("the newest packet");
+    assert_eq!(newest.packet_id, 0x1F, "the older packet is overwritten");
+    assert!(slot.take().is_none(), "taking drains the slot");
+}
 
 #[test]
 fn the_loop_runs_the_configured_number_of_ticks() {

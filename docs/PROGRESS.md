@@ -912,6 +912,15 @@ warnings`, `cargo test --workspace` — зелёные.
   jitter p50 0.38 / p99 1.03 / max 1.11 мс, длительность p50 0.001 / p99
   0.002 / max 0.043 мс. Критерии (дрейф < 5, p99 < 20) выполнены. Тест 1000
   тиков помечен `#[ignore]` (D6: в CI только smoke).
+- **ЧАСТЬ 2в:** `net::serve` поднимает один игровой поток (detached, живёт,
+  пока живы `GameHandle`). `play_state` получает `GameHandle`, берёт
+  `entity_id` из счётчика (первый = 1 → пакеты входа не изменились), создаёт
+  канал наружу + `KickFlag` + `MoveSlot` и шлёт `Join`; `ConfirmTeleportation`
+  отправляет `TeleportAck`; пакеты движения кладут сырой payload в слот
+  «последняя позиция» (без разбора — это M4.2); `PlayerGuard` шлёт `Quit` при
+  любом выходе; `select!` получил ветку чтения `ServerMessage`. Аргументы
+  `play_state` сгруппированы в `Session` (clippy 7 арг.). Вход (join) не
+  менялся — тесты `entity_id == 1` и join-байты зелёные.
 
 ## Что дальше
 

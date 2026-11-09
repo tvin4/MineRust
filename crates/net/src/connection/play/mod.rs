@@ -29,6 +29,10 @@ use tracing::{debug, info, trace, warn};
 
 use crate::error::ConnectionError;
 use crate::frame::{read_tracked, write_tracked};
+use crate::game::{
+    GameHandle, KickFlag, MoveSlot, MoveState, PlayerConnection, PlayerId, PlayerJoin,
+    ServerMessage, ToGame, OUTBOUND_CAPACITY,
+};
 use crate::loader::{LoadError, Loader};
 
 use super::Client;
@@ -40,9 +44,6 @@ const OVERWORLD: &str = "minecraft:overworld";
 
 /// Registry that defines numeric dimension type ids in Login (play).
 const DIMENSION_TYPE_REGISTRY: &str = "minecraft:dimension_type";
-
-/// Entity id assigned to the single player of a connection.
-const ENTITY_ID: i32 = 1;
 
 /// Sea level sent in Login (play).
 // SOURCE: wiki, unverified: vanilla value, not read from the game data.
@@ -111,6 +112,21 @@ pub(super) struct World {
     pub(super) info: WorldInfo,
 }
 
+/// The immutable inputs of one play session, grouped so [`play_state`]
+/// stays under clippy's argument limit.
+pub(super) struct Session<'a> {
+    /// Registries and tags the join packets read.
+    pub(super) game_data: &'a GameData,
+    /// Status document (max players of Login (play)).
+    pub(super) status: &'a StatusInfo,
+    /// What login and configuration learned about the client.
+    pub(super) client: &'a Client,
+    /// Numeric packet ids.
+    pub(super) ids: &'a PacketIds,
+    /// The world this connection joins.
+    pub(super) world: World,
+}
+
 /// Teleport id of the initial join teleport; the client must confirm it
 /// before movement packets are taken seriously.
 // SOURCE: wiki, unverified: the id numbering and the confirmation rule are
@@ -124,9 +140,14 @@ const JOIN_TELEPORT_ID: i32 = 1;
 /// Info Update, Set Center Chunk, Game Event (start waiting for chunks)
 /// and the initial Synchronize Player Position. Afterwards the client's
 /// packets are read on a background task so the periodic keep-alive can be
-/// sent even while no packet arrives; serverbound packets that carry no
-/// gameplay in M2 (keep-alive echo, teleport confirmation, settings,
-/// plugin messages, movement) are logged and ignored.
+/// sent even while no packet arrives; keep-alive echo and teleport
+/// confirmation are handled, the newest movement packet goes into the
+/// game thread's slot, and everything else is logged and ignored.
+///
+/// The player's game state (who is online, whether the entry teleport was
+/// confirmed, the newest movement) lives on the game thread: this task only
+/// sends the reliable `Join`/`TeleportAck`/`Quit` upward and writes back
+/// whatever the tick asks for (M4.1: nothing yet).
 ///
 /// Unlike the states before it, play runs without a global timeout.
 ///
@@ -139,25 +160,33 @@ const JOIN_TELEPORT_ID: i32 = 1;
 pub(super) async fn play_state<R, W>(
     reader: R,
     mut writer: W,
-    game_data: &GameData,
-    status: &StatusInfo,
-    client: &Client,
-    ids: &PacketIds,
-    world: World,
+    session: Session<'_>,
+    game: GameHandle,
 ) -> Result<(), ConnectionError>
 where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
 {
+    let Session {
+        game_data,
+        status,
+        client,
+        ids,
+        world,
+    } = session;
     let player_name = client.player_name.as_str();
     // Chunks go out inside this radius only: what the client asked for in
     // configuration, never more than Login (play) announced (part A, 6).
     let radius = send_radius(client.view_distance, world.info.view_distance);
+    // The entity id of Login (play) comes from the game thread's counter:
+    // the first player of a server keeps the id the join always announced.
+    let player_id = game.next_player_id();
     info!(
         client_view_distance = ?client.view_distance,
         server_view_distance = world.info.view_distance,
         radius,
         player = %player_name,
+        %player_id,
         "chunk send radius chosen"
     );
     // Packet 1..6 of the join (module documentation) — recorded packet by
@@ -167,10 +196,37 @@ where
         game_data,
         status,
         player_name,
+        player_id,
         ids,
         &world.info,
     )
     .await?;
+    // The connection's outbound queue, the kick flag and the movement slot
+    // are all created here and half of each goes to the game thread.
+    let (outbound, mut outbound_rx) =
+        tokio::sync::mpsc::channel::<ServerMessage>(OUTBOUND_CAPACITY);
+    let kick = Arc::new(KickFlag::default());
+    let last_move = Arc::new(MoveSlot::default());
+    let join = PlayerJoin {
+        id: player_id,
+        name: player_name.to_owned(),
+        view_distance: radius,
+        spawn: world.info.spawn,
+        connection: PlayerConnection {
+            outbound,
+            kick: Arc::clone(&kick),
+            last_move: Arc::clone(&last_move),
+        },
+    };
+    if let Err(err) = game.send(ToGame::Join(Box::new(join))).await {
+        warn!(%err, player = %player_name, "the game thread is gone, the player is not registered");
+    }
+    // Unregisters the player on every exit of this task (error, disconnect
+    // or panic) without needing an unwind-safe async path.
+    let _guard = PlayerGuard {
+        game: game.clone(),
+        id: player_id,
+    };
 
     // Queue the world read right away: from here on the pool owns disk I/O
     // and payload building, this task only selects on the reply channel.
@@ -283,6 +339,20 @@ where
                     pending = None;
                 }
             }
+            // The game thread asked this connection to send a packet.
+            // M4.1's tick sends none; the arm keeps the path ready and
+            // notices the end of the queue (a quit or a kick).
+            message = outbound_rx.recv() => {
+                match message {
+                    Some(ServerMessage::Send { id, payload }) => {
+                        write_tracked(&mut writer, ProtocolState::Play, id, &payload).await?;
+                    }
+                    // The game thread dropped this player (quit); the
+                    // connection closes. The kick reason is read in M4.1's
+                    // kick policy (see the game module).
+                    None => return Ok(()),
+                }
+            }
             frame = frame_rx.recv() => {
                 let body = match frame {
                     Some(Ok(body)) => body,
@@ -303,6 +373,16 @@ where
                             z = confirm.z,
                             "teleport confirmed"
                         );
+                        // The game thread only trusts movement after this.
+                        if let Err(err) = game
+                            .send(ToGame::TeleportAck {
+                                id: player_id,
+                                teleport_id: confirm.teleport_id,
+                            })
+                            .await
+                        {
+                            warn!(%err, "the game thread is gone, teleport ack dropped");
+                        }
                     }
                     id if id == ids.id(KeepAlive::SERVERBOUND_KEY) => {
                         let keep_alive = KeepAlive::decode_payload(&mut payload)?;
@@ -346,15 +426,22 @@ where
                         let channel = payload.read_string(MAX_STRING_CHARS)?;
                         debug!(%channel, "plugin message received, ignored");
                     }
-                    // Movement carries gameplay the empty world does not
-                    // simulate yet.
+                    // Movement: the newest packet goes into the player's
+                    // slot in the game thread; M4.1 stores it and applies
+                    // nothing (positions are M4.2).
                     id
                         if id == ids.id(MOVE_PLAYER_POS)
                             || id == ids.id(MOVE_PLAYER_POS_ROT)
                             || id == ids.id(MOVE_PLAYER_ROT)
                             || id == ids.id(MOVE_PLAYER_STATUS_ONLY) =>
                     {
-                        trace!(id, "movement received, ignored");
+                        let length = payload.remaining();
+                        let bytes = payload.read_bytes(length)?.to_vec();
+                        last_move.store(MoveState {
+                            packet_id: id,
+                            payload: bytes,
+                        });
+                        trace!(id, length, "movement stored in the last-move slot");
                     }
                     // M2 has no gameplay: unknown or not-yet-handled
                     // serverbound packets must not drop the connection.
@@ -367,12 +454,28 @@ where
     }
 }
 
+/// Unregisters the player from the game thread when the play task ends.
+///
+/// Dropping the guard covers every exit (return, error or panic) without
+/// an unwind-safe async path. The send is best-effort (`try_send`): a full
+/// game queue drops the quit, which only leaves a stale player until the
+/// connection's outbound queue is observed closed.
+struct PlayerGuard {
+    game: GameHandle,
+    id: PlayerId,
+}
+
+impl Drop for PlayerGuard {
+    fn drop(&mut self) {
+        self.game.quit_now(self.id);
+    }
+}
+
 /// The one-shot answer of the loader pool: the shared batch of ready
 /// payloads or the error of its read. Both sides of the pool move the same
 /// `Arc<Vec<...>>` (part A 2 — a connection clones the pointer, never the
 /// payloads), so the branches name one type instead of the full nesting.
 type BatchReply = Result<Arc<Vec<LevelChunkWithLight>>, LoadError>;
-
 /// Waits for the loader's reply on its one-shot channel.
 ///
 /// While nothing is queued the receiver is `None` and this future never
