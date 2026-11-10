@@ -33,7 +33,7 @@ pub use messages::{
 pub use metrics::{TickMetrics, TickMetricsHandle};
 pub use movement::MoveUpdate;
 pub use region::{
-    AppliedMove, Kick, Player, PlayerPos, Region, RegionId, TickOutcome, SINGLE_REGION,
+    AppliedMove, Kick, Player, PlayerPos, Region, RegionId, TickOutcome, Transfer, SINGLE_REGION,
 };
 pub use replay::{Replay, ReplayRecord};
 pub use scheduler::Scheduler;
@@ -240,7 +240,11 @@ fn game_loop(
     metrics: &TickMetricsHandle,
     stop: &AtomicBool,
 ) {
-    let mut scheduler = Scheduler::with_workers(vec![Region::new(SINGLE_REGION)], config.workers);
+    let mut scheduler = Scheduler::with_grid(
+        vec![Region::new(SINGLE_REGION)],
+        RegionGrid::new(config.region_side),
+        config.workers,
+    );
     let mut recorder = Recorder::new(config.period);
     let mut replay = Replay::new(open_replay());
     let started = Instant::now();
@@ -276,8 +280,10 @@ fn game_loop(
         let outcome = scheduler.tick(tick, deadline);
         // Positions the tick applied (M4.2) are recorded after the queued
         // messages, so `seq` continues the per-tick counter that
-        // `apply_queued` opened.
+        // `apply_queued` opened. Boundary crossings (M4.3 B) are applied after
+        // the tick's positions, so they are recorded after them.
         record_moves(&mut replay, tick, &outcome.moves);
+        record_transfers(&mut replay, tick, &outcome.transfers);
         for kick in &outcome.kicks {
             warn!(
                 player = kick.id,
@@ -364,7 +370,11 @@ fn apply_queued<W: std::io::Write>(
     }
 }
 
-/// Applies one incoming message to the single region and records it.
+/// Applies one incoming message to its owner region and records it.
+///
+/// The owner comes from the scheduler's `player_id → region_id` index, so a
+/// `TeleportAck` or `Quit` after a `Transfer` reaches the new region while one
+/// before it reaches the old one (ARCH-M4 §1, M4.3 B1).
 fn apply<W: std::io::Write>(
     scheduler: &mut Scheduler,
     replay: &mut Replay<W>,
@@ -373,21 +383,16 @@ fn apply<W: std::io::Write>(
 ) {
     match message {
         ToGame::Join(join) => {
+            let id = join.id;
             let payload = serde_json::json!({
                 "name": &join.name,
                 "view_distance": join.view_distance,
                 "spawn": { "x": join.spawn.x, "y": join.spawn.y, "z": join.spawn.z },
             });
-            replay.record(tick, Some(SINGLE_REGION), join.id, "join", payload);
-            // M4.3 routes joins by chunk; M4.1 puts everyone in one region.
-            match scheduler.region_mut(SINGLE_REGION) {
-                Some(region) => {
-                    if region.insert(*join).is_some() {
-                        warn!("a join reused an id that was still online");
-                    }
-                }
-                None => warn!("a join arrived for a missing region"),
-            }
+            // The region is the chunk of the spawn; the scheduler creates it
+            // if this is the first player there (region_side > 0).
+            let region_id = scheduler.insert_player(*join);
+            replay.record(tick, Some(region_id), id, "join", payload);
         }
         ToGame::TeleportAck { id, teleport_id } => {
             let region_id = scheduler.region_of(id);
@@ -398,21 +403,15 @@ fn apply<W: std::io::Write>(
                 "teleport_ack",
                 serde_json::json!({ "teleport_id": teleport_id }),
             );
-            match region_id.and_then(|region_id| scheduler.region_mut(region_id)) {
-                Some(region) => match region.get_mut(id) {
-                    Some(player) => player.confirm_teleport(),
-                    None => warn!(player = id, "teleport ack for an unknown player"),
-                },
-                None => warn!(player = id, "teleport ack for an unknown region"),
+            match scheduler.confirm_teleport(id) {
+                Some(_) => info!(player = id, teleport_id, "teleport confirmed"),
+                None => warn!(player = id, "teleport ack for an unknown player"),
             }
-            info!(player = id, teleport_id, "teleport confirmed");
         }
         ToGame::Quit { id } => {
             let region_id = scheduler.region_of(id);
             replay.record(tick, region_id, id, "quit", serde_json::json!({}));
-            if let Some(region) = region_id.and_then(|region_id| scheduler.region_mut(region_id)) {
-                region.remove(id);
-            }
+            scheduler.remove_player(id);
         }
     }
 }
@@ -436,6 +435,27 @@ fn record_moves<W: std::io::Write>(replay: &mut Replay<W>, tick: u64, moves: &[A
                 "pitch": applied.position.pitch,
                 "on_ground": applied.position.on_ground(),
                 "flags": applied.position.flags,
+            }),
+        );
+    }
+}
+
+/// Records the boundary crossings one tick applied to the replay journal.
+///
+/// A `transfer` line carries `{player, from, to}`; the tick number is the tick
+/// the scheduler applied it in (ARCH-M4 §1, M4.3 B1). Shared by the live loop
+/// and the replay tests so both write the same line.
+fn record_transfers<W: std::io::Write>(replay: &mut Replay<W>, tick: u64, transfers: &[Transfer]) {
+    for transfer in transfers {
+        replay.record(
+            tick,
+            Some(transfer.from),
+            transfer.player,
+            "transfer",
+            serde_json::json!({
+                "player": transfer.player,
+                "from": transfer.from,
+                "to": transfer.to,
             }),
         );
     }

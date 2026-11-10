@@ -4,7 +4,7 @@
 //! `tick`) is what M4.3 turns into a pool of regions, so the scheduler
 //! never changes when a second region appears.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::time::Instant;
 
 #[cfg(test)]
@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use tracing::warn;
 
+use super::grid::RegionGrid;
 use super::messages::{
     KickFlag, KickReason, MoveState, PlayerConnection, PlayerId, PlayerJoin, ServerMessage,
 };
@@ -174,6 +175,8 @@ impl Player {
 /// A player the region removed, and why.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Kick {
+    /// Region that removed the player.
+    pub region: RegionId,
     /// Player that was removed.
     pub id: PlayerId,
     /// Reason it was removed.
@@ -184,15 +187,37 @@ pub struct Kick {
 ///
 /// The tick returns these instead of writing the replay itself, so the
 /// region stays generic over the journal sink and the game loop owns the
-/// recording order (`(tick, seq)` is per event, ARCH-M4 §1).
+/// recording order (`(tick, seq)` is per event, ARCH-M4 §1). `seq` is the
+/// region's own event counter this tick (moves and transfers share it, so the
+/// order inside one region is the order the region produced them).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AppliedMove {
     /// Region that applied the move.
     pub region: RegionId,
     /// Player whose position moved.
     pub id: PlayerId,
+    /// Order of the event inside the region this tick.
+    pub seq: u32,
     /// The player's position after the move.
     pub position: PlayerPos,
+}
+
+/// A player that crossed a region boundary this tick (M4.3 part B).
+///
+/// The move was applied **in the source region** ([`AppliedMove`] carries it);
+/// the player itself stays there until the scheduler applies the transfer
+/// after the barrier. `seq` is the source region's event counter, so the
+/// canonical order across regions is `(from, seq)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Transfer {
+    /// Player that crossed the boundary.
+    pub player: PlayerId,
+    /// Region that owned the player this tick.
+    pub from: RegionId,
+    /// Region that owns the player from the next tick.
+    pub to: RegionId,
+    /// Order of the event inside the source region this tick.
+    pub seq: u32,
 }
 
 /// Everything the regions produced in one tick.
@@ -202,13 +227,76 @@ pub struct TickOutcome {
     pub moves: Vec<AppliedMove>,
     /// Players kicked this tick.
     pub kicks: Vec<Kick>,
+    /// Boundary crossings detected this tick, in `(from, seq)` order.
+    pub transfers: Vec<Transfer>,
+}
+
+impl TickOutcome {
+    /// The canonical "outgoing" transcript of this tick (ARCH-M4 §1/§6).
+    ///
+    /// One compact JSON line per tick result, ordered by `(region, seq)` with
+    /// moves and transfers sharing the region's event counter; kicks follow.
+    /// M4.3 has no real outgoing packets yet, so the transcript is exactly the
+    /// tick results (moves, kicks, transfers) — `StreamChunks` arrives in
+    /// M4.4. Used by the determinism tests and the replay check.
+    pub fn transcript(&self, tick: u64) -> Vec<String> {
+        let mut events: Vec<(RegionId, u32, u8, serde_json::Value)> = Vec::new();
+        for moved in &self.moves {
+            let value = serde_json::json!({
+                "tick": tick,
+                "region": moved.region,
+                "kind": "move",
+                "src": moved.id,
+                "seq": moved.seq,
+                "x": moved.position.x,
+                "y": moved.position.y,
+                "z": moved.position.z,
+                "yaw": moved.position.yaw,
+                "pitch": moved.position.pitch,
+                "flags": moved.position.flags,
+            });
+            events.push((moved.region, moved.seq, 0, value));
+        }
+        for transfer in &self.transfers {
+            let value = serde_json::json!({
+                "tick": tick,
+                "region": transfer.from,
+                "kind": "transfer",
+                "src": transfer.player,
+                "seq": transfer.seq,
+                "from": transfer.from,
+                "to": transfer.to,
+            });
+            events.push((transfer.from, transfer.seq, 1, value));
+        }
+        for kick in &self.kicks {
+            let value = serde_json::json!({
+                "tick": tick,
+                "region": kick.region,
+                "kind": "kick",
+                "src": kick.id,
+                "reason": kick.reason.message(),
+            });
+            events.push((kick.region, u32::MAX, 2, value));
+        }
+        events.sort_by_key(|(region, seq, kind, _)| (*region, *seq, *kind));
+        events
+            .into_iter()
+            .map(|(_, _, _, value)| value.to_string())
+            .collect()
+    }
 }
 
 /// One region: its id and the players it owns.
+///
+/// Players live in a [`BTreeMap`] keyed by id, so every traversal (tick,
+/// transfer detection, outgoing) is in ascending player id — a `HashMap`
+/// would iterate in a per-process random order and break the determinism the
+/// replay test checks (ARCH-M4 §1, M4.3 part B).
 #[derive(Debug)]
 pub struct Region {
     id: RegionId,
-    players: HashMap<PlayerId, Player>,
+    players: BTreeMap<PlayerId, Player>,
     /// Test-only slowdown of [`Region::tick`] (ordering measurement of the
     /// pool); zero in production.
     #[cfg(test)]
@@ -220,7 +308,7 @@ impl Region {
     pub fn new(id: RegionId) -> Self {
         Self {
             id,
-            players: HashMap::new(),
+            players: BTreeMap::new(),
             #[cfg(test)]
             delay: Duration::ZERO,
         }
@@ -246,9 +334,20 @@ impl Region {
         self.players.contains_key(&id)
     }
 
+    /// The ids the region owns, in ascending order.
+    pub fn player_ids(&self) -> impl Iterator<Item = PlayerId> + '_ {
+        self.players.keys().copied()
+    }
+
     /// Adds a player; returns the one already under that id, if any.
     pub fn insert(&mut self, join: PlayerJoin) -> Option<Player> {
         self.players.insert(join.id, Player::new(join))
+    }
+
+    /// Puts an already-built player in (a transfer moves the whole player by
+    /// ownership); returns the one already under that id, if any.
+    pub fn put(&mut self, player: Player) -> Option<Player> {
+        self.players.insert(player.id(), player)
     }
 
     /// Removes a player.
@@ -266,7 +365,8 @@ impl Region {
         self.players.get_mut(&id)
     }
 
-    /// Ticks the region once: applies the newest movement of every player.
+    /// Ticks the region once: applies the newest movement of every player and
+    /// detects the boundary crossings those moves caused.
     ///
     /// A movement packet is applied only after the client confirmed the
     /// entry teleport ([`Player::teleport_confirmed`]); until then it is
@@ -274,20 +374,23 @@ impl Region {
     /// produced here — they come from [`Region::deliver`], which M4.4's
     /// streaming calls.
     ///
-    /// Players are visited in id order: a `HashMap` iteration order is not
-    /// deterministic, and the pool's merge must be reproducible.
-    pub fn tick(&mut self, _tick: u64, _now: Instant) -> TickOutcome {
+    /// Players are visited in ascending id ([`BTreeMap`] order), so the
+    /// per-region event counter `seq` — shared by moves and transfers — is
+    /// deterministic. A move that lands the player in another region is still
+    /// applied **here** (the position is updated and returned as an
+    /// [`AppliedMove`]); the region only reports the [`Transfer`], it never
+    /// hands the player over mid-tick. The scheduler applies the transfers
+    /// after the barrier.
+    pub fn tick(&mut self, _tick: u64, _now: Instant, grid: RegionGrid) -> TickOutcome {
         #[cfg(test)]
         if !self.delay.is_zero() {
             std::thread::sleep(self.delay);
         }
         let mut outcome = TickOutcome::default();
-        let mut ids: Vec<PlayerId> = self.players.keys().copied().collect();
-        ids.sort_unstable();
-        for id in ids {
-            let Some(player) = self.players.get_mut(&id) else {
-                continue;
-            };
+        let mut seq: u32 = 0;
+        // `BTreeMap` iterates keyed by id; the borrow ends before the transfer
+        // is pushed, so the region stays the sole owner of the players.
+        for (&id, player) in self.players.iter_mut() {
             let Some(state) = player.take_move() else {
                 continue;
             };
@@ -298,14 +401,27 @@ impl Region {
             match state.decode() {
                 Ok(update) => {
                     player.apply_move(&update);
+                    let position = player.position();
                     outcome.moves.push(AppliedMove {
                         region: self.id,
-                        id: player.id(),
-                        position: player.position(),
+                        id,
+                        seq,
+                        position,
                     });
+                    seq += 1;
+                    let to = grid.region_of_position(position.x, position.z);
+                    if to != self.id {
+                        outcome.transfers.push(Transfer {
+                            player: id,
+                            from: self.id,
+                            to,
+                            seq,
+                        });
+                        seq += 1;
+                    }
                 }
                 Err(err) => warn!(
-                    player = player.id(),
+                    player = id,
                     kind = ?state.kind,
                     %err,
                     "dropping an undecodable movement packet"
@@ -334,6 +450,7 @@ impl Region {
                 player.kick_flag().raise(KickReason::SendQueueOverflow);
                 self.players.remove(&id);
                 Some(Kick {
+                    region: self.id,
                     id,
                     reason: KickReason::SendQueueOverflow,
                 })

@@ -115,7 +115,7 @@ fn a_movement_before_the_teleport_ack_is_ignored() {
     let entry = region.get(1).expect("the player is there").position();
 
     slot.store(pos_move(100.0, 70.0, -50.0));
-    let outcome = region.tick(0, Instant::now());
+    let outcome = region.tick(0, Instant::now(), RegionGrid::single());
 
     assert!(
         outcome.moves.is_empty(),
@@ -134,7 +134,7 @@ fn a_movement_after_the_ack_moves_the_player() {
     region.get_mut(1).expect("the player").confirm_teleport();
 
     slot.store(pos_move(100.5, 70.0, -50.25));
-    let outcome = region.tick(7, Instant::now());
+    let outcome = region.tick(7, Instant::now(), RegionGrid::single());
 
     assert_eq!(outcome.moves.len(), 1, "the move is applied once");
     let applied = outcome.moves[0];
@@ -173,7 +173,7 @@ fn a_rotation_packet_keeps_the_position() {
         payload,
     });
 
-    let outcome = region.tick(0, Instant::now());
+    let outcome = region.tick(0, Instant::now(), RegionGrid::single());
     let after = outcome.moves[0].position;
     assert_eq!(
         (after.x, after.y, after.z),

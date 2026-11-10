@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use tracing::{error, warn};
 
+use super::grid::RegionGrid;
 use super::region::{Region, TickOutcome};
 
 /// How long the scheduler waits for one region's result before giving up on
@@ -35,6 +36,8 @@ pub(crate) struct Job {
     pub tick: u64,
     /// The tick's `now`, shared by every region of the tick.
     pub now: Instant,
+    /// The chunk → region grid the region needs to detect transfers.
+    pub grid: RegionGrid,
 }
 
 /// A ticked region on its way back to the scheduler.
@@ -160,7 +163,7 @@ impl Drop for Pool {
 /// One worker: tick every region it is handed and send it straight back.
 fn worker(jobs: Receiver<Job>, results: Sender<Done>, done: Sender<()>) {
     while let Ok(mut job) = jobs.recv() {
-        let outcome = job.region.tick(job.tick, job.now);
+        let outcome = job.region.tick(job.tick, job.now, job.grid);
         if results
             .send(Done {
                 region: job.region,

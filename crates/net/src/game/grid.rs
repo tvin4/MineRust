@@ -22,7 +22,7 @@ pub const CHUNK_SIZE: i32 = 16;
 ///
 /// `Copy` and cheap: a region carries no reference to it, the tick receives
 /// one by value (the pool sends it with the job).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RegionGrid {
     side: i32,
 }
