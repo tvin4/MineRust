@@ -217,6 +217,12 @@ pub enum WalkMode {
         steps: u32,
         /// Idle time after the last step.
         settle: Duration,
+        /// Whether to enforce the ЧАСТЬ I spectator check (login `game_mode`
+        /// vs `player_abilities`). Vanilla П4/П5 fly as spectators and pass
+        /// `true`; our own server is survival on purpose, so a walk against
+        /// it passes `false` — the same reason [`WalkMode::Preload`] and
+        /// [`WalkMode::JoinWindow`] never enforce it.
+        spectator: bool,
     },
     /// ЧАСТЬ 0 (M4.4): the join-window measurement. The bot joins, sends no
     /// movement at all and records every chunk coordinate in JSONL, then
@@ -729,8 +735,13 @@ async fn play(
     };
     // ЧАСТЬ I, п. 4 judges the walking runs; a preload and a ЧАСТЬ 0 join
     // window only record the mode facts, because our own server is survival
-    // on purpose (ЧАСТЬ 2 measures the join against it).
-    let enforce_mode = !matches!(mode, WalkMode::Preload { .. } | WalkMode::JoinWindow { .. });
+    // on purpose (ЧАСТЬ 2 measures the join against it). A v3 walk against
+    // our own server opts out the same way through its `spectator` flag.
+    let enforce_mode = match mode {
+        WalkMode::Preload { .. } | WalkMode::JoinWindow { .. } => false,
+        WalkMode::WalkV3 { spectator, .. } => spectator,
+        _ => true,
+    };
     let mut deadline = tokio::time::Instant::now() + TICK;
     // ЧАСТЬ II: how much of the run was spent parked on the socket.
     let mut socket_read_ms = 0.0f64;
