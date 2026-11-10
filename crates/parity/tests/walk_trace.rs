@@ -262,6 +262,8 @@ async fn one_run(
             // Not part of the three walk runs: ЧАСТЬ III's wait uses its own
             // test driver (`tests/preload_measure.rs`).
             WalkMode::Preload { .. } => "preload (ЧАСТЬ III)".to_owned(),
+            // ЧАСТЬ 0 (M4.4) has its own driver (`tests/join_window.rs`).
+            WalkMode::JoinWindow { .. } => "join window (M4.4 ЧАСТЬ 0)".to_owned(),
         };
     let mut outcome = RunOutcome {
         name,

@@ -218,6 +218,22 @@ pub enum WalkMode {
         /// Idle time after the last step.
         settle: Duration,
     },
+    /// ЧАСТЬ 0 (M4.4): the join-window measurement. The bot joins, sends no
+    /// movement at all and records every chunk coordinate in JSONL, then
+    /// leaves once `idle` passed without a single new
+    /// `level_chunk_with_light` — or when the whole `timeout` is spent.
+    ///
+    /// The view distance this join asks for is the caller's
+    /// ([`run_walk_view_at`]): each measured radius needs its own, so it is
+    /// not the shared [`VIEW_DISTANCE`]. Like [`WalkMode::Preload`], the run
+    /// does not enforce the spectator mode check: it is
+    /// used against our own survival server in ЧАСТЬ 2.
+    JoinWindow {
+        /// How long without a new chunk ends the run.
+        idle: Duration,
+        /// Hard budget for the whole join, the owner's 60 s.
+        timeout: Duration,
+    },
 }
 
 /// Why the play loop ended — every value here is a report fact, never a
@@ -268,6 +284,12 @@ pub enum Stop {
     /// sent the requested number of chunks (a fact, not a failure).
     PreloadTimeout {
         /// Chunks seen at the moment the budget expired.
+        chunks: u64,
+    },
+    /// ЧАСТЬ 0 (M4.4): the join-window run ended after `idle` without a new
+    /// chunk — the server had sent everything it was going to send.
+    WindowIdle {
+        /// Chunks seen in total when the idle gap closed.
         chunks: u64,
     },
 }
@@ -540,6 +562,21 @@ pub async fn run_walk_at(
     mode: WalkMode,
     trace_path: &Path,
 ) -> Result<RunStats, WalkError> {
+    run_walk_view_at(env, ids, port, VIEW_DISTANCE, mode, trace_path).await
+}
+
+/// [`run_walk_at`] with an explicit client view distance: the ЧАСТЬ 0 join
+/// measurement sets the copy's `view-distance` per run, so the bot's
+/// `client_information` has to ask for the same number. Everything else —
+/// the scripted join, the JSONL trace — is identical to [`run_walk_at`].
+pub async fn run_walk_view_at(
+    env: &ParityEnv,
+    ids: Arc<PacketIds>,
+    port: u16,
+    view_distance: i8,
+    mode: WalkMode,
+    trace_path: &Path,
+) -> Result<RunStats, WalkError> {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let mut client = Client::connect("vanilla-walk", addr, Arc::clone(&ids))
         .await
@@ -554,7 +591,7 @@ pub async fn run_walk_at(
         Ok(vanilla) if vanilla == port => crate::steps::PROBE_WAIT,
         _ => crate::steps::PROBE_WAIT_NO_PROBE,
     };
-    let steps = join_steps_with_view(env, &ids, port, VIEW_DISTANCE, probe_wait);
+    let steps = join_steps_with_view(env, &ids, port, view_distance, probe_wait);
     client.run(&steps).await.map_err(WalkError::Join)?;
 
     let mut jsonl = Jsonl::create(trace_path)?;
@@ -639,6 +676,9 @@ async fn play(
         WalkMode::Preload {
             chunks, timeout, ..
         } => (Duration::ZERO, 0, Duration::ZERO, Some((chunks, timeout))),
+        // ЧАСТЬ 0: no movement, no settle — the join window ends on the
+        // idle gap below, not on a timer armed here.
+        WalkMode::JoinWindow { .. } => (Duration::ZERO, 0, Duration::ZERO, None),
     };
     let limits = WalkLimits { steps, settle };
     // ЧАСТЬ III: only a preload run may carry a different pace float; every
@@ -648,7 +688,18 @@ async fn play(
         _ => PACE,
     };
     let started = std::time::Instant::now();
-    let safety = TICK * steps + hold + settle + Duration::from_secs(60);
+    // ЧАСТЬ 0 (M4.4): the join-window run ends on its own idle gap or
+    // budget; give the hard safety stop the whole budget plus a margin.
+    // Every other mode keeps the historical 60 s.
+    let join = match mode {
+        WalkMode::JoinWindow { idle, timeout } => Some((idle, timeout)),
+        _ => None,
+    };
+    let extra = match join {
+        Some((_, timeout)) => timeout + Duration::from_secs(30),
+        None => Duration::from_secs(60),
+    };
+    let safety = TICK * steps + hold + settle + extra;
     // Set on every `break` (the loop's only exit), so no default is needed.
     let mut stop: Option<Stop>;
     let mut stats = new_stats();
@@ -666,18 +717,27 @@ async fn play(
     // timer — `steps == 0` without a goal is still the P1 hold. The
     // scripted Э2 idle starts only after its third move, so it is not
     // armed here.
-    let mut settle_at =
-        if steps == 0 && goal.is_none() && !matches!(mode, WalkMode::LiveFirstMoves { .. }) {
-            Some(tokio::time::Instant::now() + hold)
-        } else {
-            None
-        };
-    // ЧАСТЬ I, п. 4 judges the walking runs; a preload only records the
-    // mode facts, because our own server is survival on purpose.
-    let enforce_mode = !matches!(mode, WalkMode::Preload { .. });
+    let mut settle_at = if steps == 0
+        && goal.is_none()
+        && !matches!(
+            mode,
+            WalkMode::LiveFirstMoves { .. } | WalkMode::JoinWindow { .. }
+        ) {
+        Some(tokio::time::Instant::now() + hold)
+    } else {
+        None
+    };
+    // ЧАСТЬ I, п. 4 judges the walking runs; a preload and a ЧАСТЬ 0 join
+    // window only record the mode facts, because our own server is survival
+    // on purpose (ЧАСТЬ 2 measures the join against it).
+    let enforce_mode = !matches!(mode, WalkMode::Preload { .. } | WalkMode::JoinWindow { .. });
     let mut deadline = tokio::time::Instant::now() + TICK;
     // ЧАСТЬ II: how much of the run was spent parked on the socket.
     let mut socket_read_ms = 0.0f64;
+    // ЧАСТЬ 0: wire time of the last chunk that arrived and the chunk count
+    // it was at, so the idle gap is measured against new arrivals only.
+    let mut last_chunk_at: Option<tokio::time::Instant> = None;
+    let mut last_chunk_count = 0u64;
 
     // ЧАСТЬ I: the load gate and the Э2 script. `loaded_at` is the wire
     // time of `player_loaded`; the scripted moves are due at fixed offsets
@@ -759,6 +819,29 @@ async fn play(
                 break;
             }
             if started.elapsed() >= budget {
+                stop = Some(Stop::PreloadTimeout {
+                    chunks: stats.chunks,
+                });
+                break;
+            }
+        }
+        // ЧАСТЬ 0: the join window ends once `idle` passed with no new chunk,
+        // or the whole `timeout` is spent (both are facts, kept apart).
+        if let Some((idle, timeout)) = join {
+            let now = tokio::time::Instant::now();
+            if stats.chunks != last_chunk_count {
+                last_chunk_count = stats.chunks;
+                last_chunk_at = Some(now);
+            }
+            if let Some(at) = last_chunk_at {
+                if now >= at + idle {
+                    stop = Some(Stop::WindowIdle {
+                        chunks: stats.chunks,
+                    });
+                    break;
+                }
+            }
+            if started.elapsed() >= timeout {
                 stop = Some(Stop::PreloadTimeout {
                     chunks: stats.chunks,
                 });

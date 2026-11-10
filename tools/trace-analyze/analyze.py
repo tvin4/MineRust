@@ -390,6 +390,141 @@ def cmd_shape(ctx, args):
             print(f'   forgotten: {sorted(forgotten)}')
 
 
+def chunk_flushes(rows):
+    """The delivered chunk coordinates, grouped by batch interval."""
+    flushes = []
+    current = None
+    for row in rows:
+        if row['dir'] != 'clientbound':
+            continue
+        if row['name'] == BATCH_START:
+            current = []
+        elif row['name'] == CHUNK:
+            coords = chunk_coords(row)
+            if current is None:
+                current = []
+            if coords is not None:
+                current.append(coords)
+        elif row['name'] == BATCH_FINISHED:
+            flushes.append(current or [])
+            current = None
+    if current:
+        flushes.append(current)
+    return flushes
+
+
+def by_abs_axis(cells, centre, axis=0):
+    """`|delta| -> width of that row` (one signed row; `+d` and `-d` agree
+    on a symmetric window, the larger of the two is reported)."""
+    out = {}
+    for signed, values in row_widths(cells, centre, axis).items():
+        key = abs(signed)
+        out[key] = max(out.get(key, 0), len(values))
+    return out
+
+
+def smallest_matching_circle(cells, centre, half):
+    """Smallest K whose circle in the half-width-`half` square equals cells."""
+    for k in range(0, 2 * half * half + 1):
+        circle = {(centre[0] + dx, centre[1] + dz)
+                  for dx in range(-half, half + 1)
+                  for dz in range(-half, half + 1)
+                  if dx * dx + dz * dz <= k}
+        if circle == cells:
+            return k
+    return None
+
+
+def cmd_shape_join(ctx, args):
+    """Join window of one trace: count, rows, half-width, matching circle,
+    and the send order of the flushes (M4.4 part A, ЧАСТЬ 0)."""
+    print(f'trace: {args.trace}')
+    flushes = chunk_flushes(ctx.rows)
+    cells = [coord for flush in flushes for coord in flush]
+    distinct = set(cells)
+    centres = [chunk_centre(r) for r in ctx.rows
+               if r['dir'] == 'clientbound' and r['name'] == CENTRE]
+    centres = [c for c in centres if c is not None]
+    print(f'chunks: {len(cells)} delivered, {len(distinct)} distinct'
+          f'  flushes: {len(flushes)}  first flush: {len(flushes[0]) if flushes else 0}')
+    if not centres:
+        print('no set_chunk_cache_center: cannot place the window')
+        return
+    centre = centres[-1]
+    print(f'centre (last set_chunk_cache_center): {centre}'
+          f'  centre moves: {len(centres)}')
+    if not distinct:
+        print('no chunks delivered')
+        return
+    half = max(max(abs(x - centre[0]), abs(z - centre[1])) for (x, z) in distinct)
+    rows_x = by_abs_axis(distinct, centre, axis=0)
+    rows_z = by_abs_axis(distinct, centre, axis=1)
+    print(f'half-width h: {half}')
+    print(f'  per-|dx| width: ' + ' '.join(f'{d}:{rows_x[d]}' for d in sorted(rows_x)))
+    print(f'  per-|dz| width: ' + ' '.join(f'{d}:{rows_z[d]}' for d in sorted(rows_z)))
+    full = (2 * half + 1) ** 2
+    print(f'  a full (2h+1)^2 square of half-width {half} would be {full};'
+          f' the window holds {len(distinct)} (missing {full - len(distinct)})')
+    k = smallest_matching_circle(distinct, centre, half)
+    if k is None:
+        print('  circle |dx|2+|dz|2 <= K: no K inside half-width h matches the set')
+        # The closest circle and what it cannot explain: the signal that the
+        # world was clipped short of the window (edge rows come up short).
+        best_k, diff = nearest_circle(distinct, centre, half)
+        circle = {(centre[0] + dx, centre[1] + dz)
+                  for dx in range(-half, half + 1)
+                  for dz in range(-half, half + 1)
+                  if dx * dx + dz * dz <= best_k}
+        extra = sorted(cells_in(circle, distinct))
+        missing = sorted(cells_in(distinct, circle))
+        print(f'  closest circle K={best_k}: {diff} cells differ'
+              f' (delivered {len(extra)} beyond, missing {len(missing)})')
+        for coord in (extra + missing)[:12]:
+            print(f'    off-circle cell {coord}')
+    else:
+        print(f'  circle |dx|2+|dz|2 <= {k} inside half-width {half} matches the set')
+    order_report(flushes, centre)
+    if args.list:
+        for coord in sorted(distinct):
+            print(f'  chunk {coord}')
+
+
+def cells_in(left, right):
+    """Cells of `left` that are not in `right`."""
+    return set(left) - set(right)
+
+
+def nearest_circle(cells, centre, half):
+    """The circle of the half-width-`half` square closest to `cells`."""
+    best_k, best_diff = 0, None
+    for k in range(0, 2 * half * half + 1):
+        circle = {(centre[0] + dx, centre[1] + dz)
+                  for dx in range(-half, half + 1)
+                  for dz in range(-half, half + 1)
+                  if dx * dx + dz * dz <= k}
+        diff = len(circle ^ cells)
+        if best_diff is None or diff < best_diff:
+            best_k, best_diff = k, diff
+    return best_k, best_diff
+
+
+def order_report(flushes, centre):
+    """Whether the arrival order follows squared distance from the centre,
+    globally and within every flush, with the number of regressions."""
+    def sq(coord):
+        return (coord[0] - centre[0]) ** 2 + (coord[1] - centre[1]) ** 2
+
+    order = [coord for flush in flushes for coord in flush]
+    global_reg = sum(1 for a, b in zip(order, order[1:]) if sq(a) > sq(b))
+    flush_reg = 0
+    for flush in flushes:
+        flush_reg += sum(1 for a, b in zip(flush, flush[1:]) if sq(a) > sq(b))
+    print(f'  send order: global distance regressions {global_reg};'
+          f' within flushes {flush_reg} (0 means distance never falls)')
+    if flushes:
+        print(f'  first flush ({len(flushes[0])}): {flushes[0][:12]}')
+
+
 def cmd_gap(ctx, args):
     low, high = args.at - args.around, args.at + args.around
     rows = [r for r in ctx.rows if low <= r['t'] <= high]
@@ -578,6 +713,12 @@ def main(argv):
     shape.add_argument('--list', action='store_true',
                        help='print raw lists (default: aggregates only)')
     shape.set_defaults(func=cmd_shape)
+
+    shape_join = sub.add_parser('shape-join')
+    shape_join.add_argument('trace')
+    shape_join.add_argument('--list', action='store_true',
+                            help='print raw lists (default: aggregates only)')
+    shape_join.set_defaults(func=cmd_shape_join)
 
     args = parser.parse_args(argv)
     rows = load(args.trace)

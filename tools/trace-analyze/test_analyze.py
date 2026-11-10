@@ -46,6 +46,45 @@ class DecodeTest(unittest.TestCase):
         by_z = analyze.row_widths(cells, (0, 0), axis=1)
         self.assertEqual(by_z, {0: [0, 1], 1: [1, 2]})
 
+    def test_by_abs_axis_row_widths(self):
+        cells = {(0, 0), (1, 0), (-1, 0), (0, 2)}
+        self.assertEqual(analyze.by_abs_axis(cells, (0, 0), axis=0),
+                         {0: 2, 1: 1})
+        self.assertEqual(analyze.by_abs_axis(cells, (0, 0), axis=1),
+                         {0: 3, 2: 1})
+
+    def test_smallest_circle_matches_the_traced_r10_shape(self):
+        centre = (0, 0)
+        cells = {(dx, dz)
+                 for dx in range(-11, 12)
+                 for dz in range(-11, 12)
+                 if dx * dx + dz * dz <= 162}
+        self.assertEqual(len(cells), 473)
+        rows = analyze.by_abs_axis(cells, centre, axis=0)
+        self.assertEqual([rows[d] for d in range(0, 7)], [23] * 7)
+        self.assertEqual([rows[d] for d in range(7, 12)], [21, 19, 19, 15, 13])
+        self.assertEqual(analyze.smallest_matching_circle(cells, centre, 11), 162)
+
+    def test_smallest_circle_is_none_when_a_corner_is_clipped(self):
+        cells = {(dx, dz) for dx in (-1, 0, 1) for dz in (-1, 0, 1)}
+        cells.remove((1, 1))
+        self.assertIsNone(analyze.smallest_matching_circle(cells, (0, 0), 1))
+
+    def test_chunk_flushes_groups_by_batch(self):
+        rows = [
+            {'name': analyze.BATCH_START, 'payload': b'', 'dir': 'clientbound'},
+            {'name': analyze.CHUNK, 'payload': struct.pack('>ii', 0, 0),
+             'dir': 'clientbound'},
+            {'name': analyze.CHUNK, 'payload': struct.pack('>ii', 1, 0),
+             'dir': 'clientbound'},
+            {'name': analyze.BATCH_FINISHED, 'payload': b'', 'dir': 'clientbound'},
+            {'name': analyze.BATCH_START, 'payload': b'', 'dir': 'clientbound'},
+            {'name': analyze.CHUNK, 'payload': struct.pack('>ii', 2, 0),
+             'dir': 'clientbound'},
+            {'name': analyze.BATCH_FINISHED, 'payload': b'', 'dir': 'clientbound'},
+        ]
+        self.assertEqual(analyze.chunk_flushes(rows), [[(0, 0), (1, 0)], [(2, 0)]])
+
 
 if __name__ == '__main__':
     unittest.main()
