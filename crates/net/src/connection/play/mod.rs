@@ -11,7 +11,7 @@ mod tests;
 
 #[cfg(test)]
 use batch::{sort_by_distance, write_chunk_batch};
-use batch::{wait_turn, PendingBatch};
+use batch::{wait_turn, write_window_move, PendingBatch};
 use chunk_pace::ChunkPace;
 
 use data::{GameData, PacketIds};
@@ -31,8 +31,8 @@ use crate::chunks::ReadyChunks;
 use crate::error::ConnectionError;
 use crate::frame::{read_tracked, write_tracked};
 use crate::game::{
-    GameHandle, KickFlag, MoveKind, MoveSlot, MoveState, PlayerConnection, PlayerId, PlayerJoin,
-    ServerMessage, ToGame, OUTBOUND_CAPACITY,
+    chunk_of_position, GameHandle, KickFlag, MoveKind, MoveSlot, MoveState, PlayerConnection,
+    PlayerId, PlayerJoin, ServerMessage, ToGame, OUTBOUND_CAPACITY,
 };
 use crate::loader::{LoadError, Loader};
 
@@ -253,9 +253,12 @@ where
             None
         }
     };
-    // The client's chunk cache centre lives around the spawn; used below to
-    // flag any chunk that arrives from outside the announced radius.
-    let (center_x, center_z) = (world.info.spawn.x >> 4, world.info.spawn.z >> 4);
+    // The client's chunk cache centre (M4.4 B): the spawn chunk first, then
+    // the chunk of every `StreamChunks` event. The join window is built from
+    // it once the world is ready, so a player that moved before the read
+    // finished still gets exactly its current window.
+    let mut stream_center =
+        chunk_of_position(f64::from(world.info.spawn.x), f64::from(world.info.spawn.z));
 
     // Frames are read on a background task: reading must survive the
     // select-loop branches below (a cancelled frame read would drop bytes
@@ -319,16 +322,23 @@ where
                 match result {
                     Ok(Ok(chunks)) => {
                         info!(found = chunks.len(), "world read finished, chunks found");
-                        pending = Some(PendingBatch::new(chunks, center_x, center_z, radius));
+                        pending = Some(PendingBatch::new(
+                            chunks,
+                            stream_center.0,
+                            stream_center.1,
+                            radius,
+                        ));
                     }
                     Ok(Err(err)) => warn!(%err, "world read failed, no chunks sent"),
                     Err(err) => warn!(%err, "chunk loader dropped the reply"),
                 }
             }
-            // One sub-batch of the burst — the first flush right away, the
+            // One sub-batch of the queue — the opening flush right away, the
             // paced tail one game tick after the previous one, and after
-            // the first flush only once the pace answer (or its guard
-            // deadline) is in.
+            // the opening only once the pace answer (or its guard deadline)
+            // is in. From M4.4 B the sender stays for the whole session: a
+            // window move appends to its queue and wakes this arm
+            // ([`Stage::Parked`] leaves it silent while nothing is queued).
             turn = wait_turn(pending.as_ref().map(PendingBatch::stage)), if pending.is_some() => {
                 let Some(batch) = pending.as_mut() else {
                     // The arm is guarded by `is_some()`; keep the branch
@@ -336,9 +346,7 @@ where
                     continue;
                 };
                 debug_assert!(turn.is_some(), "a pending burst always has a stage");
-                if batch.send_next(&mut writer, ids, &pace).await? {
-                    pending = None;
-                }
+                let _ = batch.send_next(&mut writer, ids, &pace).await?;
             }
             // The game thread asked this connection to send a packet.
             // M4.1's tick sends none; the arm keeps the path ready and
@@ -348,21 +356,39 @@ where
                     Some(ServerMessage::Send { id, payload }) => {
                         write_tracked(&mut writer, ProtocolState::Play, id, &payload).await?;
                     }
-                    // The player's window moved (M4.4 B). ШАГ 3 turns this
-                    // into `set_chunk_cache_center`, `forget_level_chunk` for
-                    // the leaving chunks and a new paced batch for the
-                    // entering ones; until then the event is only logged.
+                    // The player's window moved (M4.4 B, ШАГ 3): the centre
+                    // goes out first, then the traced forgets (chunks that
+                    // were already sent), and the entering chunks join the
+                    // queue the batch arm drains.
                     Some(ServerMessage::StreamChunks {
                         center,
                         add,
                         remove,
                     }) => {
-                        debug!(
-                            center = ?center,
-                            add = add.len(),
-                            remove = remove.len(),
-                            "window move (streaming lands in ШАГ 3)"
-                        );
+                        stream_center = (center.0, center.1);
+                        if let Some(batch) = pending.as_mut() {
+                            let queued =
+                                write_window_move(&mut writer, ids, batch, center, &add, &remove)
+                                    .await?;
+                            debug!(
+                                center_x = center.0,
+                                center_z = center.1,
+                                add = add.len(),
+                                remove = remove.len(),
+                                queued,
+                                "window move"
+                            );
+                        } else {
+                            // No ready world yet: the centre is tracked and
+                            // the join window is built at it once the read
+                            // finishes, so nothing is sent outside the new
+                            // window.
+                            debug!(
+                                center_x = center.0,
+                                center_z = center.1,
+                                "window move before the world was ready"
+                            );
+                        }
                     }
                     // The game thread dropped this player (quit); the
                     // connection closes. The kick reason is read in M4.1's

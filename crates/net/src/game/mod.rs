@@ -29,7 +29,7 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
-pub use grid::{RegionGrid, CHUNK_SIZE};
+pub use grid::{chunk_of_position, RegionGrid, CHUNK_SIZE};
 pub use messages::{
     KickFlag, KickReason, MoveKind, MoveSlot, MoveState, PlayerConnection, PlayerId, PlayerJoin,
     ServerMessage, ToGame,

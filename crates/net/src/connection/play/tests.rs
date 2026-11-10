@@ -1,12 +1,14 @@
 //! Integration-shaped tests of the play loop: the join order, the
 //! keep-alive cadence and the framing of a chunk burst.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
 use protocol::{
-    ChunkBatchFinished, ChunkBatchStart, GameEvent, LevelChunkWithLight, LoginPlay, PacketKey,
-    PlayerInfoUpdate, SetCenterChunk, SetDefaultSpawnPosition, SynchronizePlayerPosition,
+    ChunkBatchFinished, ChunkBatchStart, ForgetLevelChunk, GameEvent, LevelChunkWithLight,
+    LoginPlay, PacketKey, PlayerInfoUpdate, SetCenterChunk, SetDefaultSpawnPosition,
+    SynchronizePlayerPosition,
 };
 use tokio::io::{AsyncWriteExt, BufReader};
 
@@ -646,4 +648,227 @@ async fn the_first_flush_is_nine_then_the_vanilla_paced_tail() {
         Err(err) if err.is_client_disconnect() => {}
         other => panic!("play ended with {other:?}"),
     }
+}
+
+/// The ready world of the ШАГ 3 fixtures: a full square big enough for every
+/// window a walk from centre (0, 0) east to (5, 0) touches at radius 8
+/// (x −10..=14, z −10..=10), so nothing the walk needs is ever a hole.
+fn walk_world() -> Arc<ReadyChunks> {
+    let chunks: Vec<LevelChunkWithLight> = (-10..=14)
+        .flat_map(|chunk_x| {
+            (-10..=10).map(move |chunk_z| LevelChunkWithLight {
+                chunk_x,
+                chunk_z,
+                ..one_payload()
+            })
+        })
+        .collect();
+    Arc::new(ReadyChunks::new(chunks))
+}
+
+/// Reads one whole sub-batch (`chunk_batch_start` ... `finished`) and returns
+/// the coordinates of the chunks it carried.
+async fn read_flush_coords<R>(reader: &mut R, ids: &PacketIds) -> Vec<(i32, i32)>
+where
+    R: AsyncRead + Unpin,
+{
+    let (id, _) = next_packet(reader).await;
+    assert_eq!(id, ids.id(ChunkBatchStart::KEY), "a flush opens with start");
+    let mut coords = Vec::new();
+    loop {
+        let (id, payload) = next_packet(reader).await;
+        if id == ids.id(LevelChunkWithLight::KEY) {
+            let chunk =
+                LevelChunkWithLight::decode_payload(&mut protocol::PacketReader::new(&payload))
+                    .expect("decodable chunk");
+            coords.push((chunk.chunk_x, chunk.chunk_z));
+            continue;
+        }
+        assert_eq!(
+            id,
+            ids.id(ChunkBatchFinished::KEY),
+            "a flush closes with finished"
+        );
+        return coords;
+    }
+}
+
+/// M4.4 B (the "faster than portions arrive" trap), sender side: the player
+/// crosses five chunk boundaries while the queue still holds chunks of every
+/// earlier window. The invariant — `sent ∪ queue` never leaves
+/// `window(centre)` — must hold after every move; a leaving queued chunk is
+/// dropped without a forget, a leaving sent chunk is forgotten; and the fully
+/// drained sender ends at exactly `window(final centre) ∩ ready`.
+#[tokio::test]
+async fn a_fast_walk_never_leaves_a_chunk_in_an_old_window() {
+    let ids = PacketIds::compiled();
+    let ready = walk_world();
+    let radius = 8;
+    let mut pace = ChunkPace::default();
+    // Two chunks a tick: the join window is nowhere near drained when the
+    // walk starts, so every move really is "faster than the portions arrive".
+    pace.ack(2.0);
+    let mut batch = PendingBatch::new(Arc::clone(&ready), 0, 0, radius);
+    let mut sink = tokio::io::sink();
+
+    // One small portion of the join window; the rest stays queued across the
+    // whole walk.
+    batch
+        .send_next(&mut sink, &ids, &pace)
+        .await
+        .expect("write the opening portion");
+    assert!(!batch.is_idle(), "the join window is far from drained");
+    assert!(batch.within_window(), "the opening portion is in-window");
+
+    let mut center = (0, 0);
+    for step in 1..=5_i32 {
+        let next = (step, 0);
+        let (add, remove) = crate::window_difference(center, next, radius);
+        assert!(
+            !add.is_empty() && !remove.is_empty(),
+            "step {step} moves the window"
+        );
+        let sent_before = batch.sent().clone();
+        let forget = batch.move_window(next, &add, &remove);
+
+        // The invariant holds right after the move, before anything else.
+        assert!(
+            batch.within_window(),
+            "step {step}: sent/queue left the new window"
+        );
+        // Every forget was a chunk already on the wire; a leaving chunk that
+        // was still queued produces no forget at all.
+        assert!(
+            forget.iter().all(|cell| sent_before.contains(cell)),
+            "step {step}: a queued chunk was forgotten"
+        );
+        assert!(
+            forget.windows(2).all(|pair| pair[0] <= pair[1]),
+            "step {step}: the forgets are not ascending (x, z)"
+        );
+        center = next;
+
+        // Deliver one more small portion and re-check the invariant.
+        if !batch.is_idle() {
+            batch
+                .send_next(&mut sink, &ids, &pace)
+                .await
+                .expect("write a portion");
+            assert!(
+                batch.within_window(),
+                "step {step}: a portion left the window"
+            );
+        }
+    }
+
+    // Drain the rest; every write stays inside the final window.
+    while !batch.is_idle() {
+        batch
+            .send_next(&mut sink, &ids, &pace)
+            .await
+            .expect("drain the queue");
+        assert!(batch.within_window(), "the drain left the window");
+    }
+
+    let expected: BTreeSet<(i32, i32)> = crate::window(center.0, center.1, radius)
+        .into_iter()
+        .filter(|&(x, z)| ready.position(x, z).is_some())
+        .collect();
+    assert_eq!(
+        batch.sent(),
+        &expected,
+        "the drained sender is exactly window({center:?}) ∩ ready"
+    );
+}
+
+/// M4.4 B (wire order, ШАГ 3): a window move writes `set_chunk_cache_center`
+/// of the new centre first, then `forget_level_chunk` for the leaving sent
+/// chunks in ascending `(x, z)` (the traced order), and only the entering
+/// chunks are left to send — nothing out of the old window follows the move.
+#[tokio::test]
+async fn a_window_move_writes_the_centre_then_the_forgets_in_order() {
+    let ids = PacketIds::compiled();
+    let ready = walk_world();
+    let radius = 8;
+    let mut pace = ChunkPace::default();
+    pace.ack(1e9); // the whole join window in one piece
+    let mut batch = PendingBatch::new(Arc::clone(&ready), 0, 0, radius);
+    let mut sink = tokio::io::sink();
+    assert!(
+        batch
+            .send_next(&mut sink, &ids, &pace)
+            .await
+            .expect("write the join window"),
+        "the whole join window fits one sub-batch"
+    );
+    assert!(batch.is_idle(), "the join window is fully on the wire");
+    let was_sent = batch.sent().clone();
+
+    let (add, remove) = crate::window_difference((0, 0), (1, 0), radius);
+    assert!(
+        !add.is_empty() && !remove.is_empty(),
+        "the window really moves"
+    );
+    assert!(
+        remove.iter().all(|cell| was_sent.contains(cell)),
+        "a fully sent window has every leaving chunk on the wire"
+    );
+
+    let (client, server) = tokio::io::duplex(1 << 20);
+    let (_client_read, mut server_write) = tokio::io::split(server);
+    let mut client = BufReader::new(client);
+
+    let queued = write_window_move(&mut server_write, &ids, &mut batch, (1, 0), &add, &remove)
+        .await
+        .expect("write the window move");
+    assert_eq!(queued, add.len(), "only the entering chunks were queued");
+
+    // 1) the new centre goes first.
+    let (id, payload) = next_packet(&mut client).await;
+    assert_eq!(id, ids.id(SetCenterChunk::KEY), "the centre goes first");
+    let center = SetCenterChunk::decode_payload(&mut protocol::PacketReader::new(&payload))
+        .expect("decodable");
+    assert_eq!(
+        (center.chunk_x, center.chunk_z),
+        (1, 0),
+        "the announced centre is the new one"
+    );
+
+    // 2) then every leaving sent chunk as a forget, ascending (x, z).
+    let mut forgotten = Vec::new();
+    for _ in 0..remove.len() {
+        let (id, payload) = next_packet(&mut client).await;
+        assert_eq!(
+            id,
+            ids.id(ForgetLevelChunk::KEY),
+            "a forget follows the centre"
+        );
+        let forget = ForgetLevelChunk::decode_payload(&mut protocol::PacketReader::new(&payload))
+            .expect("decodable forget");
+        forgotten.push((forget.chunk_x, forget.chunk_z));
+    }
+    assert_eq!(
+        forgotten, remove,
+        "the traced ascending (x, z) forget order"
+    );
+
+    // 3) the entering chunks wait for the batch arm; nothing old is resent.
+    assert!(!batch.is_idle(), "the entering chunks are queued");
+    assert!(batch
+        .send_next(&mut server_write, &ids, &pace)
+        .await
+        .expect("write the entering chunks"));
+    let sent_now = read_flush_coords(&mut client, &ids).await;
+    let sent_set: BTreeSet<(i32, i32)> = sent_now.iter().copied().collect();
+    let add_in_ready: BTreeSet<(i32, i32)> = add
+        .iter()
+        .copied()
+        .filter(|&(x, z)| ready.position(x, z).is_some())
+        .collect();
+    assert_eq!(sent_set, add_in_ready, "only the entering chunks were sent");
+    assert_eq!(
+        sent_now.len(),
+        sent_set.len(),
+        "no chunk was sent twice in one flush"
+    );
 }
