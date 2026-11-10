@@ -381,3 +381,96 @@ fn crossing_several_boundaries_loses_no_player() {
         run.scheduler.regions().len()
     );
 }
+
+/// One tick of a player walking from chunk `(0, 0)` to `move_to`; returns the
+/// single window event the tick produced (M4.4 B).
+fn walk_once(move_to: (f64, f64)) -> StreamChunks {
+    let mut run = Run::new(0);
+    run.join(1, (5, 64, 5), true);
+    let mut outcome = run.step(&[(1, Step::Move((move_to.0, 64.0, move_to.1)))]);
+    assert_eq!(outcome.streams.len(), 1, "one window move per tick");
+    outcome.streams.remove(0)
+}
+
+/// M4.4 B (а): a one-chunk move shifts the window by 23 chunks each way at
+/// R=10, a diagonal move by 37 — the П4/П5 steady-state numbers, produced by
+/// the tick from the traced `net::window`.
+#[test]
+fn a_one_chunk_move_emits_the_traced_window_difference() {
+    let east = walk_once((21.0, 5.0));
+    assert_eq!(east.center, (1, 0), "the +x chunk");
+    assert_eq!(east.add.len(), 23, "the leading edge");
+    assert_eq!(east.remove.len(), 23, "the mirror edge");
+    let (add, remove) = crate::window_difference((0, 0), (1, 0), 10);
+    assert_eq!(east.add, add, "add is window(new) order");
+    assert_eq!(east.remove, remove, "remove is ascending (x, z)");
+
+    let diagonal = walk_once((21.0, 21.0));
+    assert_eq!(diagonal.center, (1, 1), "the +x/+z chunk");
+    assert_eq!(diagonal.add.len(), 37, "the two leading edges once");
+    assert_eq!(diagonal.remove.len(), 37, "the far corner");
+}
+
+/// M4.4 B (б): a move inside one chunk produces no window event at all.
+#[test]
+fn a_move_inside_one_chunk_emits_no_stream() {
+    let mut run = Run::new(0);
+    run.join(1, (5, 64, 5), true);
+    let outcome = run.step(&[(1, Step::Move((6.0, 64.0, 6.0)))]);
+    assert_eq!(outcome.moves.len(), 1, "the move was applied");
+    assert!(outcome.streams.is_empty(), "no chunk change, no stream");
+}
+
+/// The chunk boundary floors towards negative infinity: `x = -0.5` is chunk
+/// `-1`, and the tick reports that centre (M4.4 B, ШАГ 2).
+#[test]
+fn a_move_to_a_negative_coordinate_reports_the_floored_chunk() {
+    let west = walk_once((-0.5, 5.0));
+    assert_eq!(west.center, (-1, 0), "floor(-0.5/16) = -1");
+}
+
+/// M4.4 B (в): one move that crosses both a region tile and a chunk boundary
+/// produces exactly one window event, with the old-to-final difference and the
+/// final centre; delivery reaches the region that owns the player after the
+/// transfer.
+#[test]
+fn a_long_move_crossing_a_region_emits_one_stream_at_the_new_centre() {
+    let mut scheduler =
+        Scheduler::with_grid(vec![Region::new(SINGLE_REGION)], RegionGrid::new(SIDE), 0);
+    let (join, slot, mut receiver) = join_at(1, (5, 64, 5));
+    scheduler.insert_player(join);
+    scheduler.confirm_teleport(1);
+    slot.store(pos_move(165.0, 64.0, 165.0));
+    let outcome = scheduler.tick(0, Instant::now());
+
+    assert_eq!(outcome.streams.len(), 1, "one event vs old/final centre");
+    assert_eq!(outcome.transfers.len(), 1, "the same move crossed a tile");
+    let stream = &outcome.streams[0];
+    assert_eq!(stream.region, SINGLE_REGION, "the source region emitted it");
+    assert_eq!(stream.player, 1);
+    assert_eq!(stream.center, (10, 10), "floor(165/16) = 10");
+    let (add, remove) = crate::window_difference((0, 0), (10, 10), 10);
+    assert_eq!(stream.add, add);
+    assert_eq!(stream.remove, remove);
+
+    let region_b = outcome.transfers[0].to;
+    assert!(
+        scheduler
+            .region(region_b)
+            .is_some_and(|region| region.contains(1)),
+        "the player now belongs to the destination region"
+    );
+    super::deliver_streams(&mut scheduler, &outcome.streams);
+    match receiver.try_recv() {
+        Ok(ServerMessage::StreamChunks {
+            center,
+            add,
+            remove,
+        }) => {
+            assert_eq!(center, (10, 10));
+            assert_eq!(add, crate::window_difference((0, 0), (10, 10), 10).0);
+            assert_eq!(remove, crate::window_difference((0, 0), (10, 10), 10).1);
+        }
+        other => panic!("the post-transfer owner must receive the stream, got {other:?}"),
+    }
+}

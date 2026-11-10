@@ -271,6 +271,12 @@ fn the_same_scenario_is_byte_identical_twice() {
         first.iter().any(|line| line.contains("\"kind\":\"move\"")),
         "the transcript must contain an applied move"
     );
+    assert!(
+        first
+            .iter()
+            .any(|line| line.contains("\"kind\":\"stream\"")),
+        "the transcript must contain a window move"
+    );
     assert_eq!(first, second, "two runs must give the same transcript");
     assert_eq!(
         first_journal, second_journal,
@@ -291,8 +297,30 @@ fn the_transcript_is_independent_of_the_worker_count() {
     }
 }
 
+/// M4.4 B (г): the window moves of a walk are element-for-element identical at
+/// every K and on a repeated run — the tick side of streaming is
+/// deterministic.
+#[test]
+fn the_window_moves_are_identical_at_every_k() {
+    let streams = |workers: usize| -> Vec<String> {
+        let (transcript, _) = run_scenario(workers);
+        transcript
+            .into_iter()
+            .filter(|line| line.contains("\"kind\":\"stream\""))
+            .collect()
+    };
+    let base = streams(0);
+    assert!(!base.is_empty(), "the scenario must produce window moves");
+    for workers in [1usize, 4, 8] {
+        assert_eq!(streams(workers), base, "K={workers} must match K=0");
+    }
+    assert_eq!(streams(0), base, "a repeated run must match");
+}
+
 /// B3 (в): applying only the recorded journal to a fresh scheduler reproduces
-/// the live transcript — no format change needed.
+/// the live transcript — no format change needed. M4.4 B (д): the live
+/// transcript contains window moves and the playback reproduces them from the
+/// moves alone; the journal itself is **not** extended (no `stream` line).
 #[test]
 fn the_journal_reproduces_the_live_transcript() {
     let (live, journal) = run_scenario(0);
@@ -301,6 +329,15 @@ fn the_journal_reproduces_the_live_transcript() {
             .split(|byte| *byte == b'\n')
             .any(|line| !line.is_empty()),
         "the journal must have lines"
+    );
+    let journal_text = String::from_utf8(journal.clone()).expect("UTF-8");
+    assert!(
+        !journal_text.contains("\"kind\":\"stream\""),
+        "streaming is transport state, not a journal line"
+    );
+    assert!(
+        live.iter().any(|line| line.contains("\"kind\":\"stream\"")),
+        "the live transcript must contain window moves"
     );
     assert_eq!(
         playback(&journal, 0),

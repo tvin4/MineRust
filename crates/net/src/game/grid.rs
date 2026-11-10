@@ -18,6 +18,17 @@ use super::region::{RegionId, SINGLE_REGION};
 /// Blocks along one horizontal axis of a chunk: the game's fixed 16.
 pub const CHUNK_SIZE: i32 = 16;
 
+/// The chunk a precise position falls in: `floor(x / 16), floor(z / 16)`,
+/// floored the same way [`RegionGrid::region_of_position`] floors (a
+/// non-finite coordinate falls back to chunk 0). This is the chunk the
+/// player's chunk-cache centre and window are built around (M4.4 B).
+pub fn chunk_of_position(x: f64, z: f64) -> (i32, i32) {
+    (
+        floor_div(x, f64::from(CHUNK_SIZE)),
+        floor_div(z, f64::from(CHUNK_SIZE)),
+    )
+}
+
 /// The chunk → region mapping of the world.
 ///
 /// `Copy` and cheap: a region carries no reference to it, the tick receives
@@ -71,8 +82,7 @@ impl RegionGrid {
         if self.is_single() {
             return SINGLE_REGION;
         }
-        let chunk_x = floor_div(x, f64::from(CHUNK_SIZE));
-        let chunk_z = floor_div(z, f64::from(CHUNK_SIZE));
+        let (chunk_x, chunk_z) = chunk_of_position(x, z);
         self.region_of_chunk(chunk_x, chunk_z)
     }
 }
@@ -157,6 +167,15 @@ mod tests {
         assert_eq!(grid.region_of_block(-32, 0), negative);
         assert_ne!(grid.region_of_block(-33, 0), negative);
         assert_eq!(grid.region_of_position(-0.5, 0.5), negative);
+    }
+
+    #[test]
+    fn a_position_maps_to_its_floored_chunk() {
+        assert_eq!(chunk_of_position(0.5, 0.5), (0, 0));
+        assert_eq!(chunk_of_position(15.9, 16.0), (0, 1));
+        assert_eq!(chunk_of_position(-0.5, 0.5), (-1, 0), "negative floors");
+        assert_eq!(chunk_of_position(-16.0, -16.5), (-1, -2));
+        assert_eq!(chunk_of_position(f64::NAN, f64::INFINITY), (0, 0));
     }
 
     #[test]

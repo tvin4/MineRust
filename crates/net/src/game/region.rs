@@ -14,11 +14,12 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use tracing::warn;
 
-use super::grid::RegionGrid;
+use super::grid::{chunk_of_position, RegionGrid};
 use super::messages::{
     KickFlag, KickReason, MoveState, PlayerConnection, PlayerId, PlayerJoin, ServerMessage,
 };
 use super::movement::MoveUpdate;
+use crate::chunks::window_difference;
 
 /// Id of a region. M4.1 has exactly one, with the id in [`SINGLE_REGION`].
 pub type RegionId = i32;
@@ -95,19 +96,26 @@ pub struct Player {
     teleport_confirmed: bool,
     spawn: protocol::Position,
     position: PlayerPos,
+    /// Chunk the client's chunk-cache centre is at (M4.4 B): the join spawn
+    /// chunk first, then the chunk of the newest applied move. The tick
+    /// derives a [`StreamChunks`] event whenever this changes.
+    window_center: (i32, i32),
     connection: PlayerConnection,
 }
 
 impl Player {
     /// Builds a player from a join registration.
     pub fn new(join: PlayerJoin) -> Self {
+        let position = PlayerPos::entry(join.spawn);
+        let window_center = chunk_of_position(position.x, position.z);
         Self {
             id: join.id,
             name: join.name,
             view_distance: join.view_distance,
             teleport_confirmed: false,
             spawn: join.spawn,
-            position: PlayerPos::entry(join.spawn),
+            position,
+            window_center,
             connection: join.connection,
         }
     }
@@ -146,6 +154,11 @@ impl Player {
     /// The newest applied position and orientation (M4.2).
     pub fn position(&self) -> PlayerPos {
         self.position
+    }
+
+    /// The chunk the client's chunk-cache centre sits at (M4.4 B).
+    pub fn window_center(&self) -> (i32, i32) {
+        self.window_center
     }
 
     /// Applies a decoded movement packet to this player.
@@ -220,6 +233,30 @@ pub struct Transfer {
     pub seq: u32,
 }
 
+/// A player whose chunk window moved this tick (M4.4 B, ШАГ 2).
+///
+/// The region emits it the moment an applied move changes the player's cache
+/// centre chunk; the connection turns it into `set_chunk_cache_center`,
+/// `forget_level_chunk` and the next chunk batch (ШАГ 3). `seq` is the
+/// region's event counter, shared with moves and transfers. The connection
+/// owns the "what was really sent" bookkeeping; the region only says what
+/// the window wants, so the tick stays pure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamChunks {
+    /// Region that owns the player this tick.
+    pub region: RegionId,
+    /// Player whose window moved.
+    pub player: PlayerId,
+    /// Order of the event inside the region this tick.
+    pub seq: u32,
+    /// New cache centre, in chunks.
+    pub center: (i32, i32),
+    /// Chunks entering the window, in the new centre's send order.
+    pub add: Vec<(i32, i32)>,
+    /// Chunks leaving the window, ascending `(x, z)` (the traced order).
+    pub remove: Vec<(i32, i32)>,
+}
+
 /// Everything the regions produced in one tick.
 #[derive(Debug, Default, PartialEq)]
 pub struct TickOutcome {
@@ -229,16 +266,18 @@ pub struct TickOutcome {
     pub kicks: Vec<Kick>,
     /// Boundary crossings detected this tick, in `(from, seq)` order.
     pub transfers: Vec<Transfer>,
+    /// Window moves of this tick, in `(region, seq)` order.
+    pub streams: Vec<StreamChunks>,
 }
 
 impl TickOutcome {
     /// The canonical "outgoing" transcript of this tick (ARCH-M4 §1/§6).
     ///
     /// One compact JSON line per tick result, ordered by `(region, seq)` with
-    /// moves and transfers sharing the region's event counter; kicks follow.
-    /// M4.3 has no real outgoing packets yet, so the transcript is exactly the
-    /// tick results (moves, kicks, transfers) — `StreamChunks` arrives in
-    /// M4.4. Used by the determinism tests and the replay check.
+    /// moves, transfers and window moves sharing the region's event counter;
+    /// kicks follow. The transcript is the ordered list of everything the
+    /// ticks produced — M4.3's positions and crossings plus M4.4 B's
+    /// `stream` events. Used by the determinism tests and the replay check.
     pub fn transcript(&self, tick: u64) -> Vec<String> {
         let mut events: Vec<(RegionId, u32, u8, serde_json::Value)> = Vec::new();
         for moved in &self.moves {
@@ -269,6 +308,19 @@ impl TickOutcome {
             });
             events.push((transfer.from, transfer.seq, 1, value));
         }
+        for stream in &self.streams {
+            let value = serde_json::json!({
+                "tick": tick,
+                "region": stream.region,
+                "kind": "stream",
+                "src": stream.player,
+                "seq": stream.seq,
+                "center": [stream.center.0, stream.center.1],
+                "add": stream.add,
+                "remove": stream.remove,
+            });
+            events.push((stream.region, stream.seq, 2, value));
+        }
         for kick in &self.kicks {
             let value = serde_json::json!({
                 "tick": tick,
@@ -277,7 +329,7 @@ impl TickOutcome {
                 "src": kick.id,
                 "reason": kick.reason.message(),
             });
-            events.push((kick.region, u32::MAX, 2, value));
+            events.push((kick.region, u32::MAX, 3, value));
         }
         events.sort_by_key(|(region, seq, kind, _)| (*region, *seq, *kind));
         events
@@ -417,6 +469,27 @@ impl Region {
                             to,
                             seq,
                         });
+                        seq += 1;
+                    }
+                    // The move may also have carried the player into another
+                    // cache chunk: the window wants to move with it. One event
+                    // per tick compares the centre at the tick's start with the
+                    // final one, so several chunk steps in a tick still give
+                    // one window difference (M4.4 B, ШАГ 2).
+                    let center = chunk_of_position(position.x, position.z);
+                    let previous = player.window_center;
+                    if center != previous {
+                        let (add, remove) =
+                            window_difference(previous, center, player.view_distance());
+                        outcome.streams.push(StreamChunks {
+                            region: self.id,
+                            player: id,
+                            seq,
+                            center,
+                            add,
+                            remove,
+                        });
+                        player.window_center = center;
                         seq += 1;
                     }
                 }

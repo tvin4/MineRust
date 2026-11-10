@@ -37,7 +37,8 @@ pub use messages::{
 pub use metrics::{TickMetrics, TickMetricsHandle};
 pub use movement::MoveUpdate;
 pub use region::{
-    AppliedMove, Kick, Player, PlayerPos, Region, RegionId, TickOutcome, Transfer, SINGLE_REGION,
+    AppliedMove, Kick, Player, PlayerPos, Region, RegionId, StreamChunks, TickOutcome, Transfer,
+    SINGLE_REGION,
 };
 pub use replay::{Replay, ReplayRecord};
 pub use scheduler::Scheduler;
@@ -288,6 +289,7 @@ fn game_loop(
         // the tick's positions, so they are recorded after them.
         record_moves(&mut replay, tick, &outcome.moves);
         record_transfers(&mut replay, tick, &outcome.transfers);
+        deliver_streams(&mut scheduler, &outcome.streams);
         for kick in &outcome.kicks {
             warn!(
                 player = kick.id,
@@ -462,6 +464,32 @@ fn record_transfers<W: std::io::Write>(replay: &mut Replay<W>, tick: u64, transf
                 "to": transfer.to,
             }),
         );
+    }
+}
+
+/// Delivers one tick's window moves to the connections (M4.4 B, ШАГ 2/3).
+///
+/// Runs **after** [`Scheduler::tick`], so the `player_id → region_id` index
+/// already carries this tick's transfers and a player that crossed a boundary
+/// gets its `stream` in the region that owns it from now on. The message is a
+/// plain [`ServerMessage::StreamChunks`]; delivery uses the shared `try_send`
+/// policy ([`Scheduler::deliver`]), so the tick never blocks and a full
+/// outbound queue kicks the player. The journal is **not** extended —
+/// streaming is transport state, not game state (M4.4 B).
+fn deliver_streams(scheduler: &mut Scheduler, streams: &[StreamChunks]) {
+    for stream in streams {
+        let message = ServerMessage::StreamChunks {
+            center: stream.center,
+            add: stream.add.clone(),
+            remove: stream.remove.clone(),
+        };
+        if let Some(kick) = scheduler.deliver(stream.player, message) {
+            warn!(
+                player = kick.id,
+                reason = kick.reason.message(),
+                "kicking a slow player"
+            );
+        }
     }
 }
 

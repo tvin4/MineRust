@@ -13,7 +13,7 @@ pub mod game;
 pub mod loader;
 pub mod trace;
 
-pub use chunks::{window, ReadyChunks};
+pub use chunks::{window, window_difference, ReadyChunks};
 pub use connection::{serve, serve_with, WorldInfo};
 pub use error::ConnectionError;
 pub use frame::{read_frame, write_frame};

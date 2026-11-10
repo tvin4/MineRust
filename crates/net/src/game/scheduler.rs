@@ -24,9 +24,9 @@ use std::time::Instant;
 use tracing::warn;
 
 use super::grid::RegionGrid;
-use super::messages::{PlayerId, PlayerJoin};
+use super::messages::{PlayerId, PlayerJoin, ServerMessage};
 use super::pool::{Job, Pool};
-use super::region::{Region, RegionId, TickOutcome};
+use super::region::{Kick, Region, RegionId, TickOutcome};
 
 /// Ticks every region once per tick, inline or through the region pool, then
 /// applies the transfers.
@@ -172,6 +172,19 @@ impl Scheduler {
         }
     }
 
+    /// Sends a message to a player's current owner region, never blocking the
+    /// tick (M4.4 B).
+    ///
+    /// The owner comes from the `player_id → region_id` index **after** the
+    /// transfers of this tick, so a player that crossed a boundary receives
+    /// the message in the region that owns it from now on. Delivery is the
+    /// same `try_send` policy as every other tick → connection message: when
+    /// the queue is full the player is kicked ([`Region::deliver`]).
+    pub fn deliver(&mut self, id: PlayerId, message: ServerMessage) -> Option<Kick> {
+        let region_id = self.region_of(id)?;
+        self.region_mut(region_id)?.deliver(id, message)
+    }
+
     /// Total number of players across all regions (log/diagnostics only).
     pub fn player_count(&self) -> usize {
         self.regions.iter().map(Region::player_count).sum()
@@ -223,6 +236,7 @@ impl Scheduler {
             outcome.moves.extend(produced.moves);
             outcome.kicks.extend(produced.kicks);
             outcome.transfers.extend(produced.transfers);
+            outcome.streams.extend(produced.streams);
         }
         outcome
     }
@@ -274,6 +288,7 @@ impl Scheduler {
             merged.moves.extend(outcome.moves);
             merged.kicks.extend(outcome.kicks);
             merged.transfers.extend(outcome.transfers);
+            merged.streams.extend(outcome.streams);
             self.regions.push(region);
         }
         if self.regions.len() != total {

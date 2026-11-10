@@ -348,6 +348,22 @@ where
                     Some(ServerMessage::Send { id, payload }) => {
                         write_tracked(&mut writer, ProtocolState::Play, id, &payload).await?;
                     }
+                    // The player's window moved (M4.4 B). ШАГ 3 turns this
+                    // into `set_chunk_cache_center`, `forget_level_chunk` for
+                    // the leaving chunks and a new paced batch for the
+                    // entering ones; until then the event is only logged.
+                    Some(ServerMessage::StreamChunks {
+                        center,
+                        add,
+                        remove,
+                    }) => {
+                        debug!(
+                            center = ?center,
+                            add = add.len(),
+                            remove = remove.len(),
+                            "window move (streaming lands in ШАГ 3)"
+                        );
+                    }
                     // The game thread dropped this player (quit); the
                     // connection closes. The kick reason is read in M4.1's
                     // kick policy (see the game module).

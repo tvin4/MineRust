@@ -10,7 +10,7 @@
 //! index so a join resolves its window in O(1) per coordinate, never by
 //! scanning the whole batch.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use protocol::LevelChunkWithLight;
 
@@ -109,6 +109,38 @@ pub fn window(center_x: i32, center_z: i32, radius: i32) -> Vec<(i32, i32)> {
         (dx * dx + dz * dz, x, z)
     });
     out
+}
+
+/// A window shift (M4.4 B): the chunks entering the window and the chunks
+/// leaving it, as [`window_difference`] returns them.
+pub type WindowShift = (Vec<(i32, i32)>, Vec<(i32, i32)>);
+
+/// The window change when the cache centre moves from `old` to `new` at view
+/// distance `radius`, as a streaming event needs it (M4.4 B, ШАГ 2).
+///
+/// Returns `(add, remove)`:
+///
+/// * `add` = `window(new) − window(old)`, in the new centre's send order
+///   ([`window`]) — the chunks the connection has to request;
+/// * `remove` = `window(old) − window(new)`, ascending `(x, z)` — the traced
+///   vanilla forget order (`window-p4/p5.jsonl`, ШАГ 1).
+///
+/// Both are pure and deterministic; the caller owns the centre update.
+pub fn window_difference(old: (i32, i32), new: (i32, i32), radius: i32) -> WindowShift {
+    let old_window = window(old.0, old.1, radius);
+    let old_set: BTreeSet<(i32, i32)> = old_window.iter().copied().collect();
+    let new_window = window(new.0, new.1, radius);
+    let new_set: BTreeSet<(i32, i32)> = new_window.iter().copied().collect();
+    // `BTreeSet::difference` walks the receiver in ascending `(x, z)`, which
+    // is exactly the traced forget order.
+    let remove: Vec<(i32, i32)> = old_set.difference(&new_set).copied().collect();
+    // `add` keeps the new centre's send order, so it is a filtered
+    // `new_window`, never a re-sort.
+    let add: Vec<(i32, i32)> = new_window
+        .into_iter()
+        .filter(|cell| !old_set.contains(cell))
+        .collect();
+    (add, remove)
 }
 
 /// The immutable ready world behind a [`crate::loader::ChunkSource`]: the
@@ -256,6 +288,30 @@ mod tests {
         let diagonal = set(7, -1, 10);
         assert_eq!(diagonal.difference(&here).count(), 37, "+x/+z added");
         assert_eq!(here.difference(&diagonal).count(), 37, "the far corner");
+    }
+
+    /// [`window_difference`] splits a shift into `add` (new centre's send
+    /// order, so it is a filtered `window(new)`) and `remove` (ascending
+    /// `(x, z)`, the traced forget order) — the two orders the streaming
+    /// event and the forget codec carry.
+    #[test]
+    fn the_window_difference_is_ordered_like_the_traces() {
+        let old = (6, -2);
+        let new = (7, -1);
+        let (add, remove) = window_difference(old, new, 10);
+        assert_eq!(add.len(), 37, "the diagonal adds its two edges once");
+        assert_eq!(remove.len(), 37, "and removes the mirror corner");
+
+        let old_set = set(old.0, old.1, 10);
+        let new_set = set(new.0, new.1, 10);
+        let expected_add: Vec<(i32, i32)> = window(new.0, new.1, 10)
+            .into_iter()
+            .filter(|cell| !old_set.contains(cell))
+            .collect();
+        assert_eq!(add, expected_add, "add keeps window(new) send order");
+        let expected_remove: Vec<(i32, i32)> = old_set.difference(&new_set).copied().collect();
+        assert_eq!(remove, expected_remove, "remove is ascending (x, z)");
+        assert!(remove.windows(2).all(|pair| pair[0] <= pair[1]));
     }
 
     /// The measured radii reproduce their traced counts exactly: the `K(R)`

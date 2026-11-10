@@ -80,6 +80,19 @@ pub enum ServerMessage {
         /// Payload (packet id excluded).
         payload: Vec<u8>,
     },
+    /// The player's chunk window moved (M4.4 B, ШАГ 2): the tick's centre
+    /// change for one player. The connection turns it into
+    /// `set_chunk_cache_center`, `forget_level_chunk` and new chunk
+    /// batches (Шаг 3). `add` and `remove` are the window difference around
+    /// `center`, already in wire order.
+    StreamChunks {
+        /// New cache centre, in chunks.
+        center: (i32, i32),
+        /// Chunks entering the window, in window send order.
+        add: Vec<(i32, i32)>,
+        /// Chunks leaving the window, ascending `(x, z)` (the traced order).
+        remove: Vec<(i32, i32)>,
+    },
 }
 
 /// Why the game thread closes a connection.
