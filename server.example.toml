@@ -25,6 +25,13 @@ simulation_distance = 10
 # are idle while fewer regions are loaded (M4.3 ticks the single region inline).
 # workers = 4
 
+# Region tile side in chunks (M4.3): the world is split into squares of this
+# many chunks and each square is one region. 0 (the default) means no split:
+# the whole world is region 0 and the server behaves exactly as before M4.3.
+# The value is not decided yet (M4.6 benchmark); leave it at 0 unless testing
+# the region grid.
+# region_side = 0
+
 # Path to the client jar of your game installation.
 client_jar = "path/to/client.jar"
 

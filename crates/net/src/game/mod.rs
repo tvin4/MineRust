@@ -11,6 +11,7 @@
 //! choices, thresholds and the replay format are M4.1 **[hypothesis]**
 //! where no trace backs them (see `docs/ARCH-M4.md` §0/§1/§3).
 
+mod grid;
 mod messages;
 mod metrics;
 mod movement;
@@ -20,8 +21,11 @@ mod replay;
 mod scheduler;
 
 #[cfg(test)]
+mod region_tests;
+#[cfg(test)]
 mod tests;
 
+pub use grid::{RegionGrid, CHUNK_SIZE};
 pub use messages::{
     KickFlag, KickReason, MoveKind, MoveSlot, MoveState, PlayerConnection, PlayerId, PlayerJoin,
     ServerMessage, ToGame,
@@ -82,6 +86,9 @@ pub struct GameConfig {
     /// Worker threads of the region pool (M4.3); `0` means no pool and a
     /// sequential tick, which is what every pre-M4.3 caller keeps using.
     pub workers: usize,
+    /// Side of a region tile in chunks (M4.3 part B); `0` means no split:
+    /// the whole world is [`SINGLE_REGION`], the pre-M4.3 behaviour.
+    pub region_side: i32,
 }
 
 impl Default for GameConfig {
@@ -93,6 +100,7 @@ impl Default for GameConfig {
             outbound_capacity: OUTBOUND_CAPACITY,
             ticks_limit: None,
             workers: 0,
+            region_side: 0,
         }
     }
 }

@@ -240,6 +240,7 @@ pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> Result<(), R
     );
     let game_config = net::game::GameConfig {
         workers: config.workers,
+        region_side: config.region_side,
         ..net::game::GameConfig::default()
     };
     net::serve_with(
@@ -300,6 +301,7 @@ mod tests {
             view_distance: config::DEFAULT_DISTANCES,
             simulation_distance: config::DEFAULT_DISTANCES,
             workers: 0,
+            region_side: 0,
         }
     }
 

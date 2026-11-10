@@ -127,6 +127,13 @@ pub struct ServerConfig {
     /// logical cores − 2, at least 1.
     #[serde(default = "default_workers")]
     pub workers: usize,
+    /// Side of a region tile in chunks (M4.3 part B). `0` — the default —
+    /// means "no split": the whole world is one region, exactly the pre-M4.3
+    /// behaviour, so nothing changes on the live server until the owner
+    /// raises it. The value is unverified by a benchmark yet (see D3 and
+    /// `docs/DECISIONS.md`): M4.6 decides the side.
+    #[serde(default)]
+    pub region_side: i32,
     /// Optional path to a saved world directory (step 3.3, M3).
     ///
     /// The directory is a world save: it holds `level.dat` (whose
@@ -324,6 +331,17 @@ simulation_distance = 4
         let text = example_toml() + "workers = 4\n";
         let config: ServerConfig = toml::from_str(&text).expect("valid toml");
         assert_eq!(config.workers, 4);
+    }
+
+    #[test]
+    fn region_side_defaults_to_zero_and_parses_an_override() {
+        let config: ServerConfig = toml::from_str(&example_toml()).expect("valid toml");
+        assert_eq!(config.region_side, 0, "absent means no split");
+
+        let text = example_toml() + "region_side = 64\n";
+        let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+        assert_eq!(config.region_side, 64);
+        config.validate().expect("valid");
     }
 
     #[test]
