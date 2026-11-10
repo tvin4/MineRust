@@ -20,6 +20,18 @@ fn default_distances() -> i32 {
     DEFAULT_DISTANCES
 }
 
+/// Serde default of `workers` (M4.3 A2): logical cores − 2, at least 1.
+///
+/// The two spare cores are left to the network/tokio threads and the OS, so
+/// the region workers do not starve the connections. Set `workers = 0` to
+/// disable the pool and tick every region on the game thread (the pre-M4.3
+/// behaviour).
+fn default_workers() -> usize {
+    std::thread::available_parallelism()
+        .map(|cores| cores.get().saturating_sub(2).max(1))
+        .unwrap_or(1)
+}
+
 /// Errors while loading or validating the server configuration.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -109,6 +121,12 @@ pub struct ServerConfig {
     /// [`DEFAULT_DISTANCES`] like `view_distance`.
     #[serde(default = "default_distances")]
     pub simulation_distance: i32,
+    /// Worker threads of the region pool (M4.3): how many regions are ticked
+    /// in parallel. `0` disables the pool and ticks every region on the game
+    /// thread (the M4.2 behaviour). Absent means [`default_workers`]:
+    /// logical cores − 2, at least 1.
+    #[serde(default = "default_workers")]
+    pub workers: usize,
     /// Optional path to a saved world directory (step 3.3, M3).
     ///
     /// The directory is a world save: it holds `level.dat` (whose
@@ -286,6 +304,26 @@ simulation_distance = 4
         assert_eq!(config.view_distance, 6);
         assert_eq!(config.simulation_distance, 4);
         config.validate().expect("valid");
+    }
+
+    #[test]
+    fn workers_default_to_the_cores_minus_two_and_zero_disables_the_pool() {
+        let config: ServerConfig = toml::from_str(&example_toml()).expect("valid toml");
+        let expected = default_workers();
+        let cores = std::thread::available_parallelism()
+            .map(|cores| cores.get())
+            .unwrap_or(1);
+        assert_eq!(config.workers, expected, "absent means the serde default");
+        assert_eq!(expected, cores.saturating_sub(2).max(1), "cores - 2, min 1");
+
+        let text = example_toml() + "workers = 0\n";
+        let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+        assert_eq!(config.workers, 0, "0 disables the pool");
+        config.validate().expect("valid");
+
+        let text = example_toml() + "workers = 4\n";
+        let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+        assert_eq!(config.workers, 4);
     }
 
     #[test]

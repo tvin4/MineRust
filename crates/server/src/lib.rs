@@ -238,7 +238,12 @@ pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> Result<(), R
         version_name = %config.version_name,
         "listening"
     );
-    net::serve(
+    let game_config = net::game::GameConfig {
+        workers: config.workers,
+        ..net::game::GameConfig::default()
+    };
+    net::serve_with(
+        game_config,
         listener,
         Arc::new(status_info(&config)),
         game_data,
@@ -294,6 +299,7 @@ mod tests {
             vanilla_server_dir: None,
             view_distance: config::DEFAULT_DISTANCES,
             simulation_distance: config::DEFAULT_DISTANCES,
+            workers: 0,
         }
     }
 

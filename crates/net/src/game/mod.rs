@@ -14,6 +14,7 @@
 mod messages;
 mod metrics;
 mod movement;
+mod pool;
 mod region;
 mod replay;
 mod scheduler;
@@ -78,6 +79,9 @@ pub struct GameConfig {
     pub outbound_capacity: usize,
     /// Stop after this many ticks; `None` runs until the channel closes.
     pub ticks_limit: Option<u64>,
+    /// Worker threads of the region pool (M4.3); `0` means no pool and a
+    /// sequential tick, which is what every pre-M4.3 caller keeps using.
+    pub workers: usize,
 }
 
 impl Default for GameConfig {
@@ -88,6 +92,7 @@ impl Default for GameConfig {
             join_capacity: JOIN_CAPACITY,
             outbound_capacity: OUTBOUND_CAPACITY,
             ticks_limit: None,
+            workers: 0,
         }
     }
 }
@@ -227,7 +232,7 @@ fn game_loop(
     metrics: &TickMetricsHandle,
     stop: &AtomicBool,
 ) {
-    let mut scheduler = Scheduler::new(vec![Region::new(SINGLE_REGION)]);
+    let mut scheduler = Scheduler::with_workers(vec![Region::new(SINGLE_REGION)], config.workers);
     let mut recorder = Recorder::new(config.period);
     let mut replay = Replay::new(open_replay());
     let started = Instant::now();

@@ -7,6 +7,9 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+#[cfg(test)]
+use std::time::Duration;
+
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use tracing::warn;
@@ -193,7 +196,7 @@ pub struct AppliedMove {
 }
 
 /// Everything the regions produced in one tick.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub struct TickOutcome {
     /// Positions applied from movement packets, in region then player order.
     pub moves: Vec<AppliedMove>,
@@ -206,6 +209,10 @@ pub struct TickOutcome {
 pub struct Region {
     id: RegionId,
     players: HashMap<PlayerId, Player>,
+    /// Test-only slowdown of [`Region::tick`] (ordering measurement of the
+    /// pool); zero in production.
+    #[cfg(test)]
+    delay: Duration,
 }
 
 impl Region {
@@ -214,6 +221,8 @@ impl Region {
         Self {
             id,
             players: HashMap::new(),
+            #[cfg(test)]
+            delay: Duration::ZERO,
         }
     }
 
@@ -264,9 +273,21 @@ impl Region {
     /// dropped (ARCH-M4 §0). No movement is validated in M4. Kicks are not
     /// produced here — they come from [`Region::deliver`], which M4.4's
     /// streaming calls.
+    ///
+    /// Players are visited in id order: a `HashMap` iteration order is not
+    /// deterministic, and the pool's merge must be reproducible.
     pub fn tick(&mut self, _tick: u64, _now: Instant) -> TickOutcome {
+        #[cfg(test)]
+        if !self.delay.is_zero() {
+            std::thread::sleep(self.delay);
+        }
         let mut outcome = TickOutcome::default();
-        for player in self.players.values_mut() {
+        let mut ids: Vec<PlayerId> = self.players.keys().copied().collect();
+        ids.sort_unstable();
+        for id in ids {
+            let Some(player) = self.players.get_mut(&id) else {
+                continue;
+            };
             let Some(state) = player.take_move() else {
                 continue;
             };
@@ -292,6 +313,12 @@ impl Region {
             }
         }
         outcome
+    }
+
+    /// Slows [`Region::tick`] down for the ordering measurement (tests only).
+    #[cfg(test)]
+    pub(crate) fn set_test_delay(&mut self, delay: Duration) {
+        self.delay = delay;
     }
 
     /// Sends a message to one player without ever blocking the tick.

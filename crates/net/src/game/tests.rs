@@ -490,3 +490,178 @@ fn a_thousand_idle_ticks_do_not_drift() {
         m.jitter_p99_ms
     );
 }
+
+/// Three confirmed players of region `region`, each with one queued move.
+///
+/// The same fixture builds every scheduler of the pool tests, so a different
+/// `K` sees byte-identical input and only the transport may differ.
+fn pool_scenario() -> Vec<Region> {
+    let mut regions = Vec::new();
+    for region in 0..8 {
+        let mut built = Region::new(region);
+        for player in 0..2 {
+            let id = region * 10 + player + 1;
+            let (join, _receiver, _kick, slot) = join_fixture_with(id, OUTBOUND_CAPACITY);
+            built.insert(join);
+            if let Some(player) = built.get_mut(id) {
+                player.confirm_teleport();
+            }
+            slot.store(pos_move(
+                f64::from(id),
+                64.0 + f64::from(player),
+                -f64::from(id),
+            ));
+        }
+        regions.push(built);
+    }
+    regions
+}
+
+#[test]
+fn k_zero_one_and_four_merge_the_same_outcome_for_eight_regions() {
+    let mut inline = Scheduler::with_workers(pool_scenario(), 0);
+    assert_eq!(inline.worker_count(), 0, "K=0 keeps the inline tick");
+    let expected = inline.tick(7, Instant::now());
+    assert_eq!(expected.moves.len(), 16, "two moves per region");
+
+    for k in [1usize, 4] {
+        let mut scheduler = Scheduler::with_workers(pool_scenario(), k);
+        assert_eq!(scheduler.worker_count(), k, "K={k} starts {k} workers");
+        let pooled = scheduler.tick(7, Instant::now());
+        assert_eq!(
+            pooled, expected,
+            "K={k} must merge exactly the inline result"
+        );
+        assert_eq!(scheduler.regions().len(), 8, "every region came back");
+        assert_eq!(scheduler.player_count(), 16, "no player was lost");
+    }
+}
+
+#[test]
+fn the_merge_order_does_not_depend_on_the_completion_order() {
+    let mut base = Scheduler::with_workers(pool_scenario(), 4);
+    let baseline = base.tick(1, Instant::now());
+
+    let mut regions = pool_scenario();
+    // Region 0 finishes ~50 ms after the others; the merge must still be
+    // ordered by region id, not by who returned first.
+    regions[0].set_test_delay(Duration::from_millis(50));
+    let mut delayed = Scheduler::with_workers(regions, 4);
+    let outcome = delayed.tick(1, Instant::now());
+    assert_eq!(outcome, baseline, "a late region changes no order");
+    let ids: Vec<i32> = outcome.moves.iter().map(|moved| moved.region).collect();
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    assert_eq!(ids, sorted, "moves are merged in region id order");
+}
+
+#[test]
+fn the_region_pool_stops_within_two_seconds() {
+    let scheduler = Scheduler::with_workers(vec![Region::new(SINGLE_REGION)], 4);
+    assert_eq!(scheduler.worker_count(), 4);
+    let started = Instant::now();
+    drop(scheduler);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "the pool took {:?} to stop",
+        started.elapsed()
+    );
+}
+
+/// The game loop with a pool: the tick still runs and the pool joins on exit.
+#[test]
+fn the_loop_runs_and_stops_with_a_region_pool() {
+    let config = GameConfig {
+        period: Duration::from_millis(1),
+        ticks_limit: Some(5),
+        workers: 4,
+        ..GameConfig::default()
+    };
+    let (thread, handle) = GameHandle::spawn(config).expect("spawn the game thread");
+    thread.join().expect("the game thread panicked");
+    assert_eq!(handle.metrics().ticks, 5, "the loop stopped at the limit");
+}
+
+/// The M4.3 A2 acceptance test: 1000 idle 20 TPS ticks through the pool.
+///
+/// Four empty regions exercising the dispatch/barrier path (a single region
+/// would tick inline by design). ~50 s of wall clock, so it is ignored like
+/// the M4.1 measurement; run it with `--ignored --nocapture`.
+#[test]
+#[ignore = "runs 1000 real 50 ms pooled ticks (~50 s); run with --ignored --nocapture"]
+fn a_thousand_idle_pooled_ticks_do_not_drift() {
+    let period = TICK_PERIOD;
+    let regions: Vec<Region> = (0..4).map(Region::new).collect();
+    let mut scheduler = Scheduler::with_workers(regions, 4);
+    assert_eq!(scheduler.worker_count(), 4);
+    let start = Instant::now();
+    let mut deadline = start + period;
+    let mut jitter: Vec<u64> = Vec::with_capacity(1000);
+    for tick in 0..1000u64 {
+        let now = Instant::now();
+        if deadline > now {
+            std::thread::sleep(deadline - now);
+        }
+        let woke = Instant::now();
+        jitter.push(woke.saturating_duration_since(deadline).as_micros() as u64);
+        let _ = scheduler.tick(tick, deadline);
+        deadline += period;
+    }
+    let expected = period.mul_f64(1000.0);
+    let drift_ms = (start.elapsed().as_secs_f64() - expected.as_secs_f64()) * 1000.0;
+    jitter.sort_unstable();
+    let p50 = jitter[jitter.len() / 2] as f64 / 1000.0;
+    let p99 = jitter[jitter.len() * 99 / 100] as f64 / 1000.0;
+    let max = *jitter.last().expect("1000 samples") as f64 / 1000.0;
+    println!(
+        "1000 idle pooled ticks (K=4, 4 regions): drift {drift_ms:.3} ms | \
+         jitter p50 {p50:.3} p99 {p99:.3} max {max:.3} ms"
+    );
+    assert!(
+        drift_ms.abs() < 5.0,
+        "drift {drift_ms} ms must be under 5 ms"
+    );
+    assert!(p99 < 20.0, "jitter p99 {p99} ms must be under 20 ms");
+}
+
+/// Measurement only: one region, inline tick against forced dispatch.
+///
+/// Prints p50/p99 of `Scheduler::tick` in microseconds; the decision it backs
+/// is in `docs/DECISIONS.md` (inline for ≤1 region, hypothesis until M4.6).
+#[test]
+#[ignore = "measurement; run with --ignored --nocapture (--release for numbers)"]
+fn inline_versus_pool_dispatch_on_one_region() {
+    let (inline_p50, inline_p99) = measure_one_region(false);
+    let (dispatch_p50, dispatch_p99) = measure_one_region(true);
+    println!(
+        "one region, 20000 ticks: inline p50 {inline_p50:.3} p99 {inline_p99:.3} us | \
+         pool dispatch p50 {dispatch_p50:.3} p99 {dispatch_p99:.3} us"
+    );
+}
+
+/// Times `samples` ticks of a single region, inline or through the pool.
+///
+/// Nanosecond resolution: a single dispatch is a channel round trip of a few
+/// microseconds at most, invisible to a millisecond clock.
+fn measure_one_region(dispatch: bool) -> (f64, f64) {
+    const SAMPLES: usize = 20_000;
+    const WARMUP: usize = 1_000;
+    let mut scheduler = Scheduler::with_workers(vec![Region::new(SINGLE_REGION)], 4);
+    if dispatch {
+        scheduler.force_dispatch();
+    }
+    let now = Instant::now();
+    let mut durations: Vec<u64> = Vec::with_capacity(SAMPLES);
+    for tick in 0..(WARMUP + SAMPLES) {
+        let started = Instant::now();
+        let _ = scheduler.tick(tick as u64, now);
+        let took = started.elapsed().as_nanos() as u64;
+        if tick >= WARMUP {
+            durations.push(took);
+        }
+    }
+    durations.sort_unstable();
+    let p50 = durations[durations.len() / 2] as f64 / 1000.0;
+    let p99 = durations[durations.len() * 99 / 100] as f64 / 1000.0;
+    (p50, p99)
+}

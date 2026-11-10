@@ -19,6 +19,12 @@ max_players = 20
 view_distance = 10
 simulation_distance = 10
 
+# Region pool (M4.3): how many regions tick in parallel on their own threads.
+# 0 disables the pool and ticks everything on the game thread. Absent means
+# logical cores - 2 (at least 1). At most this many region threads exist; they
+# are idle while fewer regions are loaded (M4.3 ticks the single region inline).
+# workers = 4
+
 # Path to the client jar of your game installation.
 client_jar = "path/to/client.jar"
 

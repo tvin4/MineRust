@@ -12,7 +12,7 @@ pub mod game;
 pub mod loader;
 pub mod trace;
 
-pub use connection::{serve, WorldInfo};
+pub use connection::{serve, serve_with, WorldInfo};
 pub use error::ConnectionError;
 pub use frame::{read_frame, write_frame};
 pub use loader::{ChunkSource, Loader};

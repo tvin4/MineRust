@@ -59,7 +59,33 @@ const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
 /// `loader` is the chunk loader pool (`None` for a server without a world,
 /// no chunks are sent) and `world` carries the join values of the save —
 /// both read at startup on the server side.
+///
+/// Keeps the M4.1 game configuration (no region pool); [`serve_with`] takes
+/// one from the caller.
 pub async fn serve(
+    listener: TcpListener,
+    status: Arc<StatusInfo>,
+    game_data: Arc<GameData>,
+    packet_ids: Arc<PacketIds>,
+    loader: Option<Loader>,
+    world: WorldInfo,
+) -> std::io::Result<()> {
+    serve_with(
+        game::GameConfig::default(),
+        listener,
+        status,
+        game_data,
+        packet_ids,
+        loader,
+        world,
+    )
+    .await
+}
+
+/// [`serve`] with an explicit game configuration (the server crate passes
+/// the region-pool `workers` from `server.toml`).
+pub async fn serve_with(
+    game_config: game::GameConfig,
     listener: TcpListener,
     status: Arc<StatusInfo>,
     game_data: Arc<GameData>,
@@ -70,7 +96,7 @@ pub async fn serve(
     // One game thread owns the players of this server (ARCH-M4 §0). It runs
     // until this function returns; on shutdown it is asked to stop and
     // joined with a timeout, so a stuck tick cannot block the exit.
-    let (game_thread, game) = game::GameHandle::spawn(game::GameConfig::default())?;
+    let (game_thread, game) = game::GameHandle::spawn(game_config)?;
     let accepting = async move {
         loop {
             let (stream, peer) = listener.accept().await?;
