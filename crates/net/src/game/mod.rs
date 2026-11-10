@@ -23,6 +23,10 @@ mod scheduler;
 #[cfg(test)]
 mod region_tests;
 #[cfg(test)]
+mod replay_tests;
+#[cfg(test)]
+mod test_support;
+#[cfg(test)]
 mod tests;
 
 pub use grid::{RegionGrid, CHUNK_SIZE};

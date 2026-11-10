@@ -9,52 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Instant;
 
-use protocol::Position;
-use tokio::sync::mpsc;
-
+use super::test_support::{join_at, pos_move, SIDE};
 use super::*;
-
-/// Tile side in chunks of every scenario here.
-const SIDE: i32 = 2;
-
-/// A join registration at a block, with the player's movement slot and the
-/// connection's side of the outbound queue.
-fn join_at(
-    id: PlayerId,
-    spawn: (i32, i32, i32),
-) -> (PlayerJoin, Arc<MoveSlot>, mpsc::Receiver<ServerMessage>) {
-    let (outbound, receiver) = mpsc::channel(OUTBOUND_CAPACITY);
-    let slot = Arc::new(MoveSlot::default());
-    let join = PlayerJoin {
-        id,
-        name: format!("player-{id}"),
-        view_distance: 10,
-        spawn: Position {
-            x: spawn.0,
-            y: spawn.1,
-            z: spawn.2,
-        },
-        connection: PlayerConnection {
-            outbound,
-            kick: Arc::new(KickFlag::default()),
-            last_move: Arc::clone(&slot),
-        },
-    };
-    (join, slot, receiver)
-}
-
-/// Payload of `move_player_pos`: three big-endian doubles and the flags byte.
-fn pos_move(x: f64, y: f64, z: f64) -> MoveState {
-    let mut payload = Vec::with_capacity(25);
-    for value in [x, y, z] {
-        payload.extend_from_slice(&value.to_be_bytes());
-    }
-    payload.push(0x01);
-    MoveState {
-        kind: MoveKind::Pos,
-        payload,
-    }
-}
 
 /// What one player does in one tick of a scenario.
 #[derive(Debug, Clone, Copy)]
