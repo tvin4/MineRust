@@ -315,6 +315,54 @@ impl SetCenterChunk {
     }
 }
 
+/// Clientbound Forget Level Chunk: tells the client to drop the chunk at
+/// `(chunk_x, chunk_z)` from its cache, one packet per chunk.
+///
+/// The payload is two big-endian `i32` (8 bytes): the layout the vanilla
+/// 26.3 walking traces show (`window-p4/p5.jsonl`, M4.4 B) — not packed
+/// coordinates and not VarInts. SOURCE: parity trace; ids from
+/// `reports/packets.json` (protocol id 38).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ForgetLevelChunk {
+    /// Chunk X to drop.
+    pub chunk_x: i32,
+    /// Chunk Z to drop.
+    pub chunk_z: i32,
+}
+
+impl ForgetLevelChunk {
+    /// Packet id of Forget Level Chunk (play state, clientbound).
+    pub const ID: u32 = 0x26;
+
+    /// Key that resolves the Forget Level Chunk id at runtime.
+    pub const KEY: PacketKey = PacketKey::clientbound(
+        ProtocolState::Play,
+        "minecraft:forget_level_chunk",
+        Self::ID,
+    );
+
+    /// Encodes the payload (packet id excluded): two big-endian `i32`.
+    pub fn encode_payload(&self) -> Vec<u8> {
+        let mut writer = PacketWriter::new();
+        writer.write_i32(self.chunk_x);
+        writer.write_i32(self.chunk_z);
+        writer.into_bytes()
+    }
+
+    /// Decodes the payload; the packet id must already be consumed.
+    pub fn decode_payload(reader: &mut PacketReader<'_>) -> Result<Self, CodecError> {
+        Ok(Self {
+            chunk_x: reader.read_i32()?,
+            chunk_z: reader.read_i32()?,
+        })
+    }
+
+    /// Encodes the packet as a complete frame.
+    pub fn to_frame(&self) -> Result<Vec<u8>, CodecError> {
+        encode_frame(Self::ID, &self.encode_payload())
+    }
+}
+
 /// Clientbound Set Default Spawn Position: where compasses point and where
 /// players spawn without a bed.
 #[derive(Debug, Clone, PartialEq)]
@@ -846,6 +894,47 @@ mod tests {
         let decoded = SetCenterChunk::decode_payload(&mut reader).expect("decodable");
         assert_eq!(decoded, packet);
         reader.ensure_empty().expect("no trailing bytes");
+    }
+
+    /// `forget_level_chunk` encodes to two big-endian `i32`, byte for byte
+    /// the payloads of the vanilla 26.3 walking trace `window-p4.jsonl`
+    /// (seq 16000 and 16022); negative coordinates round-trip too.
+    #[test]
+    fn forget_level_chunk_matches_the_traced_payloads() {
+        // seq 16000: chunk (-8, -4) → ff ff ff f8 ff ff ff fc.
+        let traced_negative = [0xFF, 0xFF, 0xFF, 0xF8, 0xFF, 0xFF, 0xFF, 0xFC];
+        // seq 16022: chunk (9, 1) → 00 00 00 09 00 00 00 01.
+        let traced_positive = [0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x01];
+        let cases = [
+            (
+                ForgetLevelChunk {
+                    chunk_x: -8,
+                    chunk_z: -4,
+                },
+                traced_negative,
+            ),
+            (
+                ForgetLevelChunk {
+                    chunk_x: 9,
+                    chunk_z: 1,
+                },
+                traced_positive,
+            ),
+        ];
+        for (packet, bytes) in cases {
+            assert_eq!(packet.encode_payload(), bytes, "encode {packet:?}");
+            let mut reader = PacketReader::new(&bytes);
+            let decoded = ForgetLevelChunk::decode_payload(&mut reader).expect("decodable");
+            assert_eq!(decoded, packet);
+            reader.ensure_empty().expect("no trailing bytes");
+
+            // Through a frame: the id byte, then the same 8 payload bytes.
+            let frame = packet.to_frame().expect("encodable");
+            let mut reader = decoded!(frame, ForgetLevelChunk::ID);
+            let decoded = ForgetLevelChunk::decode_payload(&mut reader).expect("decodable");
+            assert_eq!(decoded, packet);
+            reader.ensure_empty().expect("no trailing bytes");
+        }
     }
 
     #[test]

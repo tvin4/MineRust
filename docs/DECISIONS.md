@@ -569,6 +569,25 @@ R=10 отправлено **473**, все в окне, ни одного вне,
 `every_untraced_radius_is_the_full_square`, плюс прежние R=10 (473, ряды,
 сдвиги 23/23/37).
 
+## Порядок forget и кодек forget_level_chunk (M4.4 B, ШАГ 1)
+
+**Решение.** На сдвиге центра соединение шлёт `set_chunk_cache_center`(новый)
+первым, затем `forget_level_chunk` для вышедших из окна чанков в порядке
+**(x, z) по возрастанию**, затем догрузку (`chunk_batch_start`/чанки/
+`chunk_batch_finished`), как на входе. Кодек `forget_level_chunk` — два
+big-endian `i32` (8 Б), id 38 из `packets.json`.
+
+**Данные.** Ванильные трейсы `window-p4/p5.jsonl` (агрегаты `analyze.py`):
+порядок видов пакетов на всех устойчивых сдвигах один и тот же
+(`set_chunk_cache_center` → все `forget_level_chunk` → `chunk_batch_start` →
+`level_chunk_with_light` → `chunk_batch_finished`); порядок forget — `(x,z)`
+по возрастанию, совпал **6/6** (П4) и **5/5** (П5); `(z,x)`, `(x desc,z)` и
+сортировки по расстоянию от старого центра не совпали. Множество забытых =
+`window(old) − window(new)`.
+
+**Проверка.** Тест `forget_level_chunk_matches_the_traced_payloads` (реальные
+payload П4: seq 16000 (-8,-4), seq 16022 (9,1)); `ARCH-M4.md` §4.
+
 ## Опоздавшие тики: журнал `warn` и метрика (M4.3 A1)
 
 **Решение.** Тик, проснувшийся позже дедлайна более чем на `LATE_TICK_MS =

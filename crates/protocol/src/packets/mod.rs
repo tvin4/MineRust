@@ -35,8 +35,8 @@ pub use login::{
     ProfileProperty, SetCompression,
 };
 pub use play::{
-    hashed_seed, ConfirmTeleportation, DeathLocation, GameEvent, KeepAlive, LoginPlay,
-    PlayerInfoEntry, PlayerInfoUpdate, SetCenterChunk, SetDefaultSpawnPosition,
+    hashed_seed, ConfirmTeleportation, DeathLocation, ForgetLevelChunk, GameEvent, KeepAlive,
+    LoginPlay, PlayerInfoEntry, PlayerInfoUpdate, SetCenterChunk, SetDefaultSpawnPosition,
     SynchronizePlayerPosition, MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT,
     MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
 };
@@ -81,6 +81,7 @@ pub fn used_packet_keys() -> &'static [PacketKey] {
         SetDefaultSpawnPosition::KEY,
         PlayerInfoUpdate::KEY,
         SetCenterChunk::KEY,
+        ForgetLevelChunk::KEY,
         GameEvent::KEY,
         SynchronizePlayerPosition::KEY,
         KeepAlive::KEY,
