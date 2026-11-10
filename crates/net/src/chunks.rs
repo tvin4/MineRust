@@ -1,55 +1,104 @@
-//! The join chunk window and the ready-batch index behind it (M4.4 A).
+//! The join chunk window and the ready-batch index behind it (M4.4 A/B).
 //!
 //! Two pieces live here. [`window`] is the pure, deterministic list of
 //! chunk coordinates a player at one cache centre asks for — the shape
 //! vanilla 26.3 was measured to send (ЧАСТЬ 0 of M4.4, `docs/ARCH-M4.md`
-//! §4). [`ReadyChunks`] is the immutable ready batch every connection
-//! joins, carrying the `(chunk_x, chunk_z) -> payload position` index so a
-//! join resolves its window in O(1) per coordinate, never by scanning the
-//! whole batch.
+//! §4). From M4.4 B it applies the measured `K(R)` formula for the traced
+//! view distances `6..=12` ([`corner_cut`]) and the historical `(2R+1)²`
+//! square elsewhere. [`ReadyChunks`] is the immutable ready batch every
+//! connection joins, carrying the `(chunk_x, chunk_z) -> payload position`
+//! index so a join resolves its window in O(1) per coordinate, never by
+//! scanning the whole batch.
 
 use std::collections::HashMap;
 
 use protocol::LevelChunkWithLight;
 
-/// The one view distance whose window shape the ЧАСТЬ 0 trace established.
+/// Lowest view distance whose window shape the ЧАСТЬ 0 traces pinned.
 ///
-/// The shape is a square of half-width `R+1` with the corners cut by the
-/// circle `dx²+dz² ≤ K`. `K` was measured per radius (74/113/162/208 for
-/// R=6/8/10/12) and no formula `K(R)` follows from those four points, so
-/// only R=10 — the control the walking traces already pinned — is wired
-/// here; every other radius keeps the historical square (see the
-/// `DECISIONS.md` entry, «гипотеза, не проверено по трейсу»).
-const TRACED_RADIUS: i32 = 10;
+/// Inside `TRACED_MIN_RADIUS..=TRACED_MAX_RADIUS` the window is a square of
+/// half-width `R+1` with the corners cut by the circle `dx²+dz² ≤ K(R)`
+/// (see [`corner_cut`]); outside the range it stays the historical
+/// `(2R+1)²` square. The `K(R)` formula is a **[hypothesis]**: it is
+/// verified against the four measured radii 6/8/10/12 (see the tests) and
+/// against no other (ЧАСТЬ 0 of M4.4, `docs/ARCH-M4.md` §4, `DECISIONS.md`).
+const TRACED_MIN_RADIUS: i32 = 6;
 
-/// Half-width of the traced window at [`TRACED_RADIUS`] (`R+1`).
-const TRACED_HALF: i32 = 11;
+/// Upper end of the traced view-distance range (inclusive).
+const TRACED_MAX_RADIUS: i32 = 12;
 
-/// Squared-circle cut of the traced window at [`TRACED_RADIUS`]: 473
-/// chunks, `23×23 = 529` minus the 56 corner cells of the square.
-const TRACED_MAX_SQUARED: i64 = 162;
+/// Offset from the view distance to the window's half-width: the measured
+/// square reaches `R + 1` chunks from the centre (ЧАСТЬ 0 of M4.4).
+const WINDOW_HALF_OFFSET: i32 = 1;
 
-/// The chunk coordinates the join window holds around `(center_x,
-/// center_z)` at view distance `radius`, in send order.
+/// The corner-cut constant of the measured window, `(√3)²`.
 ///
-/// The order is the one the ЧАСТЬ 0 traces show within every flush:
-/// growing squared distance from the centre, ties by `(chunk_x, chunk_z)`.
-/// A negative radius reads as zero (the centre chunk alone). The traced
-/// circle applies only at [`TRACED_RADIUS`]; every other radius is the
-/// full `(2R+1)×(2R+1)` square.
+/// ЧАСТЬ 0 measured a square half-width of `h = R + 1` with the corners
+/// cut by the circle `dx²+dz² ≤ floor((h + √3)²)`. Because
+/// `(h + √3)² = h² + 3 + 2h·√3 = h² + 3 + √(12·h²)`, the floor splits into
+/// `h² + 3 + floor(√(12·h²))`: [`corner_cut`] therefore needs only integer
+/// arithmetic, and the radius never depends on floating-point rounding.
+/// The value `3` is exactly `(√3)²`.
+const WINDOW_CUT: i64 = 3;
+
+/// `K(h) = floor((h + √3)²)`, the squared radius the corner circle cuts
+/// with at half-width `h`, in integers only (`h ≥ 0`).
+fn corner_cut(h: i64) -> i64 {
+    h * h + WINDOW_CUT + isqrt(12 * h * h)
+}
+
+/// The largest `r` with `r·r ≤ n` (`n ≥ 0`): the integer square root of the
+/// corner-cut identity. A bit-by-bit algorithm, no floating point.
+fn isqrt(n: i64) -> i64 {
+    debug_assert!(n >= 0, "isqrt of a negative value");
+    let mut value = n as u64;
+    let mut root = 0u64;
+    let mut bit = 1u64 << 62;
+    while bit > value {
+        bit >>= 2;
+    }
+    while bit != 0 {
+        if value >= root + bit {
+            value -= root + bit;
+            root = (root >> 1) + bit;
+        } else {
+            root >>= 1;
+        }
+        bit >>= 2;
+    }
+    root as i64
+}
+
+/// The chunk coordinates the window holds around `(center_x, center_z)` at
+/// view distance `radius`, in send order.
+///
+/// At a traced view distance (`TRACED_MIN_RADIUS..=TRACED_MAX_RADIUS`) the
+/// shape is the measured square of half-width `R+1` with the corners cut by
+/// the circle `dx²+dz² ≤ K(R)` ([`corner_cut`]); at every other radius it
+/// is the plain `(2R+1)²` square. The order is the one the ЧАСТЬ 0 traces
+/// show within every flush: growing squared distance from the centre, ties
+/// by `(chunk_x, chunk_z)`. A negative radius reads as zero (the centre
+/// chunk alone).
 pub fn window(center_x: i32, center_z: i32, radius: i32) -> Vec<(i32, i32)> {
     let radius = radius.max(0);
-    let traced = radius == TRACED_RADIUS;
-    let half = if traced { TRACED_HALF } else { radius };
+    let traced = (TRACED_MIN_RADIUS..=TRACED_MAX_RADIUS).contains(&radius);
+    let half = if traced {
+        radius + WINDOW_HALF_OFFSET
+    } else {
+        radius
+    };
+    let cut = if traced {
+        corner_cut(i64::from(half))
+    } else {
+        i64::MAX
+    };
     let side = 2 * half + 1;
     let mut out = Vec::with_capacity((side * side) as usize);
     for dx in -half..=half {
         for dz in -half..=half {
-            if traced {
-                let squared = i64::from(dx) * i64::from(dx) + i64::from(dz) * i64::from(dz);
-                if squared > TRACED_MAX_SQUARED {
-                    continue;
-                }
+            let squared = i64::from(dx) * i64::from(dx) + i64::from(dz) * i64::from(dz);
+            if squared > cut {
+                continue;
             }
             out.push((center_x + dx, center_z + dz));
         }
@@ -209,11 +258,53 @@ mod tests {
         assert_eq!(here.difference(&diagonal).count(), 37, "the far corner");
     }
 
-    /// Every radius but R=10 is the plain `(2R+1)²` square — the shape the
-    /// code keeps where the trace did not establish a formula.
+    /// The measured radii reproduce their traced counts exactly: the `K(R)`
+    /// formula of ЧАСТЬ 0, in integers, at every point the trace pinned.
     #[test]
-    fn every_other_radius_is_the_full_square() {
-        for radius in [0, 1, 6, 8, 9, 11, 12, 16] {
+    fn the_formula_reproduces_every_measured_radius() {
+        for (radius, expected) in [(6, 213), (8, 329), (10, 473), (12, 637)] {
+            let cells = window(6, -2, radius);
+            assert_eq!(cells.len(), expected, "R={radius}");
+            let distinct: BTreeSet<(i32, i32)> = cells.iter().copied().collect();
+            assert_eq!(distinct.len(), expected, "R={radius} is a set");
+        }
+    }
+
+    /// [`corner_cut`] equals the four circles the ЧАСТЬ 0 traces measured:
+    /// each radius' `K` interval (`docs/ARCH-M4.md` §4) contains exactly
+    /// this value.
+    #[test]
+    fn the_corner_cut_matches_the_measured_circles() {
+        assert_eq!(corner_cut(7), 76, "R=6 half-width 7");
+        assert_eq!(corner_cut(9), 115, "R=8 half-width 9");
+        assert_eq!(corner_cut(11), 162, "R=10 half-width 11");
+        assert_eq!(corner_cut(13), 217, "R=12 half-width 13");
+    }
+
+    /// The integer square root is the floor of the real one, perfect squares
+    /// included — the corner-cut identity depends on it.
+    #[test]
+    fn the_integer_square_root_floors_the_real_one() {
+        let cases = [
+            (0, 0),
+            (1, 1),
+            (3, 1),
+            (4, 2),
+            (588, 24),
+            (972, 31),
+            (1452, 38),
+            (2028, 45),
+        ];
+        for (n, expected) in cases {
+            assert_eq!(isqrt(n), expected, "isqrt({n})");
+        }
+    }
+
+    /// Every radius outside the traced range is the plain `(2R+1)²` square —
+    /// the shape the code keeps where the trace established no formula.
+    #[test]
+    fn every_untraced_radius_is_the_full_square() {
+        for radius in [0, 1, 2, 5, 13, 16] {
             let cells = window(3, 4, radius);
             let side = (2 * radius + 1) as usize;
             assert_eq!(cells.len(), side * side, "radius {radius}");

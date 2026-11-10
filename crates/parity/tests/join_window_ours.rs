@@ -8,8 +8,10 @@
 //! * the R=10 join sends the traced 473-chunk window and nothing else —
 //!   provided the whole window is inside the v2 ready batch (it is: the
 //!   template is 27×27 and the window half-width is 11);
-//! * the R=8 join still sends the plain 17×17 square (289) — the shape the
-//!   code *keeps* wherever the trace established no formula;
+//! * the R=8 join sends the traced 329-chunk window (the `K(R)` formula of
+//!   M4.4 B applies at R=8 too) — provided the whole window is inside the
+//!   v2 ready batch (it is: the template is 27×27 and the window
+//!   half-width is 9);
 //! * the send order is our own `(dx²+dz², x, z)`, element for element the
 //!   order [`net::window`] returns, both radii.
 //!
@@ -67,8 +69,8 @@ async fn our_join_window_matches_the_traced_shape() {
     // in-process server.
     let _guard = ServerGuard { abort: Some(abort) };
 
-    // R=10 is the traced control (473); R=8 has no traced formula, so the
-    // code keeps the square (289).
+    // R=10 and R=8 are both traced radii: the `K(R)` formula (M4.4 B)
+    // gives 473 and 329.
     let cases = [
         Case {
             radius: 10,
@@ -76,7 +78,7 @@ async fn our_join_window_matches_the_traced_shape() {
         },
         Case {
             radius: 8,
-            expected: 289,
+            expected: 329,
         },
     ];
     for case in cases {
