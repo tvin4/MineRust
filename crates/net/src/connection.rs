@@ -93,10 +93,38 @@ pub async fn serve_with(
     loader: Option<Loader>,
     world: WorldInfo,
 ) -> std::io::Result<()> {
+    serve_with_metrics(
+        game_config,
+        None,
+        listener,
+        status,
+        game_data,
+        packet_ids,
+        loader,
+        world,
+    )
+    .await
+}
+
+/// [`serve_with`] with a caller-owned tick-metrics handle (M4.4 B): the
+/// in-process parity walker passes its own [`game::TickMetricsHandle`] and
+/// reads the run's percentiles from it afterwards, instead of scraping the
+/// `game tick` log lines. `None` keeps the private handle.
+#[allow(clippy::too_many_arguments)]
+pub async fn serve_with_metrics(
+    game_config: game::GameConfig,
+    metrics: Option<Arc<game::TickMetricsHandle>>,
+    listener: TcpListener,
+    status: Arc<StatusInfo>,
+    game_data: Arc<GameData>,
+    packet_ids: Arc<PacketIds>,
+    loader: Option<Loader>,
+    world: WorldInfo,
+) -> std::io::Result<()> {
     // One game thread owns the players of this server (ARCH-M4 §0). It runs
     // until this function returns; on shutdown it is asked to stop and
     // joined with a timeout, so a stuck tick cannot block the exit.
-    let (game_thread, game) = game::GameHandle::spawn(game_config)?;
+    let (game_thread, game) = game::GameHandle::spawn_with_metrics(game_config, metrics)?;
     let accepting = async move {
         loop {
             let (stream, peer) = listener.accept().await?;

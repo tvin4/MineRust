@@ -14,7 +14,7 @@ pub mod loader;
 pub mod trace;
 
 pub use chunks::{window, window_difference, ReadyChunks};
-pub use connection::{serve, serve_with, WorldInfo};
+pub use connection::{serve, serve_with, serve_with_metrics, WorldInfo};
 pub use error::ConnectionError;
 pub use frame::{read_frame, write_frame};
 pub use loader::{ChunkSource, Loader};

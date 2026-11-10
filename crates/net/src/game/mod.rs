@@ -178,9 +178,20 @@ impl GameHandle {
     /// The id counter starts at one, so the first player of a server keeps
     /// the entity id the join sequence always announced.
     pub fn spawn(config: GameConfig) -> io::Result<(GameThread, Self)> {
+        Self::spawn_with_metrics(config, None)
+    }
+
+    /// [`Self::spawn`] with a metrics handle the caller owns (M4.4 B): the
+    /// in-process parity walk reads the tick percentiles of its own run
+    /// through the very handle the game thread publishes into. `None` keeps
+    /// the private handle [`Self::spawn`] always used.
+    pub fn spawn_with_metrics(
+        config: GameConfig,
+        metrics: Option<Arc<TickMetricsHandle>>,
+    ) -> io::Result<(GameThread, Self)> {
         let capacity = config.join_capacity.max(1);
         let (to_game, incoming) = mpsc::channel(capacity);
-        let metrics = Arc::new(TickMetricsHandle::default());
+        let metrics = metrics.unwrap_or_default();
         let thread_metrics = Arc::clone(&metrics);
         let stop = Arc::new(AtomicBool::new(false));
         let loop_stop = Arc::clone(&stop);
