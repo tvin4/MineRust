@@ -266,8 +266,12 @@ impl PendingBatch {
     }
 
     /// Whether every chunk sent or queued sits inside `window(center)` —
-    /// the M4.4 B invariant (debug builds and tests).
-    #[cfg(debug_assertions)]
+    /// the M4.4 B invariant (tests, and the `debug_assert!` that checks it
+    /// after each move).
+    ///
+    /// Always compiled: `debug_assert!` still type-checks its argument in
+    /// release builds (it only skips the check at run time), so the method
+    /// must exist there too.
     pub(super) fn within_window(&self) -> bool {
         let wanted: BTreeSet<(i32, i32)> = window(self.center_x, self.center_z, self.radius)
             .into_iter()
