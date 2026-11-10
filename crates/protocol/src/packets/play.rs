@@ -318,15 +318,19 @@ impl SetCenterChunk {
 /// Clientbound Forget Level Chunk: tells the client to drop the chunk at
 /// `(chunk_x, chunk_z)` from its cache, one packet per chunk.
 ///
-/// The payload is two big-endian `i32` (8 bytes): the layout the vanilla
-/// 26.3 walking traces show (`window-p4/p5.jsonl`, M4.4 B) — not packed
-/// coordinates and not VarInts. SOURCE: parity trace; ids from
+/// The payload is one big-endian `i64` (8 bytes): the packed `ChunkPos`, the
+/// **z** in the high word and the **x** in the low word (`pos.toLong() =
+/// (z << 32) | x`), so on the wire z comes first. Not two independent
+/// `(x, z)` words and not VarInts. The vanilla 26.3 walking traces prove it
+/// (`window-p4/p5.jsonl`, M4.4 B): reading the first word as x makes the
+/// forgotten column miss `window(old) − window(new)`, reading it as z
+/// matches it byte for byte. SOURCE: parity trace; id from
 /// `reports/packets.json` (protocol id 38).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ForgetLevelChunk {
-    /// Chunk X to drop.
+    /// Chunk X to drop (the low word of the packed position).
     pub chunk_x: i32,
-    /// Chunk Z to drop.
+    /// Chunk Z to drop (the high word of the packed position).
     pub chunk_z: i32,
 }
 
@@ -341,19 +345,21 @@ impl ForgetLevelChunk {
         Self::ID,
     );
 
-    /// Encodes the payload (packet id excluded): two big-endian `i32`.
+    /// Encodes the payload (packet id excluded): the packed `ChunkPos`, z in
+    /// the high word and x in the low word.
     pub fn encode_payload(&self) -> Vec<u8> {
         let mut writer = PacketWriter::new();
-        writer.write_i32(self.chunk_x);
         writer.write_i32(self.chunk_z);
+        writer.write_i32(self.chunk_x);
         writer.into_bytes()
     }
 
-    /// Decodes the payload; the packet id must already be consumed.
+    /// Decodes the payload (the packed `ChunkPos`); the packet id must
+    /// already be consumed.
     pub fn decode_payload(reader: &mut PacketReader<'_>) -> Result<Self, CodecError> {
         Ok(Self {
-            chunk_x: reader.read_i32()?,
             chunk_z: reader.read_i32()?,
+            chunk_x: reader.read_i32()?,
         })
     }
 
@@ -896,27 +902,28 @@ mod tests {
         reader.ensure_empty().expect("no trailing bytes");
     }
 
-    /// `forget_level_chunk` encodes to two big-endian `i32`, byte for byte
-    /// the payloads of the vanilla 26.3 walking trace `window-p4.jsonl`
-    /// (seq 16000 and 16022); negative coordinates round-trip too.
+    /// `forget_level_chunk` encodes the packed `ChunkPos`: z in the high word
+    /// and x in the low word, byte for byte the payloads of the vanilla 26.3
+    /// walking trace `window-p4.jsonl` (seq 16000 and 16022); negative
+    /// coordinates round-trip too.
     #[test]
     fn forget_level_chunk_matches_the_traced_payloads() {
-        // seq 16000: chunk (-8, -4) → ff ff ff f8 ff ff ff fc.
+        // seq 16000: packed (x, z) = (-4, -8) → ff ff ff f8 ff ff ff fc.
         let traced_negative = [0xFF, 0xFF, 0xFF, 0xF8, 0xFF, 0xFF, 0xFF, 0xFC];
-        // seq 16022: chunk (9, 1) → 00 00 00 09 00 00 00 01.
+        // seq 16022: packed (x, z) = (1, 9) → 00 00 00 09 00 00 00 01.
         let traced_positive = [0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x01];
         let cases = [
             (
                 ForgetLevelChunk {
-                    chunk_x: -8,
-                    chunk_z: -4,
+                    chunk_x: -4,
+                    chunk_z: -8,
                 },
                 traced_negative,
             ),
             (
                 ForgetLevelChunk {
-                    chunk_x: 9,
-                    chunk_z: 1,
+                    chunk_x: 1,
+                    chunk_z: 9,
                 },
                 traced_positive,
             ),

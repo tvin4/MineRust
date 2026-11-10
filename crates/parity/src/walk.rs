@@ -312,10 +312,10 @@ pub struct Batch {
 ///
 /// Coordinates come from the two layouts observed in the traces:
 /// `set_chunk_cache_center` carries two VarInts (`06feffffff0f` = the spawn
-/// chunk 6, −2), `forget_level_chunk` carries two big-endian 32-bit ints
-/// (always 8 bytes, e.g. `fffffff8fffffffd` = (−8, −3)). A payload that does
-/// not decode keeps `x = z = [`UNKNOWN_CHUNK`] and the report prints it as
-/// unparsed.
+/// chunk 6, −2), `forget_level_chunk` carries the packed `ChunkPos` long —
+/// one big-endian `i64`, z in the high word and x in the low, always 8 bytes
+/// (`fffffff8fffffffd` = x −3, z −8). A payload that does not decode keeps
+/// `x = z = [`UNKNOWN_CHUNK`] and the report prints it as unparsed.
 #[derive(Debug, Clone)]
 pub struct CacheMove {
     /// Monotonic milliseconds since the connection attempt: the wire time
@@ -1391,18 +1391,19 @@ fn move_payload_rot(p: &[f64; 3], on_ground: bool) -> Vec<u8> {
 
 /// Decodes a window-move payload as a chunk `(x, z)`.
 ///
-/// `set_chunk_cache_center` is two VarInts; `forget_level_chunk` is two
-/// big-endian `i32` (its payload is always 8 bytes — the VarInt reading
-/// used to yield garbage here). Every other name, and anything that does
-/// not decode, becomes [`UNKNOWN_CHUNK`] instead of a guess.
+/// `set_chunk_cache_center` is two VarInts `(x, z)`; `forget_level_chunk` is
+/// the packed `ChunkPos` long — one big-endian `i64`, **z** in the high word
+/// and **x** in the low word (its payload is always 8 bytes — the VarInt
+/// reading used to yield garbage here). Every other name, and anything that
+/// does not decode, becomes [`UNKNOWN_CHUNK`] instead of a guess.
 fn chunk_move(name: &str, payload: &[u8]) -> (i32, i32) {
     match name {
         "minecraft:forget_level_chunk" => {
             if payload.len() < 8 {
                 return (UNKNOWN_CHUNK, UNKNOWN_CHUNK);
             }
-            let x = i32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
-            let z = i32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
+            let z = i32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
+            let x = i32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
             (x, z)
         }
         "minecraft:set_chunk_cache_center" => {
@@ -1472,19 +1473,20 @@ mod tests {
     }
 
     #[test]
-    fn forget_level_chunk_is_two_big_endian_i32() {
-        // Trace payload `fffffff8fffffffd` is (−8, −3); the old VarInt
-        // reading returned garbage here.
+    fn forget_level_chunk_is_the_packed_chunk_pos_long() {
+        // Trace payload `fffffff8fffffffd` is the packed (x, z) = (-3, -8):
+        // z is the high word, x the low. The old VarInt (and (x, z) word)
+        // reading returned garbage / a transposed pair here.
         let from_hex = crate::trace::from_hex("fffffff8fffffffd").expect("hex");
         assert_eq!(
             chunk_move("minecraft:forget_level_chunk", &from_hex),
-            (-8, -3)
+            (-3, -8)
         );
-        // A sign-carrying pair: (5, -1).
+        // A sign-carrying pair: (x, z) = (-1, 5).
         let from_hex = crate::trace::from_hex("00000005ffffffff").expect("hex");
         assert_eq!(
             chunk_move("minecraft:forget_level_chunk", &from_hex),
-            (5, -1)
+            (-1, 5)
         );
     }
 
