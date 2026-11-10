@@ -230,8 +230,9 @@ fn game_loop(
     let mut scheduler = Scheduler::new(vec![Region::new(SINGLE_REGION)]);
     let mut recorder = Recorder::new(config.period);
     let mut replay = Replay::new(open_replay());
-    let mut deadline = Instant::now() + config.period;
-    let mut last_log = Instant::now();
+    let started = Instant::now();
+    let mut deadline = started + config.period;
+    let mut last_log = started;
     let mut tick: u64 = 0;
     let mut disconnected = false;
     loop {
@@ -241,6 +242,16 @@ fn game_loop(
             break;
         }
         let woke = Instant::now();
+        let late = woke.saturating_duration_since(deadline);
+        if late > Duration::from_millis(metrics::LATE_TICK_MS) {
+            warn!(
+                tick,
+                late_ms = late.as_secs_f64() * 1000.0,
+                uptime_ms = started.elapsed().as_secs_f64() * 1000.0,
+                players = scheduler.player_count(),
+                "tick woke late"
+            );
+        }
         let work = Instant::now();
         apply_queued(
             &mut scheduler,

@@ -1,9 +1,8 @@
 # HANDOFF (state for the next session)
 
-M4.2 done (`ca8d310`, `a994d23`): the game tick applies player movement.
-- Connection classifies move packets (`MoveKind {Pos,PosRot,Rot,StatusOnly}`) and stores the raw payload in `MoveSlot`; the tick decodes it (`net::game::movement`) and applies it only after `TeleportAck` (`PlayerPos`, `Player::apply_move`).
-- `Region::tick`/`Scheduler::tick` return `TickOutcome {moves, kicks}`; `record_moves()` writes the `move` replay line (x/y/z/yaw/pitch/on_ground/flags).
-- The trailing byte of every move packet is a flags byte (`a994d23`): bit 0 is on-ground, 0x00..0x03 are all valid, bit 1's meaning is not established (kept raw as `flags`, never dropped).
-- Tests: net 21 passed / 1 ignored (decode per kind, 0x00..=0x03 for pos/pos_rot, ignore before ack, apply after ack, rotation keeps position, replay determinism).
-- Automated e2e (one-off smoke, not in repo): in-process server + hand-driven `parity::Client` → replay 21 lines, x 96.7→100.3 by 0.2, one move per tick. Owner's F3 check: `docs/LIVE-CHECK-M4.2.md`.
-- Deferred: `set_chunk_cache_center` → M4.4 (streaming). Next: M4.3 (parallel core) — NOT started, wait for an explicit "M4.3 можно".
+M4.3 part A in progress (owner allowed part A only; part B waits for "M4.3 B можно").
+- A1.1 done (code reading): the drift 261→1.8 was sequential catch-up, not a reset — `reset_after=5` ⇒ reset only >250 ms behind; 261 ms drift ≈ 211 ms behind ⇒ `overdue_by` returned `None` and each late tick woke instantly while `deadline += period`, shrinking the gap ~one period per tick.
+- A1.2 done: `LATE_TICK_MS = 20` in `metrics.rs`; `TickMetrics.late_ticks`/`late_max_ms`; one `warn!` per tick that woke >20 ms late (tick, late_ms, uptime_ms, players; chunk-batch flag omitted — not easily available); `Scheduler::player_count()`.
+- Next: A1.3 experiments Э1/Э2(/Э3) on an in-process server + `parity::Client` (join → accept_teleportation → wait 290 chunks → idle 10 s), 3 runs each, min/median/max into `C:\MineRust-data\traces\m43-jitter.md`.
+- Then A1.4 (replay path vs Э2), A1.5, then A2 pool (`GameConfig.workers`, `ServerConfig.workers`, barrier, tests а–г).
+- Gate: fmt/clippy/test green at A1.2. Tests: net 21 passed / 1 ignored.

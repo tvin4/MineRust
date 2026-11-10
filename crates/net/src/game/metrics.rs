@@ -15,6 +15,10 @@ use std::time::{Duration, Instant};
 /// Recompute and publish the percentiles every this many ticks.
 const PUBLISH_EVERY: u64 = 100;
 
+/// A tick whose wake latency exceeds this many milliseconds is "late": it is
+/// logged (one `warn` line) and counted in [`TickMetrics::late_ticks`].
+pub(crate) const LATE_TICK_MS: u64 = 20;
+
 /// Samples kept for the percentiles (one hour of 20 TPS ticks).
 const MAX_SAMPLES: usize = 72_000;
 
@@ -37,6 +41,10 @@ pub struct TickMetrics {
     pub duration_p99_ms: f64,
     /// Worst tick duration, in ms.
     pub duration_max_ms: f64,
+    /// Number of ticks that woke more than [`LATE_TICK_MS`] late.
+    pub late_ticks: u64,
+    /// Worst wake latency among those late ticks, in ms.
+    pub late_max_ms: f64,
 }
 
 /// The atomics the game thread publishes [`TickMetrics`] through.
@@ -50,6 +58,8 @@ pub struct TickMetricsHandle {
     duration_p50_us: AtomicU64,
     duration_p99_us: AtomicU64,
     duration_max_us: AtomicU64,
+    late_ticks: AtomicU64,
+    late_max_us: AtomicU64,
 }
 
 impl TickMetricsHandle {
@@ -64,6 +74,8 @@ impl TickMetricsHandle {
             duration_p50_ms: micros_to_ms(self.duration_p50_us.load(Ordering::Relaxed)),
             duration_p99_ms: micros_to_ms(self.duration_p99_us.load(Ordering::Relaxed)),
             duration_max_ms: micros_to_ms(self.duration_max_us.load(Ordering::Relaxed)),
+            late_ticks: self.late_ticks.load(Ordering::Relaxed),
+            late_max_ms: micros_to_ms(self.late_max_us.load(Ordering::Relaxed)),
         }
     }
 }
@@ -84,6 +96,8 @@ pub(crate) struct Recorder {
     jitter: VecDeque<u64>,
     duration: VecDeque<u64>,
     ticks: u64,
+    late_ticks: u64,
+    late_max_us: u64,
     last_woke: Instant,
 }
 
@@ -97,6 +111,8 @@ impl Recorder {
             jitter: VecDeque::new(),
             duration: VecDeque::new(),
             ticks: 0,
+            late_ticks: 0,
+            late_max_us: 0,
             last_woke: now,
         }
     }
@@ -111,11 +127,13 @@ impl Recorder {
         duration: Duration,
         handle: &TickMetricsHandle,
     ) {
-        push(
-            &mut self.jitter,
-            woke.saturating_duration_since(deadline).as_micros() as u64,
-        );
+        let late_us = woke.saturating_duration_since(deadline).as_micros() as u64;
+        push(&mut self.jitter, late_us);
         push(&mut self.duration, duration.as_micros() as u64);
+        if late_us > LATE_TICK_MS * 1000 {
+            self.late_ticks += 1;
+            self.late_max_us = self.late_max_us.max(late_us);
+        }
         self.ticks = tick + 1;
         self.last_woke = woke;
         if self.ticks.is_multiple_of(PUBLISH_EVERY) {
@@ -142,6 +160,10 @@ impl Recorder {
         handle.duration_p50_us.store(p50, Ordering::Relaxed);
         handle.duration_p99_us.store(p99, Ordering::Relaxed);
         handle.duration_max_us.store(max, Ordering::Relaxed);
+        handle.late_ticks.store(self.late_ticks, Ordering::Relaxed);
+        handle
+            .late_max_us
+            .store(self.late_max_us, Ordering::Relaxed);
     }
 }
 

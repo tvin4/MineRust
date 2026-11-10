@@ -44,6 +44,11 @@ impl Scheduler {
             .map(Region::id)
     }
 
+    /// Total number of players across all regions (log/diagnostics only).
+    pub fn player_count(&self) -> usize {
+        self.regions.iter().map(Region::player_count).sum()
+    }
+
     /// Ticks every region once and merges what they produced.
     ///
     /// Regions tick in order and each result keeps its own region id, so the
