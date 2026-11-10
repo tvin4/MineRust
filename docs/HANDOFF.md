@@ -1,8 +1,9 @@
 # HANDOFF (state for the next session)
 
-M4.3 part A in progress (owner allowed part A only; part B waits for "M4.3 B можно").
-- A1.1 done (code reading): the drift 261→1.8 was sequential catch-up, not a reset — `reset_after=5` ⇒ reset only >250 ms behind; 261 ms drift ≈ 211 ms behind ⇒ `overdue_by` returned `None` and each late tick woke instantly while `deadline += period`, shrinking the gap ~one period per tick.
-- A1.2 done: `LATE_TICK_MS = 20` in `metrics.rs`; `TickMetrics.late_ticks`/`late_max_ms`; one `warn!` per tick that woke >20 ms late (tick, late_ms, uptime_ms, players; chunk-batch flag omitted — not easily available); `Scheduler::player_count()`.
-- Next: A1.3 experiments Э1/Э2(/Э3) on an in-process server + `parity::Client` (join → accept_teleportation → wait 290 chunks → idle 10 s), 3 runs each, min/median/max into `C:\MineRust-data\traces\m43-jitter.md`.
-- Then A1.4 (replay path vs Э2), A1.5, then A2 pool (`GameConfig.workers`, `ServerConfig.workers`, barrier, tests а–г).
-- Gate: fmt/clippy/test green at A1.2. Tests: net 21 passed / 1 ignored.
+M4.3 **part A done** (part B waits for "M4.3 B можно").
+- A1.1 (code): drift 261→1.8 was sequential catch-up, not a reset — `overdue_by` only resets past 250 ms (`reset_after=5`); 261 ms drift ≈ 211 ms behind.
+- A1.2 `c45c3b9`: `LATE_TICK_MS=20`, `TickMetrics.late_ticks/late_max_ms`, one `warn` per late tick, `Scheduler::player_count()`.
+- A1.3/A1.4: Э1/Э2 ×3 (in-process server + hand-driven `parity::Client`, 289 chunks, 10 s idle, release) → **no tick >20 ms late** (jitter max ≤1.34 ms); Э3 not run (Э1 clean), replay left synchronous ("source of 261 ms not established"). Report: `C:\MineRust-data\traces\m43-jitter.md`.
+- A2: `net::game::pool` (K std::threads, ownership via mpsc, ≤2 s stop) + `Scheduler` barrier merging by `region_id`, inline when ≤1 region; `GameConfig.workers` (0 = off), `ServerConfig.workers` (default cores−2, 0 = off), `net::serve_with`.
+- Tests: K=0/1/4 equal outcome (8 regions), order independence, pool stop <2 s, 1000 idle pooled ticks drift 0.597 ms / p99 1.030 ms; one region inline p50 0.10 µs vs dispatch p50 0.70 µs (hypothesis to M4.6).
+- Live check for owner: `docs/LIVE-CHECK-M4.3A.md`. Not started: Transfer, second region, outgoing replay test (part B).
