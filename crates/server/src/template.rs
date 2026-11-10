@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use data::{BlockStates, GameData, RegistryIds};
+use net::chunks::ReadyChunks;
 use net::loader::LoadError;
 use protocol::LevelChunkWithLight;
 use tracing::{debug, info, warn};
@@ -80,17 +81,20 @@ pub struct TemplateWorld {
     data_version: i32,
     /// Id lookups of the wire conversion.
     refs: Arc<WireTables>,
-    /// The whole batch of ready payloads, built once and then shared by
-    /// every connection (`Arc`, first build wins the `OnceLock` slot).
+    /// The whole ready world, built once and then shared by every
+    /// connection (`Arc`, first build wins the `OnceLock` slot). It carries
+    /// the payloads and the `(x, z) -> position` index (M4.4 A), both built
+    /// together at warm-up so a join resolves its window in O(1) and never
+    /// scans the batch.
     ///
     /// The reader used to re-read every region file and re-encode every
     /// chunk on each job: the owner's log showed `world batch built
     /// sent=729` once at the warm-up and again on every join (~2.4 s of
     /// work). The cache turns every later job into an `Arc` clone: an
-    /// immutable batch with no `Mutex` anywhere on the join path or in the
+    /// immutable value with no `Mutex` anywhere on the join path or in the
     /// tick (docs/DECISIONS.md rule: a new lock needs a written reason —
     /// this is the lock-free side of the answer instead).
-    ready: OnceLock<Arc<Vec<LevelChunkWithLight>>>,
+    ready: OnceLock<Arc<ReadyChunks>>,
 }
 
 impl TemplateWorld {
@@ -141,16 +145,17 @@ impl TemplateWorld {
         Ok(Some(payload))
     }
 
-    /// The shared batch: the first caller reads the world and stores it,
-    /// every later caller only clones the `Arc`. No `Mutex` stands between
-    /// a connection and a payload — the hand-over is `OnceLock`, and two
-    /// racing first readers cost one wasted build at most, only while the
-    /// cache is still empty (the warm-up fills it before any port binds).
-    fn ready_batch(&self) -> Result<Arc<Vec<LevelChunkWithLight>>, LoadError> {
+    /// The shared ready world: the first caller reads the world and stores
+    /// it, every later caller only clones the `Arc`. No `Mutex` stands
+    /// between a connection and a payload — the hand-over is `OnceLock`,
+    /// and two racing first readers cost one wasted build at most, only
+    /// while the cache is still empty (the warm-up fills it before any
+    /// port binds).
+    fn ready_batch(&self) -> Result<Arc<ReadyChunks>, LoadError> {
         if let Some(cached) = self.ready.get() {
             return Ok(Arc::clone(cached));
         }
-        let built = Arc::new(self.build_batch()?);
+        let built = Arc::new(ReadyChunks::new(self.build_batch()?));
         Ok(Arc::clone(self.ready.get_or_init(|| built)))
     }
 
@@ -184,10 +189,11 @@ impl TemplateWorld {
 
 impl net::ChunkSource for TemplateWorld {
     /// Every ready chunk of the save as a wire payload behind the shared
-    /// `Arc`: the first call builds the batch (the warm-up owns it), later
-    /// calls return the same immutable batch out of [`Self::ready_batch`].
-    /// A join clones the pointer — never the payloads.
-    fn load_batch(&self) -> Result<Arc<Vec<LevelChunkWithLight>>, LoadError> {
+    /// `Arc`: the first call builds the batch and its index (the warm-up
+    /// owns it), later calls return the same immutable value out of
+    /// [`Self::ready_batch`]. A join clones the pointer — never the
+    /// payloads.
+    fn load_batch(&self) -> Result<Arc<ReadyChunks>, LoadError> {
         self.ready_batch()
     }
 }

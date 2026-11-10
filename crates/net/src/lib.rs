@@ -5,6 +5,7 @@
 //! The crate is transport-only: the contents of the status response are
 //! decided by the caller (see the `server` crate).
 
+pub mod chunks;
 mod connection;
 mod error;
 mod frame;
@@ -12,6 +13,7 @@ pub mod game;
 pub mod loader;
 pub mod trace;
 
+pub use chunks::{window, ReadyChunks};
 pub use connection::{serve, serve_with, WorldInfo};
 pub use error::ConnectionError;
 pub use frame::{read_frame, write_frame};

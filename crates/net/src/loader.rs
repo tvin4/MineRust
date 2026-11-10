@@ -21,9 +21,10 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use protocol::LevelChunkWithLight;
 use tokio::sync::{mpsc, oneshot};
 use tracing::debug;
+
+use crate::chunks::ReadyChunks;
 
 /// What a pool read fails with; sources box their own error type.
 pub type LoadError = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -31,13 +32,14 @@ pub type LoadError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// The world behind a [`Loader`]: reads happen on the blocking pool, one
 /// call per batch, never on a connection task.
 pub trait ChunkSource: Send + Sync + 'static {
-    /// Wire payloads of every chunk the world can send right now, in send
-    /// order, behind a shared `Arc` — the batch of a template world is
-    /// built once and every join receives the same immutable batch, so a
-    /// connection only ever clones the pointer (part A 2, the cache), not
-    /// the payloads. A failing read reports the data problem instead of a
+    /// The ready world of this source right now, behind a shared `Arc`:
+    /// the batch of a template world is built once and every join receives
+    /// the same immutable value, so a connection only ever clones the
+    /// pointer (part A 2, the cache), not the payloads. The value carries
+    /// the `(x, z) -> position` index a join filters its window with
+    /// (M4.4 A). A failing read reports the data problem instead of a
     /// default.
-    fn load_batch(&self) -> Result<Arc<Vec<LevelChunkWithLight>>, LoadError>;
+    fn load_batch(&self) -> Result<Arc<ReadyChunks>, LoadError>;
 }
 
 /// The whole loader pool has gone away (shut down or panicked earlier).
@@ -48,7 +50,7 @@ pub struct LoaderShutDown;
 /// One unit of world work: the reply channel a batch arrives on.
 struct Job {
     /// Where the built batch (or its error) is delivered.
-    reply: oneshot::Sender<Result<Arc<Vec<LevelChunkWithLight>>, LoadError>>,
+    reply: oneshot::Sender<Result<Arc<ReadyChunks>, LoadError>>,
 }
 
 /// Blocking workers in the pool (spawn_blocking threads, one queue each).
@@ -116,8 +118,7 @@ impl Loader {
     /// backpressure the pool exists for.
     pub async fn load_batch(
         &self,
-    ) -> Result<oneshot::Receiver<Result<Arc<Vec<LevelChunkWithLight>>, LoadError>>, LoaderShutDown>
-    {
+    ) -> Result<oneshot::Receiver<Result<Arc<ReadyChunks>, LoadError>>, LoaderShutDown> {
         let index = self.inner.next.fetch_add(1, Ordering::Relaxed) % self.inner.queues.len();
         let (reply, received) = oneshot::channel();
         self.inner.queues[index]
@@ -133,7 +134,9 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    use protocol::{ChunkSection, HeightmapRecord, LightData, PaletteContainer};
+    use protocol::{
+        ChunkSection, HeightmapRecord, LevelChunkWithLight, LightData, PaletteContainer,
+    };
 
     /// A source that answers from the thread it runs on and records that
     /// thread, so a test can prove the read left the runtime.
@@ -145,11 +148,13 @@ mod tests {
     }
 
     impl ChunkSource for EchoSource {
-        fn load_batch(&self) -> Result<Arc<Vec<LevelChunkWithLight>>, LoadError> {
+        fn load_batch(&self) -> Result<Arc<ReadyChunks>, LoadError> {
             let thread = std::thread::current();
             let name = thread.name().unwrap_or("<unnamed>").to_owned();
             self.seen.lock().expect("test lock uncontended").push(name);
-            Ok(Arc::new((0..self.count).map(test_chunk).collect()))
+            Ok(Arc::new(ReadyChunks::new(
+                (0..self.count).map(test_chunk).collect(),
+            )))
         }
     }
 
@@ -247,7 +252,7 @@ mod tests {
         let received = loader.load_batch().await.expect("pool alive");
         let chunks = received.await.expect("reply").expect("read ok");
         assert_eq!(chunks.len(), 3, "the source's whole batch");
-        assert_eq!(chunks[0].chunk_x, 0);
+        assert_eq!(chunks.chunks()[0].chunk_x, 0);
 
         let seen = source.seen.lock().expect("test lock uncontended");
         assert_eq!(seen.len(), 1, "one worker picked the job up");

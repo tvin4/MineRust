@@ -17,9 +17,8 @@ use chunk_pace::ChunkPace;
 use data::{GameData, PacketIds};
 use protocol::{
     decode_frame, ChunkBatchReceived, ClientInformation, ConfirmTeleportation, KeepAlive,
-    LevelChunkWithLight, PacketReader, Position, ProtocolState, StatusInfo, MAX_STRING_CHARS,
-    MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT, MOVE_PLAYER_STATUS_ONLY,
-    PLAY_PLUGIN_MESSAGE,
+    PacketReader, Position, ProtocolState, StatusInfo, MAX_STRING_CHARS, MOVE_PLAYER_POS,
+    MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT, MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
 };
 use std::sync::Arc;
 
@@ -28,6 +27,7 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 use tracing::{debug, info, trace, warn};
 
+use crate::chunks::ReadyChunks;
 use crate::error::ConnectionError;
 use crate::frame::{read_tracked, write_tracked};
 use crate::game::{
@@ -492,11 +492,12 @@ fn store_move(
     Ok(())
 }
 
-/// The one-shot answer of the loader pool: the shared batch of ready
-/// payloads or the error of its read. Both sides of the pool move the same
-/// `Arc<Vec<...>>` (part A 2 — a connection clones the pointer, never the
-/// payloads), so the branches name one type instead of the full nesting.
-type BatchReply = Result<Arc<Vec<LevelChunkWithLight>>, LoadError>;
+/// The one-shot answer of the loader pool: the shared ready world of a
+/// connection or the error of its read. Both sides of the pool move the
+/// same `Arc<ReadyChunks>` (part A 2 — a connection clones the pointer,
+/// never the payloads), so the branches name one type instead of the full
+/// nesting.
+type BatchReply = Result<Arc<ReadyChunks>, LoadError>;
 /// Waits for the loader's reply on its one-shot channel.
 ///
 /// While nothing is queued the receiver is `None` and this future never

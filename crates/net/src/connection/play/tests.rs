@@ -5,12 +5,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use protocol::{
-    ChunkBatchFinished, ChunkBatchStart, GameEvent, LoginPlay, PacketKey, PlayerInfoUpdate,
-    SetCenterChunk, SetDefaultSpawnPosition, SynchronizePlayerPosition,
+    ChunkBatchFinished, ChunkBatchStart, GameEvent, LevelChunkWithLight, LoginPlay, PacketKey,
+    PlayerInfoUpdate, SetCenterChunk, SetDefaultSpawnPosition, SynchronizePlayerPosition,
 };
 use tokio::io::{AsyncWriteExt, BufReader};
 
 use super::*;
+use crate::chunks::ReadyChunks;
 use crate::frame::read_frame;
 
 /// A game thread for a test. The thread is detached and ends when its
@@ -29,11 +30,11 @@ struct GatedSource {
 }
 
 impl crate::loader::ChunkSource for GatedSource {
-    fn load_batch(&self) -> Result<Arc<Vec<LevelChunkWithLight>>, LoadError> {
+    fn load_batch(&self) -> Result<Arc<ReadyChunks>, LoadError> {
         // This is the whole point of the pool: the slow world read
         // parks on a pool worker thread, not on the connection.
         self.release.wait();
-        Ok(Arc::new(vec![one_payload()]))
+        Ok(Arc::new(ReadyChunks::new(vec![one_payload()])))
     }
 }
 
@@ -67,12 +68,12 @@ fn one_payload() -> LevelChunkWithLight {
 /// World source serving one fixed fixture batch: the play loop gets the
 /// same chunks on every read without touching a disk.
 struct FixedSource {
-    /// The batch, shared between the pool worker and the test.
-    chunks: Arc<Vec<LevelChunkWithLight>>,
+    /// The ready world, shared between the pool worker and the test.
+    chunks: Arc<ReadyChunks>,
 }
 
 impl crate::loader::ChunkSource for FixedSource {
-    fn load_batch(&self) -> Result<Arc<Vec<LevelChunkWithLight>>, LoadError> {
+    fn load_batch(&self) -> Result<Arc<ReadyChunks>, LoadError> {
         Ok(Arc::clone(&self.chunks))
     }
 }
@@ -279,7 +280,7 @@ async fn a_confirmed_pace_splits_a_burst_into_tick_sized_sub_batches() {
         write_chunk_batch(
             &mut server_write,
             &ids_in_task,
-            Arc::new(chunks),
+            Arc::new(ReadyChunks::new(chunks)),
             &pace,
             0,
             0,
@@ -325,9 +326,10 @@ async fn a_confirmed_pace_splits_a_burst_into_tick_sized_sub_batches() {
     );
 }
 
-/// Part A, 6: chunks outside the send radius of the connection never reach
+/// M4.4 A: chunks outside the join window of the connection never reach
 /// the wire, and the batch framing counts only what was really sent — four
-/// fixture chunks in, the two outside radius 8 of centre (0, 0) dropped.
+/// fixture chunks in, the two outside the radius-8 window of centre (0, 0)
+/// dropped.
 #[tokio::test]
 async fn chunks_outside_the_send_radius_are_not_sent() {
     let ids = Arc::new(PacketIds::compiled());
@@ -336,7 +338,8 @@ async fn chunks_outside_the_send_radius_are_not_sent() {
     let ids_in_task = Arc::clone(&ids);
     let written = tokio::spawn(async move {
         let pace = ChunkPace::default();
-        // (0, -2) and (6, -2) inside radius 8, (20, -2) and (40, -2) out.
+        // (0, -2) and (6, -2) inside the radius-8 window, (20, -2) and
+        // (40, -2) out of it.
         let mut chunks: Vec<_> = [0, 20, 40]
             .into_iter()
             .map(|chunk_x| LevelChunkWithLight {
@@ -348,7 +351,7 @@ async fn chunks_outside_the_send_radius_are_not_sent() {
         write_chunk_batch(
             &mut server_write,
             &ids_in_task,
-            Arc::new(chunks),
+            Arc::new(ReadyChunks::new(chunks)),
             &pace,
             0,
             0,
@@ -546,7 +549,7 @@ async fn the_first_flush_is_nine_then_the_vanilla_paced_tail() {
         .collect();
     assert_eq!(chunks.len(), 20, "the fixture batch");
     let loader = Loader::spawn(Arc::new(FixedSource {
-        chunks: Arc::new(chunks),
+        chunks: Arc::new(ReadyChunks::new(chunks)),
     }))
     .expect("pool threads");
 

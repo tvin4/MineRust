@@ -18,6 +18,7 @@ use tokio::io::AsyncWrite;
 use tokio::time::Instant;
 use tracing::{debug, info};
 
+use crate::chunks::{window, ReadyChunks};
 use crate::error::ConnectionError;
 use crate::frame::write_tracked;
 
@@ -71,11 +72,12 @@ pub(super) enum Stage {
 /// arrives, both stops the wait of [`Stage::AwaitPace`] and sizes every
 /// sub-batch after it.
 pub(super) struct PendingBatch {
-    /// The shared batch (part A 2); payloads are borrowed on send, never
-    /// copied.
-    chunks: Arc<Vec<LevelChunkWithLight>>,
-    /// Indices into `chunks` inside the send order: filtered to the send
-    /// radius (part A, 6) and sorted by the distance rule (part A 1).
+    /// The shared ready world (part A 2); payloads are borrowed on send,
+    /// never copied. The window is resolved into it through its index.
+    chunks: Arc<ReadyChunks>,
+    /// Positions into [`ReadyChunks::chunks`] inside the send order: the
+    /// join window (M4.4 A) with the coordinates the world does not hold
+    /// skipped, in the distance order.
     order: Vec<usize>,
     /// Next index of `order` to send.
     next: usize,
@@ -92,41 +94,34 @@ pub(super) struct PendingBatch {
 }
 
 impl PendingBatch {
-    /// Filters the batch to the send radius and sorts it by the distance
-    /// rule: the burst that results sends from the player's chunk outwards
-    /// and nothing outside the announced square (the client would drop it
-    /// anyway and the finished count would overstate the wire).
-    pub(super) fn new(
-        chunks: Arc<Vec<LevelChunkWithLight>>,
-        center_x: i32,
-        center_z: i32,
-        radius: i32,
-    ) -> Self {
-        let mut order: Vec<usize> = chunks
+    /// Builds the send order from the join window (M4.4 A): the window
+    /// coordinates around the centre at this radius, resolved O(1) through
+    /// the ready index, with the coordinates the world does not hold
+    /// skipped (a join at a world edge sends what exists, never a hole).
+    /// The order then puts the player's chunk first and the rest by growing
+    /// squared distance.
+    pub(super) fn new(ready: Arc<ReadyChunks>, center_x: i32, center_z: i32, radius: i32) -> Self {
+        let wanted = window(center_x, center_z, radius);
+        let mut order: Vec<usize> = wanted
             .iter()
-            .enumerate()
-            .filter(|(_, chunk)| {
-                !outside_view(chunk.chunk_x, chunk.chunk_z, center_x, center_z, radius)
-            })
-            .map(|(index, _)| index)
+            .filter_map(|&(chunk_x, chunk_z)| ready.position(chunk_x, chunk_z))
             .collect();
-        let outside = chunks.len() - order.len();
-        if outside > 0 {
-            info!(
-                radius,
-                center_x,
-                center_z,
-                outside,
-                inside = order.len(),
-                "chunks outside the send radius are not sent"
-            );
-        }
+        let not_cached = wanted.len() - order.len();
+        info!(
+            radius,
+            center_x,
+            center_z,
+            in_window = wanted.len(),
+            sent = order.len(),
+            not_cached,
+            "chunk window selected"
+        );
         order.sort_unstable_by_key(|&index| {
-            let chunk = &chunks[index];
+            let chunk = &ready.chunks()[index];
             order_key(chunk.chunk_x, chunk.chunk_z, center_x, center_z)
         });
         Self {
-            chunks,
+            chunks: ready,
             order,
             next: 0,
             sent: 0,
@@ -182,7 +177,7 @@ impl PendingBatch {
         };
         let group: Vec<&LevelChunkWithLight> = self.order[self.next..self.next + size]
             .iter()
-            .map(|&index| &self.chunks[index])
+            .map(|&index| &self.chunks.chunks()[index])
             .collect();
         self.next += size;
         self.sent += write_sub_batch(writer, ids, &group, self.center_x, self.center_z).await?;
@@ -233,7 +228,7 @@ pub(super) async fn wait_turn(stage: Option<Stage>) -> Option<()> {
 pub(super) async fn write_chunk_batch<W>(
     writer: &mut W,
     ids: &PacketIds,
-    chunks: Arc<Vec<LevelChunkWithLight>>,
+    ready: Arc<ReadyChunks>,
     pace: &ChunkPace,
     center_x: i32,
     center_z: i32,
@@ -242,7 +237,7 @@ pub(super) async fn write_chunk_batch<W>(
 where
     W: AsyncWrite + Unpin,
 {
-    let mut batch = PendingBatch::new(chunks, center_x, center_z, radius);
+    let mut batch = PendingBatch::new(ready, center_x, center_z, radius);
     loop {
         if batch.send_next(writer, ids, pace).await? {
             return Ok(());
@@ -258,9 +253,9 @@ where
 /// info keeps only the batch summaries (`chunk_batch_finished sent`), so
 /// one join's worth of bursts does not print a line per payload at the
 /// default level (part A 2/3: 289 chunks were 289 info lines each). The
-/// sub-batch arriving here was already cut to the send radius by
-/// [`PendingBatch::new`] (part A, 6), so every chunk fits the view square
-/// around `center` the join announced.
+/// sub-batch arriving here was already cut to the join window by
+/// [`PendingBatch::new`] (M4.4 A), so every chunk fits the shape around
+/// `center` the join sends.
 async fn write_sub_batch<W>(
     writer: &mut W,
     ids: &PacketIds,
@@ -347,12 +342,6 @@ pub(super) fn order_key(
 pub(super) fn sort_by_distance(chunks: &mut [&LevelChunkWithLight], center_x: i32, center_z: i32) {
     chunks
         .sort_unstable_by_key(|chunk| order_key(chunk.chunk_x, chunk.chunk_z, center_x, center_z));
-}
-
-/// Whether a chunk lies outside the square of `radius` around `center`
-/// (the cache centre the join announced in Set Center Chunk).
-fn outside_view(chunk_x: i32, chunk_z: i32, center_x: i32, center_z: i32, radius: i32) -> bool {
-    (chunk_x - center_x).abs() > radius || (chunk_z - center_z).abs() > radius
 }
 
 /// What stays true of this module's numbers: the tick of the paced tail

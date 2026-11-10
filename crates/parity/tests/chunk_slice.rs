@@ -31,6 +31,7 @@ use std::sync::Arc;
 
 use chunk_compare::compare_pair;
 use net::ChunkSource as _;
+use net::ReadyChunks;
 use parity::{load_parity_env, ParityEnv};
 use protocol::LevelChunkWithLight;
 use server::{TemplateWorld, WireTables};
@@ -230,7 +231,7 @@ fn report_path(field: &str, value: Option<&str>) -> Option<PathBuf> {
 /// The payloads this server would send for the template world, built by
 /// the production conversion path. `None` with a printed reason when a
 /// report or the world itself is unavailable on this machine.
-fn our_payloads(env: &ParityEnv) -> Option<Vec<LevelChunkWithLight>> {
+fn our_payloads(env: &ParityEnv) -> Option<Arc<ReadyChunks>> {
     let region = env
         .world_template
         .join("dimensions/minecraft/overworld/region");
@@ -280,9 +281,9 @@ fn our_payloads(env: &ParityEnv) -> Option<Vec<LevelChunkWithLight>> {
         Arc::new(WireTables::new(blocks, registries, Arc::new(game_data))),
     );
     match world.load_batch() {
-        // The source hands its batch out behind a shared `Arc` (part A 2);
-        // this report walks a plain `Vec` once per run, off any hot path.
-        Ok(chunks) => Some(chunks.as_ref().clone()),
+        // The source hands its ready world out behind a shared `Arc`
+        // (part A 2); this report walks it once per run, off any hot path.
+        Ok(ready) => Some(ready),
         Err(error) => {
             eprintln!("SKIP: the template world cannot be converted: {error}");
             None
@@ -388,6 +389,7 @@ fn the_chunk_slice_writes_the_diff_table() {
     };
 
     let by_coord: BTreeMap<(i32, i32), &LevelChunkWithLight> = ours
+        .chunks()
         .iter()
         .map(|chunk| ((chunk.chunk_x, chunk.chunk_z), chunk))
         .collect();
@@ -434,4 +436,37 @@ fn the_chunk_slice_writes_the_diff_table() {
         chunks.len(),
         "every recorded chunk compared"
     );
+}
+
+/// M4.4 A: the ready index the join window resolves through finds every
+/// chunk of the v2 template and nothing the world does not hold — the O(1)
+/// `(x, z) -> position` property that replaced the batch scan.
+#[test]
+#[ignore = "requires the owner's template world and reports"]
+fn the_ready_index_resolves_every_template_chunk() {
+    let env = match parity_env_or_skip() {
+        Some(env) => env,
+        None => return,
+    };
+    let ready = match our_payloads(&env) {
+        Some(ready) => ready,
+        None => return,
+    };
+    assert_eq!(
+        ready.len(),
+        729,
+        "the v2 ready batch: 625 full + 104 initialize_light chunks"
+    );
+    for (position, chunk) in ready.chunks().iter().enumerate() {
+        assert_eq!(
+            ready.position(chunk.chunk_x, chunk.chunk_z),
+            Some(position),
+            "chunk ({}, {}) resolves to its own position",
+            chunk.chunk_x,
+            chunk.chunk_z
+        );
+    }
+    assert_eq!(ready.position(1000, 1000), None, "a chunk the world lacks");
+    assert_eq!(ready.position(-1000, -1000), None, "and another");
+    eprintln!("ready index: {} chunks all resolved", ready.len());
 }
