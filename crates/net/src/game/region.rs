@@ -5,10 +5,7 @@
 //! never changes when a second region appears.
 
 use std::collections::BTreeMap;
-use std::time::Instant;
-
-#[cfg(test)]
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
@@ -353,6 +350,11 @@ pub struct Region {
     /// pool); zero in production.
     #[cfg(test)]
     delay: Duration,
+    /// Synthetic per-region workload of the M4.6 benchmark (ARCH-M4 §5,
+    /// W2): [`Region::tick`] busy-loops this long before doing its real
+    /// work. Zero everywhere but the bench; **not** game speed — it is the
+    /// scalability ceiling of the pool mechanism, not of the game.
+    workload: Duration,
 }
 
 impl Region {
@@ -363,7 +365,18 @@ impl Region {
             players: BTreeMap::new(),
             #[cfg(test)]
             delay: Duration::ZERO,
+            workload: Duration::ZERO,
         }
+    }
+
+    /// Sets the synthetic W2 workload of the M4.6 benchmark: the tick
+    /// busy-loops this long per region before its real work (ARCH-M4 §5).
+    ///
+    /// The loop is `std::hint::black_box` arithmetic, not a sleep: it burns
+    /// the same kind of CPU time the real region work would, so the pooled
+    /// path is measured under load. **Not** game speed — see the field doc.
+    pub fn set_bench_workload(&mut self, workload: Duration) {
+        self.workload = workload;
     }
 
     /// Region id.
@@ -437,6 +450,9 @@ impl Region {
         #[cfg(test)]
         if !self.delay.is_zero() {
             std::thread::sleep(self.delay);
+        }
+        if !self.workload.is_zero() {
+            spin(self.workload);
         }
         let mut outcome = TickOutcome::default();
         let mut seq: u32 = 0;
@@ -532,4 +548,21 @@ impl Region {
             Err(TrySendError::Closed(_)) => None,
         }
     }
+}
+
+/// Burns the given amount of CPU time with arithmetic the compiler cannot
+/// elide: the W2 workload of the M4.6 benchmark (ARCH-M4 §5), the mechanism
+/// scalability ceiling rather than game speed.
+fn spin(workload: Duration) {
+    let deadline = Instant::now() + workload;
+    let mut acc: u64 = 0;
+    while Instant::now() < deadline {
+        for _ in 0..1000 {
+            acc = acc
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            std::hint::black_box(&acc);
+        }
+    }
+    std::hint::black_box(acc);
 }
