@@ -3,10 +3,13 @@
 //! The binary in `main.rs` is the CLI shell; the smoke test imports this
 //! lib directly. See the crate root doc in `main.rs` for the modes.
 
+pub mod bot;
 pub mod capacity;
+pub mod network;
 pub mod paced;
 pub mod players;
 pub mod report;
+pub mod world;
 
 use std::path::PathBuf;
 use std::time::Duration;

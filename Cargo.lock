@@ -40,9 +40,12 @@ name = "bench"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "data",
  "net",
+ "parity",
  "protocol",
  "serde_json",
+ "server",
  "tokio",
 ]
 

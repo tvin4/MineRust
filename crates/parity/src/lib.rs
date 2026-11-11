@@ -24,7 +24,9 @@ mod proxy;
 mod steps;
 mod trace;
 mod vanilla;
-mod walk;
+/// Public because the bench bot reuses its packet helpers (`teleport_ack`,
+/// the move payload layouts) without re-deriving them (M4.6, ARCH-M4 §5).
+pub mod walk;
 
 pub use client::{Client, ClientError, Step};
 pub use diff::{diff_traces, normalize, render_report, CountRow, PayloadRow, TracesDiff};
@@ -33,7 +35,7 @@ pub use preload::{
     min_median_max, PreloadError, PreloadMetrics, PRELOAD_TIMEOUT, VIEW_DISTANCE_CHUNKS,
 };
 pub use proxy::{run_proxy, ProxyConfig, ProxyError};
-pub use steps::{join_steps, join_steps_with_view};
+pub use steps::{join_steps, join_steps_with_view, PROBE_WAIT, PROBE_WAIT_NO_PROBE};
 pub use trace::{
     from_hex, to_hex, HexError, Trace, TraceDirection, TraceEntry, TraceIoError, TraceState,
 };

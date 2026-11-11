@@ -1432,7 +1432,10 @@ fn chunk_move(name: &str, payload: &[u8]) -> (i32, i32) {
 
 /// Parses a server `player_position` and builds the acknowledgment the
 /// live client sent: the echoed VarInt id + 3 doubles + 8 zero bytes.
-fn teleport_ack(payload: &[u8]) -> Option<([f64; 3], Vec<u8>)> {
+///
+/// Public so the bench bot reuses the same layout instead of re-deriving
+/// it (M4.6, ARCH-M4 §5).
+pub fn teleport_ack(payload: &[u8]) -> Option<([f64; 3], Vec<u8>)> {
     let (_, consumed) = protocol::decode_varint(payload).ok()?;
     let end = consumed.checked_add(24)?;
     if payload.len() < end {
