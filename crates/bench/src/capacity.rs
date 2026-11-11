@@ -86,16 +86,35 @@ pub fn measure(spec: BenchSpec, spread_chunks: i32) -> anyhow::Result<CapacityRe
     run(scheduler, &mut players, spec)
 }
 
+/// Parses the optional CLI spec: the label either carries a W2 workload
+/// (`W2:<µs>...` — the scalability-ceiling series, the prefix must come
+/// first) or stays W1. The pool shape stays the `BenchSpec` default; the
+/// matrix series are manual.
+fn parse_workload(label: &str) -> Workload {
+    match label.strip_prefix("W2:") {
+        Some(rest) => {
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            digits.parse().map_or(Workload::W1, Workload::W2)
+        }
+        None => Workload::W1,
+    }
+}
+
 /// Runs the CLI mode: one default run; the full matrix is manual
 /// (docs/BENCH-M4.md records the series).
 pub fn run_cli(label: Option<&str>) -> anyhow::Result<()> {
-    let spec = BenchSpec::default();
-    let result = measure(spec, 8)?;
     let label = label.unwrap_or("default");
+    let spec = BenchSpec {
+        workload: parse_workload(label),
+        ..BenchSpec::default()
+    };
+    let result = measure(spec, 8)?;
     let line = crate::report::run_table(label, spec, result.tick_us, result.tps);
+    // Windows filenames: no colons.
+    let safe_label = label.replace(':', "-");
     let path = crate::report::write_report(
         "capacity",
-        label,
+        &safe_label,
         &format!(
             "# capacity: {label}\n\n| run | K | side | P | W | p50 µs | p99 µs | p999 µs | max µs | ticks/s |\n|---|---|---|---|---|---|---|---|---|---|\n{line}\n"
         ),

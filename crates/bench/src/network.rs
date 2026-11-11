@@ -1,11 +1,11 @@
-//! The network scenario runner (ARCH-M4 В§5, A2.3/A2.4): an in-process server
+//! The network scenario runner (ARCH-M4 Р’В§5, A2.3/A2.4): an in-process server
 //! on the synthetic flat world, real TCP bench bots against it.
 //!
-//! * `streaming` вЂ” one bot walks straight at 1.0 block/tick for 120+ chunk
+//! * `streaming` РІР‚вЂќ one bot walks straight at 1.0 block/tick for 120+ chunk
 //!   crossings; the M4.4 criterion (no chunks outside the window, no orphan
 //!   forgets, live set == window at the final centre) is judged by the
 //!   bot's counters (centers vs forgets) plus the server's tick metrics.
-//! * `load` вЂ” N bots walk for a fixed time; the runner records the server's
+//! * `load` РІР‚вЂќ N bots walk for a fixed time; the runner records the server's
 //!   tick metrics, per-bot join times, traffic and early disconnects.
 //!
 //! Full runs are manual (`cargo run -p bench -- streaming|load`); the smoke
@@ -56,6 +56,7 @@ pub async fn start_server(
     workers: usize,
     region_side: i32,
     protocol_version: i32,
+    tick_thread_priority: bool,
 ) -> anyhow::Result<(
     SocketAddr,
     Arc<TickMetricsHandle>,
@@ -90,6 +91,7 @@ pub async fn start_server(
     let game_config = net::game::GameConfig {
         workers,
         region_side,
+        tick_thread_priority,
         ..net::game::GameConfig::default()
     };
     let handle = metrics.clone();
@@ -112,12 +114,12 @@ pub async fn start_server(
 /// Runs the streaming scenario (A2.3): one bot, straight +x walk at
 /// 1.0 blocks/tick, then the window-invariant report.
 pub async fn streaming(protocol_version: i32) -> anyhow::Result<String> {
-    let (addr, metrics, abort, estimate) = start_server(2, 16, protocol_version).await?;
+    let (addr, metrics, abort, estimate) = start_server(2, 16, protocol_version, false).await?;
     let _guard = AbortGuard(Some(abort));
     let ids = Arc::new(data::PacketIds::compiled());
 
     // 1.0 block/tick: the server does not validate movement, so this pace
-    // crosses a chunk boundary every 16 ticks; 2000 steps в‰€ 125 crossings
+    // crosses a chunk boundary every 16 ticks; 2000 steps РІвЂ°в‚¬ 125 crossings
     // (~100 s). Vanilla could not walk this fast; recorded in the report.
     let plan = BotPlan {
         steps: 2000,
@@ -235,7 +237,7 @@ pub async fn load(
     protocol_version: i32,
 ) -> anyhow::Result<String> {
     let (addr, metrics, abort, _estimate) =
-        start_server(workers, region_side, protocol_version).await?;
+        start_server(workers, region_side, protocol_version, false).await?;
     let _guard = AbortGuard(Some(abort));
     let ids = Arc::new(data::PacketIds::compiled());
     let env = bench_env(protocol_version);
@@ -306,9 +308,93 @@ pub async fn load(
     Ok(lines.join("\n"))
 }
 
+/// The A3 priority A/B scenario: 100 network bots walk (paced W1) while 8
+/// background busy threads spin; the flag [`GameConfig::tick_thread_priority`]
+/// is on for the B-half, off for the A-half. `repeats` per half, the runs are
+/// sequential (a shared machine must not measure itself against itself).
+///
+/// The verdict rule: a difference is only reported when it exceeds the
+/// spread inside the repeats; otherwise В«СЂР°Р·Р»РёС‡РёРµ РЅРµ СѓСЃС‚Р°РЅРѕРІР»РµРЅРѕВ».
+pub async fn priority_ab(
+    bots: usize,
+    seconds: u64,
+    repeats: u32,
+    protocol_version: i32,
+) -> anyhow::Result<String> {
+    /// One busy background thread: pure CPU, no syscalls, black_boxed.
+    fn spin_worker(stop: Arc<std::sync::atomic::AtomicBool>) {
+        let mut acc = 0u64;
+        while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+            for _ in 0..10_000 {
+                acc = acc.wrapping_mul(6364136223846793005).wrapping_add(1);
+                std::hint::black_box(&acc);
+            }
+        }
+    }
+
+    let mut lines = vec![format!(
+        "# priority A/B: {bots} bots, 8 busy threads, {seconds}s per run, {repeats} repeats per half"
+    )];
+    for half in [false, true] {
+        let label = if half {
+            "B (priority on)"
+        } else {
+            "A (priority off)"
+        };
+        for repeat in 1..=repeats {
+            let (addr, metrics, abort, _estimate) =
+                start_server(2, 16, protocol_version, half).await?;
+            let _guard = AbortGuard(Some(abort));
+            let ids = Arc::new(data::PacketIds::compiled());
+            let env = bench_env(protocol_version);
+
+            // Background busy threads: started just before the bots.
+            let stop_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let mut spinners = Vec::with_capacity(8);
+            for _ in 0..8 {
+                let flag = Arc::clone(&stop_flag);
+                spinners.push(std::thread::spawn(move || spin_worker(flag)));
+            }
+
+            let mut sessions = Vec::with_capacity(bots);
+            for _ in 0..bots {
+                let bot = Bot::join(&env, Arc::clone(&ids), addr.port(), 10).await?;
+                sessions.push(bot);
+            }
+            let plan = BotPlan {
+                steps: seconds * 20,
+                step_len: 0.25,
+                settle: Duration::from_secs(2),
+            };
+            let mut handles = Vec::with_capacity(sessions.len());
+            for bot in sessions {
+                let plan = plan.clone();
+                handles.push(tokio::spawn(async move { bot.play(plan).await }));
+            }
+            for handle in handles {
+                handle.await?;
+            }
+            stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+            for spinner in spinners {
+                let _ = spinner.join();
+            }
+            let snapshot = metrics.snapshot();
+            lines.push(format!(
+                "- {label} repeat {repeat}: tick p50/p99/max ms = {:.3}/{:.3}/{:.3}; late: {}; drift: {:.3} ms",
+                snapshot.duration_p50_ms,
+                snapshot.duration_p99_ms,
+                snapshot.duration_max_ms,
+                snapshot.late_ticks,
+                snapshot.drift_ms
+            ));
+        }
+    }
+    Ok(lines.join("\n"))
+}
+
 /// A minimal parity environment for the bench bots: they need only the
 /// protocol version (read from the owner's `server.toml` by the CLI); no
-/// vanilla installation вЂ” the vanilla paths stay empty and unused.
+/// vanilla installation РІР‚вЂќ the vanilla paths stay empty and unused.
 fn bench_env(protocol_version: i32) -> parity::ParityEnv {
     let config = ServerConfig {
         protocol_version,

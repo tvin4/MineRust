@@ -51,10 +51,18 @@ fn main() -> anyhow::Result<()> {
             println!("{report}\nreport: {}", path.display());
             Ok(())
         }),
+        "priority" => runtime.block_on(async {
+            let version = network::protocol_version()?;
+            let report = network::priority_ab(100, 20, 3, version).await?;
+            let path = network::save_report("priority", &report)?;
+            println!("{report}\nreport: {}", path.display());
+            Ok(())
+        }),
         other => anyhow::bail!(
-            "usage: bench <capacity|paced|streaming|load> ...\n  \
+            "usage: bench <capacity|paced|streaming|load|priority> ...\n  \
              capacity/paced [label]\n  \
              load <bots> <workers> <region_side> <seconds>\n  \
+             priority (A3: 100 bots + 8 busy threads, 3 repeats per half)\n  \
              the label names the report file in target/bench/ (got: {other})"
         ),
     }

@@ -1304,3 +1304,17 @@ warnings`, `cargo test --workspace` — зелёные.
 - `protocol_version`/`version_name` и путь к клиентскому jar из игры
   хранятся только в локальном gitignored `server.toml` владельца; в
   репозитории лежит `server.example.toml` с плейсхолдерами (0 / "unknown").
+
+## M4.6 (crates/bench) — выполнено 12.11.2026
+
+- Крейт `crates/bench`: capacity (W1/W2, K∈{0,2,6,10,12}), paced (дрейф/jitter),
+  streaming (M4.4 «100+ чанков» — 125 сдвигов, инвариант окна 0/0, живое
+  множество == окно 473; критерий M4.4 ЗАКРЫТ), load (N∈{10,50,100,200} ×
+  K∈{2,6,10} × side{1,16}: 0 киков везде, join ~109 мс/бот), priority A/B.
+- `Region::set_bench_workload(Duration)` (pub, default 0);
+  `GameConfig.tick_thread_priority` (default off, Windows).
+- Вердикты: D5 (K = available_parallelism−2 остаётся), D3 (region_side=0 до
+  данных реального мира), D7 (приоритет off; late_ticks улучшаются под
+  contention). Агрегаты: `docs/BENCH-M4.md`; сырые отчёты: `target/bench/`.
+- Далее: M4.5 — трейс ванили «два бота» (C1–C3), только бот/инструменты,
+  без серверного кода M4.5.

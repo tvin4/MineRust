@@ -94,6 +94,12 @@ pub struct GameConfig {
     /// Side of a region tile in chunks (M4.3 part B); `0` means no split:
     /// the whole world is [`SINGLE_REGION`], the pre-M4.3 behaviour.
     pub region_side: i32,
+    /// Raise the game thread's priority one step above normal (A3, the
+    /// M4.6 priority question). Windows only
+    /// (`THREAD_PRIORITY_ABOVE_NORMAL`); other platforms ignore the flag.
+    /// Default off: the measured difference is judged in `docs/BENCH-M4.md`
+    /// before this is ever recommended.
+    pub tick_thread_priority: bool,
 }
 
 impl Default for GameConfig {
@@ -106,7 +112,33 @@ impl Default for GameConfig {
             ticks_limit: None,
             workers: 0,
             region_side: 0,
+            tick_thread_priority: false,
         }
+    }
+}
+
+/// Raises the calling thread's priority one step above normal (A3). Windows
+/// only: `SetThreadPriority` with `THREAD_PRIORITY_ABOVE_NORMAL` (+1). A
+/// failure is logged, never fatal — the tick loop is correct either way.
+// SOURCE: Microsoft Win32 `SetThreadPriority` / `THREAD_PRIORITY_ABOVE_NORMAL`
+// documentation (learn.microsoft.com); the effect is what the A3 A/B series
+// measures, the call itself is the documented minimal form.
+#[cfg(windows)]
+fn raise_game_thread_priority() {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn SetThreadPriority(hthread: *mut core::ffi::c_void, npriority: i32) -> i32;
+        fn GetCurrentThread() -> *mut core::ffi::c_void;
+    }
+    const THREAD_PRIORITY_ABOVE_NORMAL: i32 = 1;
+    // SAFETY: SetThreadPriority on the current thread's pseudo-handle with a
+    // documented constant; it cannot move memory or unwind. A dedicated test
+    // calls this once (see tests::priority_raise_does_not_panic).
+    let ok = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL) };
+    if ok == 0 {
+        warn!("tick thread priority raise failed (GetLastError ignored)");
+    } else {
+        info!("tick thread priority raised above normal");
     }
 }
 
@@ -195,9 +227,16 @@ impl GameHandle {
         let thread_metrics = Arc::clone(&metrics);
         let stop = Arc::new(AtomicBool::new(false));
         let loop_stop = Arc::clone(&stop);
+        let priority = config.tick_thread_priority;
         let join = std::thread::Builder::new()
             .name("minecraft-game".to_owned())
-            .spawn(move || game_loop(incoming, config, &thread_metrics, &loop_stop))?;
+            .spawn(move || {
+                if priority {
+                    #[cfg(windows)]
+                    raise_game_thread_priority();
+                }
+                game_loop(incoming, config, &thread_metrics, &loop_stop)
+            })?;
         let handle = Self {
             to_game,
             next_id: Arc::new(AtomicI32::new(1)),
