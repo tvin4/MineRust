@@ -19,7 +19,13 @@ use net::loader::{ChunkSource, LoadError};
 use protocol::{ChunkSection, HeightmapRecord, LevelChunkWithLight, LightData, PaletteContainer};
 
 /// Chunks along one axis of the synthetic world.
-pub const WORLD_SIDE: i32 = 160;
+///
+/// 288 keeps every window of the streaming run inside the world: the bot
+/// walks 2000 blocks from the spawn (chunk 0) to chunk 125, the window
+/// there spans 114..136 — inside −144..143. A smaller world made the
+/// window run off the edge and the invariant check counted the missing
+/// edge chunks as "outside the window" (they simply do not exist).
+pub const WORLD_SIDE: i32 = 288;
 
 /// A chunk source over a pre-built ready batch.
 struct FlatSource {

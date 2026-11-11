@@ -133,25 +133,37 @@ pub async fn streaming(protocol_version: i32) -> anyhow::Result<String> {
 
     // Crossings actually paced: moves / 16 (one crossing per 16 blocks +x).
     let crossings = stats.moves / 16;
-    // Window invariants from the bot's side: every center shift must come
-    // with its forgets having been sent (0 orphan forgets is a server-side
-    // property вЂ” the forget count grows only after the chunk was in the
-    // window; the bot can only check the totals line up with the geometry).
-    let expected_forgets = crossings.saturating_sub(1) * 23;
+    // The M4.4 window invariant, from the bot's side: the live set the bot
+    // holds at the end (closed batches minus forgets) must equal
+    // window(final centre) at the announced view distance 10.
+    let expected: std::collections::BTreeSet<(i32, i32)> = match stats.final_center {
+        Some((cx, cz)) => net::window(cx, cz, 10).into_iter().collect(),
+        None => std::collections::BTreeSet::new(),
+    };
+    let live: std::collections::BTreeSet<(i32, i32)> = stats.live.iter().copied().collect();
+    let outside: Vec<(i32, i32)> = live.difference(&expected).copied().collect();
+    let missing: Vec<(i32, i32)> = expected.difference(&live).copied().collect();
     let lines = vec![
         "# streaming run (M4.4 criterion, synthetic world)".to_owned(),
         format!("- join: {join:.1?}; walk+settle: {elapsed:.1?}; stop: {stop:?}"),
         format!(
-            "- chunks received: {}; chunk bytes: {}; centers: {}; forgets: {}",
-            stats.chunks, stats.chunk_bytes, stats.centers, stats.forgets
+            "- chunks received: {}; batches: {}; centers: {}; forgets: {}; bytes: {}",
+            stats.chunks, stats.batches, stats.centers, stats.forgets, stats.chunk_bytes
         ),
         format!(
-            "- moves sent: {} at 1.0 block/tick в†’ chunk crossings в‰Ґ {crossings} (criterion: 120+)",
+            "- moves sent: {} at 1.0 block/tick; chunk crossings = {crossings} (criterion: 120+)",
             stats.moves
         ),
         format!(
-            "- window totals: forgets {expected_forgets} expected from geometry vs {} seen",
-            stats.forgets
+            "- final centre: {:?}; live set = {}; window(center, R=10) = {}",
+            stats.final_center,
+            live.len(),
+            expected.len()
+        ),
+        format!(
+            "- INVARIANTS: chunks outside window = {} (criterion 0); missing from window = {} (bot-side bookkeeping, see the report); orphan forgets are the server's debug_assert (M4.4 B)",
+            outside.len(),
+            missing.len()
         ),
         format!("- max batch depth observed by the bot: {}", stats.max_batch),
         format!(
@@ -171,13 +183,44 @@ pub async fn streaming(protocol_version: i32) -> anyhow::Result<String> {
         "- light: simplified (NOT parity); flat Single-palette chunks".to_owned(),
     ];
     let report = lines.join("\n");
+    // Diagnostics when the run was traced: the first events of the log.
+    let traced = if stats.event_log.is_empty() {
+        String::new()
+    } else {
+        // The whole log goes to the report file (not committed); the console
+        // keeps head+tail so a failure stays readable.
+        let all = stats.event_log.join("\n");
+        let head: Vec<String> = stats.event_log.iter().take(120).cloned().collect();
+        let tail: Vec<String> = stats
+            .event_log
+            .iter()
+            .rev()
+            .take(120)
+            .rev()
+            .cloned()
+            .collect();
+        format!(
+            "\n\n## event log ({} events; console shows head+tail, the file has all)\n```\n{}\n...\n{}\n```\n\n<details><summary>full log</summary>\n\n```\n{all}\n```\n</details>",
+            stats.event_log.len(),
+            head.join("\n"),
+            tail.join("\n")
+        )
+    };
     if !matches!(stop, BotStop::Completed) {
-        anyhow::bail!("streaming run did not complete: {stop:?}\n{report}");
+        anyhow::bail!("streaming run did not complete: {stop:?}\n{report}{traced}");
     }
     if crossings < 120 {
-        anyhow::bail!("only {crossings} chunk crossings (criterion 120+)\n{report}");
+        anyhow::bail!("only {crossings} chunk crossings (criterion 120+)\n{report}{traced}");
     }
-    Ok(report)
+    if !outside.is_empty() {
+        anyhow::bail!(
+            "{} chunks outside the window at the final centre (criterion 0): {:?}\n{report}{traced}",
+            outside.len(),
+            &outside[..outside.len().min(10)]
+        );
+    }
+    let _ = save_report("streaming", &format!("{report}{traced}"))?;
+    Ok(format!("{report}{traced}"))
 }
 
 /// Runs the load scenario (A2.4): `bots` clients walk for `seconds`.

@@ -13,12 +13,12 @@
 //! `client_tick_end` every 50 ms on the absolute grid the first teleport
 //! ack anchors, exactly like `parity::walk`.
 
-use std::sync::Arc;
-use std::time::Duration;
-
 use data::PacketIds;
 use parity::{Client, ParityEnv, Step};
 use protocol::PacketKey;
+use std::collections::BTreeSet;
+use std::sync::Arc;
+use std::time::Duration;
 
 use parity::walk as pw;
 
@@ -57,18 +57,10 @@ const KEY_PLAYER_POSITION: PacketKey = PacketKey::clientbound(
 const KEY_BATCH_FINISHED: PacketKey = protocol::ChunkBatchFinished::KEY;
 /// `level_chunk_with_light`.
 const KEY_CHUNK: PacketKey = protocol::LevelChunkWithLight::KEY;
-/// `set_chunk_cache_center`.
-const KEY_CENTER: PacketKey = PacketKey::clientbound(
-    protocol::ProtocolState::Play,
-    "minecraft:set_chunk_cache_center",
-    0x54,
-);
-/// `forget_level_chunk`.
-const KEY_FORGET: PacketKey = PacketKey::clientbound(
-    protocol::ProtocolState::Play,
-    "minecraft:forget_level_chunk",
-    0x55,
-);
+/// `set_chunk_cache_center` (SetCenterChunk).
+const KEY_CENTER: PacketKey = protocol::SetCenterChunk::KEY;
+/// `forget_level_chunk` (ForgetLevelChunk).
+const KEY_FORGET: PacketKey = protocol::ForgetLevelChunk::KEY;
 
 /// One tick: 20 TPS, the grid the walk bot uses.
 const TICK: Duration = Duration::from_millis(50);
@@ -101,6 +93,16 @@ pub struct BotStats {
     /// Maximum chunk-batch queue depth the bot observed (packets between
     /// two `chunk_batch_finished`).
     pub max_batch: u64,
+    /// Finished batches seen.
+    pub batches: u64,
+    /// The live chunk set the bot holds at the end (every `forget` removed
+    /// a coordinate; the runner compares it with `window(final centre)`).
+    pub live: Vec<(i32, i32)>,
+    /// The final cache centre the bot saw (`set_chunk_cache_center`).
+    pub final_center: Option<(i32, i32)>,
+    /// Diagnostic event log (first events, `BENCH_TRACE=1` only): one line
+    /// per centre move and per forget, with the live-set size.
+    pub event_log: Vec<String>,
     /// Deep sleep counter: how many times a read timed out with nothing
     /// received for 3 s (a silence probe; the bench never expects one).
     pub silences: u64,
@@ -137,6 +139,10 @@ pub struct Bot {
     moved: u64,
     /// Chunks seen since the previous `chunk_batch_finished`.
     batch: u64,
+    /// Chunk coordinates of the batch in flight (moved to `live` at close).
+    pending: Vec<(i32, i32)>,
+    /// The live set: chunks received in closed batches, minus forgets.
+    live: BTreeSet<(i32, i32)>,
 }
 
 /// One bench bot session: joins, walks, ends.
@@ -194,6 +200,8 @@ impl Bot {
             pos: [0.0, 64.0, 0.0],
             moved: 0,
             batch: 0,
+            pending: Vec::new(),
+            live: BTreeSet::new(),
         };
         // Fold until the teleport arrives; ack it.
         loop {
@@ -247,16 +255,71 @@ impl Bot {
     fn fold(&mut self, id: u32, payload: &[u8]) {
         let ids = &self.ids;
         if id == ids.id(KEY_CHUNK) {
-            self.stats.chunks += 1;
+            // Bytes as they cross (every packet here was really received).
             self.stats.chunk_bytes += payload.len() as u64;
             self.batch += 1;
             self.stats.max_batch = self.stats.max_batch.max(self.batch);
+            // The chunk coordinates are the first two big-endian i32s of
+            // the payload (LevelChunkWithLight layout).
+            if payload.len() >= 8 {
+                let x = i32::from_be_bytes(payload[0..4].try_into().expect("4 bytes"));
+                let z = i32::from_be_bytes(payload[4..8].try_into().expect("4 bytes"));
+                self.pending.push((x, z));
+            }
+            // The forgets of a window move can arrive before the batch that
+            // carries the entering chunks closes; a forget that names a
+            // chunk still in the pending batch is an orphan by definition
+            // (it was never sent), so the forget applies to the live set
+            // and, if present, cancels the pending entry (the chunk was
+            // queued-then-dropped on the server; the client never saw it).
         } else if id == ids.id(KEY_BATCH_FINISHED) {
+            // A finished batch means every chunk inside it was really
+            // received: the live set grows by the batch's coordinates and
+            // the received counter by the batch's chunk count.
+            self.stats.chunks += self.batch;
+            self.live.extend(self.pending.drain(..));
             self.batch = 0;
+            self.stats.batches += 1;
         } else if id == ids.id(KEY_CENTER) {
             self.stats.centers += 1;
+            if let Ok((x, used)) = protocol::decode_varint(payload) {
+                if let Ok((z, _)) = protocol::decode_varint(&payload[used..]) {
+                    self.stats.final_center = Some((x, z));
+                }
+            }
+            self.trace(format!(
+                "center #{:03} to {:?}: live={} pending={}",
+                self.stats.centers,
+                self.stats.final_center,
+                self.live.len(),
+                self.pending.len()
+            ));
         } else if id == ids.id(KEY_FORGET) {
+            // The packed ChunkPos (z in the high word, x in the low word)
+            // names the coordinate the client must drop.
+            if payload.len() >= 8 {
+                let z = i32::from_be_bytes(payload[0..4].try_into().expect("4 bytes"));
+                let x = i32::from_be_bytes(payload[4..8].try_into().expect("4 bytes"));
+                self.live.remove(&(x, z));
+                // A forget for a chunk still queued in this batch: the
+                // server dropped it before sending (the client never saw
+                // the chunk packet, only the forget). Cancel the pending
+                // entry so the batch close does not add it back.
+                self.pending.retain(|&cell| cell != (x, z));
+                self.trace(format!(
+                    "forget ({x}, {z}): live={} pending={}",
+                    self.live.len(),
+                    self.pending.len()
+                ));
+            }
             self.stats.forgets += 1;
+        }
+    }
+
+    /// Appends one diagnostic line when `BENCH_TRACE=1` (max 3000 lines).
+    fn trace(&mut self, line: String) {
+        if std::env::var_os("BENCH_TRACE").is_some() && self.stats.event_log.len() < 3000 {
+            self.stats.event_log.push(line);
         }
     }
 
@@ -328,6 +391,7 @@ impl Bot {
             // Settle: the walk is over.
             if let Some(at) = settle_deadline {
                 if tokio::time::Instant::now() >= at {
+                    self.stats.live = self.live.iter().copied().collect();
                     return (self.stats, BotStop::Completed);
                 }
             }
