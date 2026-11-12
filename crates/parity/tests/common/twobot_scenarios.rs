@@ -9,6 +9,10 @@
 //! С3 — B walks +x until vanilla stops showing B to A (a
 //! `remove_entities` of B's id while B did not leave: A arms that
 //! detection only while B is walking), then walks back to the join point.
+//! С4 — B stands 3 s, then rotates in place for 5 s (`move_player_rot`
+//! with changing yaw and pitch, one packet per tick, position unchanged),
+//! stands 3 s and leaves cleanly; it answers «what does vanilla send about
+//! a player that rotates without moving» (the `move_entity_rot` question).
 //!
 //! Movement angles reuse the live client's observed shapes: the rot-only
 //! payload layout comes from `live-session.json` (id 32, 9 bytes), the
@@ -31,6 +35,10 @@ pub const EXPECTED_GAME_MODE: i32 = 3;
 const WARM_TICKS: u64 = 40;
 /// С3: ticks B stands at the join point after returning (5 s).
 const HOME_STAND_TICKS: u64 = 100;
+/// С4: ticks B stands after joining and after rotating (3 s each).
+const ROT_STAND_TICKS: u64 = 60;
+/// С4: ticks B rotates in place, one `move_player_rot` per tick (5 s).
+const ROT_TICKS: u64 = 100;
 
 /// What a scenario asks bot B to do after the shared join phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +49,8 @@ pub enum Scene {
     Walk,
     /// С3: walk until A loses track of B, then walk back.
     Track,
+    /// С4: stand 3 s, rotate in place 5 s, stand 3 s, leave.
+    Rotate,
 }
 
 impl Scene {
@@ -50,6 +60,7 @@ impl Scene {
             Scene::Join => "c1",
             Scene::Walk => "c2",
             Scene::Track => "c3",
+            Scene::Rotate => "c4",
         }
     }
 }
@@ -324,6 +335,29 @@ impl Behavior for BScript {
                     return self.track_home(pos);
                 }
                 self.track_forward(pos)
+            }
+            Scene::Rotate => {
+                // 3 s stand → 5 s rotation in place → 3 s stand → leave.
+                let rotated_until = ROT_STAND_TICKS + ROT_TICKS;
+                if self.ticks <= ROT_STAND_TICKS {
+                    Vec::new()
+                } else if self.ticks <= rotated_until {
+                    let k = (self.ticks - ROT_STAND_TICKS) as f32;
+                    // Both angles change every tick; the position is never sent.
+                    let yaw = (k * 9.0) % 360.0 - 180.0;
+                    let pitch = (k * 7.0) % 60.0 - 30.0;
+                    vec![Cmd::MoveRot(yaw, pitch)]
+                } else if self.ticks <= rotated_until + ROT_STAND_TICKS {
+                    Vec::new()
+                } else {
+                    self.shared.script_done.store(true, Ordering::SeqCst);
+                    vec![Cmd::Stop(
+                        "B stood 3 s, rotated in place 5 s (move_player_rot, position \
+                         unchanged), stood 3 s; its connection is closed next (the clean \
+                         leave of С4)"
+                            .to_owned(),
+                    )]
+                }
             }
         }
     }

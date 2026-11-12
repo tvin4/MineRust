@@ -16,6 +16,9 @@
 //!   back to the join point; the distance is the tracking estimate. Being
 //!   refused before the ready-zone edge (assert before send) yields the
 //!   fact «tracking distance: не установлено», never a silent guess.
+//! * С4 — B stands 3 s, rotates in place 5 s (`move_player_rot`, changing
+//!   yaw and pitch, position unchanged), stands 3 s and leaves; it answers
+//!   what vanilla sends about a player that rotates without moving.
 //!
 //! Stop conditions (owner's list): kicks/closed connections, rollback (a
 //! second server `player_position`), movement refused outside the ready
@@ -115,6 +118,7 @@ fn scene_desc(scene: Scene) -> &'static str {
         Scene::Join => "С1: B joins, stands 10 s, leaves cleanly",
         Scene::Walk => "С2: B walks +x 10 s with rotation, stands 5 s",
         Scene::Track => "С3: B walks until A loses track of B, then returns",
+        Scene::Rotate => "С4: B stands 3 s, rotates in place 5 s, stands 3 s, leaves",
     }
 }
 
@@ -124,6 +128,7 @@ fn safety_for(scene: Scene) -> Duration {
         Scene::Join => Duration::from_secs(180),
         Scene::Walk => Duration::from_secs(240),
         Scene::Track => Duration::from_secs(480),
+        Scene::Rotate => Duration::from_secs(240),
     }
 }
 
@@ -662,5 +667,46 @@ async fn two_bot_trace_three_scenarios() {
         "STOP: stop conditions found, repair first and rerun (one run each): {}\n\
          see twobot-summary.md",
         violations.join(" | ")
+    );
+}
+
+/// С4 only: what vanilla sends about a player that rotates in place
+/// without moving (`move_entity_rot` / `rotate_head` / `move_entity_pos_rot`
+/// question). One run on a fresh v3 copy; A stands, B stands 3 s, rotates
+/// 5 s, stands 3 s and leaves. The trace is analysed with
+/// `analyze.py entities-detail`; a clean run only reports, it never
+/// guesses the codec.
+#[tokio::test]
+#[ignore = "requires the owner's vanilla installation (C:\\MineRust-data)"]
+async fn two_bot_trace_rotate() {
+    let env = match load_parity_env() {
+        Ok(env) => env,
+        Err(error) => {
+            eprintln!("SKIP: parity environment is not configured: {error}");
+            return;
+        }
+    };
+    let ids = match env.packet_ids() {
+        Ok(ids) => Arc::new(ids),
+        Err(error) => {
+            eprintln!("SKIP: packet ids unavailable: {error}");
+            return;
+        }
+    };
+    if let Err(error) = std::fs::create_dir_all(TRACE_DIR) {
+        eprintln!("SKIP: cannot create {TRACE_DIR}: {error}");
+        return;
+    }
+    let outcome = one_scenario(&env, ids, Scene::Rotate).await;
+    eprintln!(
+        "{}: violations={:?} facts={}",
+        outcome.code,
+        outcome.violations,
+        outcome.facts.len()
+    );
+    assert!(
+        outcome.violations.is_empty(),
+        "STOP: stop conditions found in С4, repair first and rerun: {}",
+        outcome.violations.join(" | ")
     );
 }
