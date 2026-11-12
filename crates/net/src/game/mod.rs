@@ -22,6 +22,10 @@ mod replay;
 mod scheduler;
 
 #[cfg(test)]
+mod entities_equivalence_tests;
+#[cfg(test)]
+mod entities_reference;
+#[cfg(test)]
 mod entities_tests;
 #[cfg(test)]
 mod region_tests;

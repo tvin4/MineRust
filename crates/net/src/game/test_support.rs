@@ -20,12 +20,23 @@ pub type JoinFixture = (PlayerJoin, Arc<MoveSlot>, mpsc::Receiver<ServerMessage>
 /// A join registration at a block, with the player's movement slot and the
 /// connection's side of the outbound queue.
 pub fn join_at(id: PlayerId, spawn: (i32, i32, i32)) -> JoinFixture {
+    join_view(id, &format!("player-{id}"), 10, spawn)
+}
+
+/// [`join_at`] with an explicit name and view distance (M4.5 Шаг 3.5
+/// equivalence tests).
+pub fn join_view(
+    id: PlayerId,
+    name: &str,
+    view_distance: i32,
+    spawn: (i32, i32, i32),
+) -> JoinFixture {
     let (outbound, receiver) = mpsc::channel(OUTBOUND_CAPACITY);
     let slot = Arc::new(MoveSlot::default());
     let join = PlayerJoin {
         id,
-        name: format!("player-{id}"),
-        view_distance: 10,
+        name: name.to_owned(),
+        view_distance,
         spawn: Position {
             x: spawn.0,
             y: spawn.1,
