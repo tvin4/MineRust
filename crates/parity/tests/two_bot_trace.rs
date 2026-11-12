@@ -546,10 +546,14 @@ fn write_report(outcome: &ScenarioOutcome) {
     }
     text.push_str("\n## Traces\n");
     text.push_str(&format!("A JSONL: {}\n", outcome.a_trace.display()));
-    text.push_str(&format!(
-        "B JSONL: {} (B not started => absent)\n",
-        outcome.b_trace.display()
-    ));
+    if outcome.b.is_some() {
+        text.push_str(&format!("B JSONL: {}\n", outcome.b_trace.display()));
+    } else {
+        text.push_str(&format!(
+            "B JSONL: {} (B not started => absent)\n",
+            outcome.b_trace.display()
+        ));
+    }
 
     if let Err(error) = std::fs::write(&outcome.report, text) {
         eprintln!("cannot write {}: {error}", outcome.report.display());

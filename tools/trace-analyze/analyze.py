@@ -50,6 +50,7 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 MOVE_POS = 'minecraft:move_player_pos'
 MOVE_POS_ROT = 'minecraft:move_player_pos_rot'
+MOVE_ROT = 'minecraft:move_player_rot'
 TICK_END = 'minecraft:client_tick_end'
 BATCH_START = 'minecraft:chunk_batch_start'
 BATCH_FINISHED = 'minecraft:chunk_batch_finished'
@@ -58,6 +59,18 @@ CHUNK = 'minecraft:level_chunk_with_light'
 CENTRE = 'minecraft:set_chunk_cache_center'
 FORGET = 'minecraft:forget_level_chunk'
 POSITION = 'minecraft:player_position'
+# Entity-visibility packets of the two-bot trace (M4.5): the ids come from
+# the data generator, the field layouts are decoded by length only.
+ADD_ENTITY = 'minecraft:add_entity'
+REMOVE_ENTITIES = 'minecraft:remove_entities'
+PLAYER_INFO_UPDATE = 'minecraft:player_info_update'
+PLAYER_INFO_REMOVE = 'minecraft:player_info_remove'
+ENTITY_POS = 'minecraft:move_entity_pos'
+ENTITY_POS_ROT = 'minecraft:move_entity_pos_rot'
+ENTITY_ROT = 'minecraft:move_entity_rot'
+ROTATE_HEAD = 'minecraft:rotate_head'
+TELEPORT_ENTITY = 'minecraft:teleport_entity'
+ENTITY_POSITION_SYNC = 'minecraft:entity_position_sync'
 
 
 def load(path):
@@ -673,6 +686,171 @@ def cmd_outside(ctx, args):
             print(f'  inside-new {key} status={after[key][0]}')
 
 
+ENTITY_KEYS = [
+    ADD_ENTITY, REMOVE_ENTITIES, PLAYER_INFO_UPDATE, PLAYER_INFO_REMOVE,
+    ENTITY_POS, ENTITY_POS_ROT, ENTITY_ROT, ROTATE_HEAD, TELEPORT_ENTITY,
+    ENTITY_POSITION_SYNC,
+    'minecraft:set_entity_data', 'minecraft:set_entity_motion',
+    'minecraft:update_attributes', 'minecraft:set_equipment',
+    'minecraft:entity_event', 'minecraft:set_passengers',
+]
+
+ENTITY_RE = re.compile(
+    '|'.join(re.escape(n) for n in ENTITY_KEYS))
+
+
+def add_entity_ids(row):
+    """Entity ids inside an add_entity payload, decoded by length.
+
+    The payload layout is not asserted here: the analyzer only extracts
+    candidate ids the other bot's packets may reference. SOURCE: wiki,
+    unverified — the id field position is a hypothesis checked by whether
+    the two traces agree on it.
+    """
+    body = row['payload']
+    # varint entity id + varint uuid-count... the exact prefix is a
+    # hypothesis; read the first two varints and report them as candidates.
+    try:
+        eid, pos = varint(body, 0)
+        _, pos2 = varint(body, pos)
+        return [eid]
+    except (IndexError, struct.error):
+        return []
+
+
+def remove_entity_ids(row):
+    """Entity ids of remove_entities: varint count, then that many varints."""
+    body = row['payload']
+    try:
+        count, pos = varint(body, 0)
+        out = []
+        for _ in range(min(count, 64)):
+            eid, pos = varint(body, pos)
+            out.append(eid)
+        return out
+    except (IndexError, struct.error):
+        return []
+
+
+def entity_varints(row):
+    """First few varints of a move/rotate/teleport entity payload."""
+    body = row['payload']
+    out = []
+    try:
+        pos = 0
+        for _ in range(2):
+            v, pos = varint(body, pos)
+            out.append(v)
+    except (IndexError, struct.error):
+        pass
+    return out
+
+
+def cmd_entities(ctx, args):
+    """The other player as bot A's trace sees it: which entity packets
+    reference B, in what order, with which lengths and intervals.
+
+    Everything here is «определено по трейсу» except the field-layout
+    remarks, which are hypotheses (marked inline). No raw coordinate or
+    id list is printed without --list.
+    """
+    rows = ctx.rows
+    other = args.other
+    # Which entity id the other bot owns: cross-check add_entity against
+    # the packets that move entities, then against bot B's own entity id
+    # when --self-trace is given.
+    print(f'trace: {args.trace}  other player: {other}')
+    counts = Counter(r['name'] for r in rows
+                     if r['dir'] == 'clientbound' and r['name'] in ENTITY_KEYS)
+    print('entity packets (clientbound, by type):')
+    for name, count in counts.most_common():
+        print(f'  {name:<44} {count}')
+    if not counts:
+        print('  (none — the other player was never visible to this client)')
+
+    # Linkage: add_entity is the only packet that introduces an entity;
+    # its id is the hypothesis to test against the movement packets.
+    add_rows = [r for r in rows if r['name'] == ADD_ENTITY
+                and r['dir'] == 'clientbound']
+    remove_rows = [r for r in rows if r['name'] == REMOVE_ENTITIES
+                   and r['dir'] == 'clientbound']
+    add_ids = []
+    for r in add_rows:
+        add_ids.extend(add_entity_ids(r))
+    print(f'add_entity packets: {len(add_rows)}  remove_entities: '
+          f'{len(remove_rows)}')
+    if add_ids:
+        print(f'entity ids seen in add_entity (layout hypothesis): '
+              f'{sorted(set(add_ids))}')
+    if remove_rows:
+        removed = []
+        for r in remove_rows:
+            removed.extend(remove_entity_ids(r))
+        print(f'entity ids seen in remove_entities: {sorted(set(removed))}')
+
+    # Movement packet intervals and displacement per type.
+    for name in (ENTITY_POS, ENTITY_POS_ROT, ENTITY_ROT, ROTATE_HEAD,
+                 TELEPORT_ENTITY, ENTITY_POSITION_SYNC):
+        sel = [r for r in rows
+               if r['dir'] == 'clientbound' and r['name'] == name]
+        if not sel:
+            continue
+        gaps = [b['t'] - a['t'] for a, b in zip(sel, sel[1:])]
+        sizes = [len(r['payload']) for r in sel]
+        print(f'{name}: n={len(sel)}  payload len min {min(sizes)} '
+              f'median {statistics.median(sizes):.1f} max {max(sizes)}')
+        if gaps:
+            stat_line(f'  {name} interval (ms)', gaps)
+    # Per-entity breakdown of the movement packets (the scene can hold
+    # more entities than the other bot; the id prefix is the hypothesis).
+    movers = [r for r in rows if r['dir'] == 'clientbound'
+              and r['name'] in (ENTITY_POS, ENTITY_POS_ROT, TELEPORT_ENTITY)]
+    per_entity = {}
+    for r in movers:
+        vs = entity_varints(r)
+        if vs:
+            per_entity.setdefault(vs[0], []).append(r)
+    print('move_entity_* packets per entity id (id = first varint, '
+          'layout hypothesis):')
+    for eid, sel in sorted(per_entity.items()):
+        print(f'  id {eid}: {len(sel)} packets')
+    # Player-info packets (name/uuid of the other player), payload sizes.
+    for name in (PLAYER_INFO_UPDATE, PLAYER_INFO_REMOVE):
+        sel = [r for r in rows
+               if r['dir'] == 'clientbound' and r['name'] == name]
+        if sel:
+            sizes = [len(r['payload']) for r in sel]
+            print(f'{name}: n={len(sel)}  payload len min {min(sizes)} '
+                  f'median {statistics.median(sizes):.1f} max {max(sizes)}')
+
+    # The event sequence around the other player's join and leave: every
+    # entity packet in order with its time and the bot's own position
+    # (coordinates only with --list).
+    if args.list:
+        print('event order (clientbound entity packets, --list):')
+        for r in rows:
+            if r['dir'] == 'clientbound' and ENTITY_RE.fullmatch(r['name'] or ''):
+                pos = nearest_position(rows, rows.index(r))
+                where = (f'bot at ({pos[0]:.1f}, {pos[2]:.1f})'
+                         if pos else 'bot position unknown')
+                print(f'  t={r["t"]:.1f}  {r["name"]:<40} '
+                      f'len={len(r["payload"]):<4} {where}')
+
+    # Self-trace cross-check: does bot B's own trace carry the same
+    # entity id that A's add_entity announced?
+    if args.self_trace:
+        self_rows = load(args.self_trace)
+        own = [r for r in self_rows if r['name'] == ADD_ENTITY
+               and r['dir'] == 'clientbound']
+        own_ids = []
+        for r in own:
+            own_ids.extend(add_entity_ids(r))
+        print(f'self trace {args.self_trace}: add_entity n={len(own)}'
+              f'  ids (hypothesis) {sorted(set(own_ids))}')
+        overlap = sorted(set(add_ids) & set(own_ids))
+        print(f'ids in both traces (candidate linkage): {overlap}')
+
+
 def main(argv):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest='command', required=True)
@@ -719,6 +897,18 @@ def main(argv):
     shape_join.add_argument('--list', action='store_true',
                             help='print raw lists (default: aggregates only)')
     shape_join.set_defaults(func=cmd_shape_join)
+
+    entities = sub.add_parser('entities')
+    entities.add_argument('trace')
+    entities.add_argument('--other', required=True,
+                          help='name of the other player (label only)')
+    entities.add_argument('--self-trace', default=None,
+                          help='the other bot\u2019s own JSONL for the '
+                               'entity-id cross-check')
+    entities.add_argument('--list', action='store_true',
+                          help='print the event order (default: aggregates '
+                               'only)')
+    entities.set_defaults(func=cmd_entities)
 
     args = parser.parse_args(argv)
     rows = load(args.trace)

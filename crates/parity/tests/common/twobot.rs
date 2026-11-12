@@ -399,13 +399,8 @@ async fn process<B: Behavior>(
             return true;
         }
         if entry.direction != TraceDirection::Clientbound {
-            if entry
-                .name
-                .as_deref()
-                .is_some_and(|name| name.starts_with("minecraft:move_player"))
-            {
-                play.moves += 1;
-            }
+            // Movement packets are counted by `apply` at the send site —
+            // counting them again here would double every move.
             continue;
         }
         let payload = match from_hex(&entry.payload) {
