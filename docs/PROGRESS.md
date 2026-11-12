@@ -1474,3 +1474,23 @@ warnings`, `cargo test --workspace` — зелёные.
   (коммит `9b6e810`). Повторный замер: uniform P=200 p99 = 2.81–2.98 мс ≤ 5 мс
   (3/3) — порог пройден, Шаг 4 разблокирован. Числа — `docs/BENCH-M4.md` §9,
   `docs/PROGRESS.md` («Шаг 3.5 — пересдача»).
+
+## Побочные фиксы (инструменты)
+
+- **[12.11.2026] Плагин Graphify для OpenCode падал при загрузке — исправлен.**
+  OpenCode 1.17.13 грузит плагины двумя загрузчиками: серверный ждёт V2-объект
+  (`export default { id, setup|effect }`), CLI-путь — V1-объект с `server()`
+  (документированная схема «V1 + V2»). Старый `graphify.js` экспортировал
+  `export const GraphifyPlugin = ...` (ни того, ни другого) — в логе сервера
+  `Plugin must export a default definition with an id and an effect or setup
+  function`, в CLI-пути `... must default export an object with server()`.
+  Дополнительно `.opencode/opencode.json` регистрировал тот же файл как
+  npm-пакет (`.opencode/plugins/graphify.js` → `NpmInstallFailedError`), а
+  случайная запись `list` (от `opencode plugin list`) давала ещё один сбой.
+  Теперь `graphify.js` — единый объект с `id`+`setup` (V2) и `server()` (V1);
+  напоминание о графе регистрируется через `ctx.tool.hook("execute.before", …)`
+  там, где такой хук есть. В 1.17.13 серверный V2-контекст tool/shell-хука не
+  содержит (проверено по `@opencode-ai/plugin@1.17.13`), поэтому на этой версии
+  напоминание фактически не срабатывает; оно включится на версиях с `ctx.tool`.
+  Конфиг сведён к одному авто-обнаруженному плагину; самовольные правки
+  `server.toml` не затрагивались.
