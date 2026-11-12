@@ -15,6 +15,10 @@ Payload bodies are never printed.
                                                   [--radius 10] [--list]
     python tools/trace-analyze/analyze.py shape   <trace.jsonl>
                                                   [--square 10] [--list]
+    python tools/trace-analyze/analyze.py entities <trace.jsonl>
+                                                  --other NAME
+                                                  [--self-trace <b.jsonl>]
+                                                  [--list]
 
 `SCAN` is a text file produced by
 `python target/parity/chunk_status.py scan <world-dir>`.
@@ -36,6 +40,10 @@ Whats each command answers:
   the arriving/forgotten set relative to the new/old centre, next to the
   `2*square+1` edge a `±square` window would predict. Also counts the
   `player_position` packets (a rollback detector).
+* `entities` — the other player as one bot's trace shows it (M4.5
+  two-bot trace): entity packet census, remove/add id lists, per-entity
+  movement counts, and a `--self-trace` cross-check of the ids present
+  in both bots' traces.
 """
 import argparse
 import base64
