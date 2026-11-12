@@ -10,6 +10,7 @@ pub mod network;
 pub mod paced;
 pub mod players;
 pub mod report;
+pub mod visibility;
 pub mod world;
 
 use std::path::PathBuf;

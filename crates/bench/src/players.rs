@@ -99,7 +99,11 @@ pub fn spread_over_tiles(
 /// One bench player whose chunk is `(chunk_x, chunk_z)`; the shared
 /// construction of every layout ([`spread`], [`spread_over_tiles`]).
 fn bench_player(index: usize, chunk_x: i32, chunk_z: i32) -> BenchPlayer {
-    let spawn = (chunk_x * 16 + 8, 64, chunk_z * 16 + 8);
+    bench_player_at(index, chunk_x * 16 + 8, 64, chunk_z * 16 + 8)
+}
+
+/// One bench player at an explicit block position (M4.5 Шаг 3.5 layouts).
+fn bench_player_at(index: usize, x: i32, y: i32, z: i32) -> BenchPlayer {
     let (outbound, _rx) = mpsc::channel::<ServerMessage>(OUTBOUND_CAPACITY);
     let moves = Arc::new(MoveSlot::default());
     let id = index as i32 + 1;
@@ -108,11 +112,7 @@ fn bench_player(index: usize, chunk_x: i32, chunk_z: i32) -> BenchPlayer {
             id,
             name: format!("bench-{index}"),
             view_distance: 10,
-            spawn: protocol::Position {
-                x: spawn.0,
-                y: spawn.1,
-                z: spawn.2,
-            },
+            spawn: protocol::Position { x, y, z },
             connection: PlayerConnection {
                 outbound,
                 kick: Arc::new(KickFlag::default()),
@@ -120,11 +120,42 @@ fn bench_player(index: usize, chunk_x: i32, chunk_z: i32) -> BenchPlayer {
             },
         }),
         moves,
-        spawn,
+        spawn: (x, y, z),
         step: 0.0,
-        x: f64::from(spawn.0),
+        x: f64::from(x),
         id,
     }
+}
+
+/// A compact square grid of `count` players one block apart (M4.5 Шаг 3.5,
+/// **dense** geometry): the whole cluster spans at most 31 blocks, so every
+/// player is inside every other's 160-block view radius — the visible set is
+/// all `P − 1` others.
+pub fn dense_cluster(count: usize) -> Vec<BenchPlayer> {
+    let side = (count as f64).sqrt().ceil().max(1.0) as i32;
+    (0..count)
+        .map(|index| {
+            let x = index as i32 % side;
+            let z = index as i32 / side;
+            bench_player_at(index, x, 64, z)
+        })
+        .collect()
+}
+
+/// `count` players on a square grid spanning `span` blocks (M4.5 Шаг 3.5,
+/// **uniform** geometry): nominal density `count / span²`, so a player sees
+/// about `count · π · 160² / span²` neighbours — about 16 at `P = 200` over
+/// `span = 1000`.
+pub fn uniform_area(count: usize, span: i32) -> Vec<BenchPlayer> {
+    let side = (count as f64).sqrt().ceil().max(1.0) as i32;
+    let step = (span / side).max(1);
+    (0..count)
+        .map(|index| {
+            let x = (index as i32 % side) * step;
+            let z = (index as i32 / side) * step;
+            bench_player_at(index, x, 64, z)
+        })
+        .collect()
 }
 
 /// Sets the walking speed (blocks per tick, +x) of every player.
