@@ -1236,6 +1236,18 @@ uuid `ac577536…`) и про **другого** (B, uuid `b3b03a00…`), len 36
 1 байт (len 8, нулевая дельта) и 2 байта (len 9). Раскладка воспроизводится
 байт-в-байт, семантика заголовков — `не установлено` (в коде помечено).
 
+### M4.5 (сервер) — Шаг 2: кодеки (12.11.2026)
+
+Добавлены (только новые модули): `entity.rs` (`add_entity`, `remove_entities`,
+`player_info_remove` + тест `player_info_update` на B), `movement.rs`
+(`move_entity_pos`, `_pos_rot`, `_rot`, `rotate_head`, `MoveHeader`),
+`entity_meta.rs` (`set_entity_data`, `update_attributes`, `entity_position_sync`).
+Каждый тест сравнивает payload с байтами трейса C1–C4 и делает round-trip.
+Заголовки move-пакетов, хвост `add_entity` и поля `entity_position_sync` —
+«не установлено», вынесены явными полями. `teleport_entity` не добавлен.
+`player_info_update` о B в трейсе: game mode **3**, latency 0, listed true;
+кодек не менялся (добавлен только тест).
+
 ## 7. Решения владельца и риски
 
 ### Решения (D1–D8)

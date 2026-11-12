@@ -13,10 +13,16 @@
 mod chunk;
 mod chunk_payload;
 mod configuration;
+mod entity;
+mod entity_meta;
 mod handshake;
 mod login;
+mod movement;
+mod packet_impl;
 mod play;
 mod status;
+#[cfg(test)]
+mod test_support;
 
 pub use chunk::{ChunkBatchFinished, ChunkBatchReceived, ChunkBatchStart, LevelChunkWithLight};
 pub use chunk_payload::{
@@ -29,11 +35,16 @@ pub use configuration::{
     CONFIGURATION_PLUGIN_MESSAGE, SELECT_KNOWN_PACKS, SELECT_KNOWN_PACKS_SERVERBOUND,
     UPDATE_ENABLED_FEATURES,
 };
+pub use entity::{AddEntity, PlayerInfoRemove, RemoveEntities};
+pub use entity_meta::{
+    AttributeEntry, AttributeModifier, EntityPositionSync, SetEntityData, UpdateAttributes,
+};
 pub use handshake::{Handshake, NextState};
 pub use login::{
     offline_uuid, DisconnectLogin, GameProfile, LoginAcknowledged, LoginStart, LoginSuccess,
     ProfileProperty, SetCompression,
 };
+pub use movement::{MoveEntityPos, MoveEntityPosRot, MoveEntityRot, MoveHeader, RotateHead};
 pub use play::{
     hashed_seed, ConfirmTeleportation, DeathLocation, ForgetLevelChunk, GameEvent, KeepAlive,
     LoginPlay, PlayerInfoEntry, PlayerInfoUpdate, SetCenterChunk, SetDefaultSpawnPosition,
@@ -42,7 +53,14 @@ pub use play::{
 };
 pub use status::{PingRequest, PongResponse, StatusRequest, StatusResponse};
 
+use crate::codec::{CodecError, PacketReader};
 use crate::packet_id::PacketKey;
+
+/// Reads a non-negative VarInt count.
+pub(crate) fn read_count(reader: &mut PacketReader<'_>) -> Result<usize, CodecError> {
+    let count = reader.read_varint()?;
+    usize::try_from(count).map_err(|_| CodecError::NegativeLength(count))
+}
 
 /// Every packet id the server sends or receives, by key.
 ///
@@ -88,6 +106,17 @@ pub fn used_packet_keys() -> &'static [PacketKey] {
         LevelChunkWithLight::KEY,
         ChunkBatchStart::KEY,
         ChunkBatchFinished::KEY,
+        // play, clientbound entity stream (M4.5)
+        AddEntity::KEY,
+        RemoveEntities::KEY,
+        PlayerInfoRemove::KEY,
+        MoveEntityPos::KEY,
+        MoveEntityPosRot::KEY,
+        MoveEntityRot::KEY,
+        RotateHead::KEY,
+        SetEntityData::KEY,
+        UpdateAttributes::KEY,
+        EntityPositionSync::KEY,
         // play, serverbound
         ChunkBatchReceived::KEY,
         ConfirmTeleportation::KEY,
