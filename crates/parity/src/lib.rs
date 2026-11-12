@@ -35,7 +35,9 @@ pub use preload::{
     min_median_max, PreloadError, PreloadMetrics, PRELOAD_TIMEOUT, VIEW_DISTANCE_CHUNKS,
 };
 pub use proxy::{run_proxy, ProxyConfig, ProxyError};
-pub use steps::{join_steps, join_steps_with_view, PROBE_WAIT, PROBE_WAIT_NO_PROBE};
+pub use steps::{
+    join_steps, join_steps_named, join_steps_with_view, PROBE_WAIT, PROBE_WAIT_NO_PROBE,
+};
 pub use trace::{
     from_hex, to_hex, HexError, Trace, TraceDirection, TraceEntry, TraceIoError, TraceState,
 };

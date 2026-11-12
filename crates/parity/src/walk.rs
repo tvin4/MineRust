@@ -483,14 +483,18 @@ impl MetricSink {
 }
 
 /// The JSONL trace writer: one line per packet, monotonic wire time.
-struct Jsonl {
+///
+/// Public because the two-bot M4.5 trace (`tests/two_bot_trace.rs`) writes
+/// one file per bot and must stay byte-identical in format to the walk
+/// traces `tools/trace-analyze/analyze.py` reads.
+pub struct Jsonl {
     file: std::io::BufWriter<std::fs::File>,
     seq: u64,
 }
 
 impl Jsonl {
     /// Creates (and truncates) the trace file.
-    fn create(path: &Path) -> Result<Self, WalkError> {
+    pub fn create(path: &Path) -> Result<Self, WalkError> {
         let display = path.display().to_string();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|source| WalkError::Jsonl {
@@ -513,7 +517,7 @@ impl Jsonl {
     /// `stamp` is the packet's socket time (elapsed since the connection
     /// attempt), taken by [`Client`] when the packet crossed the wire —
     /// the line's own write moment never enters the trace.
-    fn record(&mut self, entry: &TraceEntry, stamp: Duration) -> Result<(), WalkError> {
+    pub fn record(&mut self, entry: &TraceEntry, stamp: Duration) -> Result<(), WalkError> {
         self.seq += 1;
         let line = serde_json::json!({
             "seq": self.seq,
@@ -536,7 +540,7 @@ impl Jsonl {
     }
 
     /// Flushes buffered lines before the handle is closed.
-    fn finish(mut self) -> Result<(), WalkError> {
+    pub fn finish(mut self) -> Result<(), WalkError> {
         self.file.flush().map_err(|source| WalkError::Jsonl {
             path: "trace".to_owned(),
             source,
@@ -1379,7 +1383,10 @@ fn zone_ok(mode: WalkMode, x: f64, z: f64) -> bool {
 /// Payload of `minecraft:move_player_pos`: 3 big-endian doubles plus the
 /// on-ground byte (size 25, as in the live client's trace; old П2 sent
 /// `false` — the bot flies as a spectator).
-fn move_payload(p: &[f64; 3], on_ground: bool) -> Vec<u8> {
+///
+/// Public because the two-bot M4.5 trace drives its bots with the same
+/// byte layout instead of re-deriving it.
+pub fn move_payload(p: &[f64; 3], on_ground: bool) -> Vec<u8> {
     let mut out = Vec::with_capacity(25);
     for value in p {
         out.extend_from_slice(&value.to_be_bytes());
@@ -1390,7 +1397,10 @@ fn move_payload(p: &[f64; 3], on_ground: bool) -> Vec<u8> {
 
 /// Payload of `minecraft:move_player_pos_rot`: 3 big-endian doubles, the
 /// live yaw/pitch bytes, then the on-ground byte (size 33).
-fn move_payload_rot(p: &[f64; 3], on_ground: bool) -> Vec<u8> {
+///
+/// Public because the two-bot M4.5 trace reuses the layout when it needs
+/// a rotating move (its own yaw/pitch floats are built next to it).
+pub fn move_payload_rot(p: &[f64; 3], on_ground: bool) -> Vec<u8> {
     let mut out = Vec::with_capacity(33);
     for value in p {
         out.extend_from_slice(&value.to_be_bytes());

@@ -27,7 +27,8 @@ pub const PROBE_WAIT: Duration = Duration::from_secs(3);
 /// budget is cut to 100 ms (`docs/ROUND2-CONTEXT.md`, the ~3000 ms the
 /// bot spent on itself).
 pub const PROBE_WAIT_NO_PROBE: Duration = Duration::from_millis(100);
-/// Player name of the scripted client; offline UUIDs derive from it.
+/// Player name of the default scripted client; offline UUIDs derive from it.
+/// The two-bot trace uses its own names through [`join_steps_named`].
 const PLAYER: &str = "ParityBot";
 
 /// Reply to vanilla's `select_known_packs` probe: the same single pack the
@@ -72,6 +73,20 @@ pub fn join_steps_with_view(
     view_distance: i8,
     probe_wait: Duration,
 ) -> Vec<Step> {
+    join_steps_named(env, ids, server_port, PLAYER, view_distance, probe_wait)
+}
+
+/// [`join_steps_with_view`] with an explicit player name: the two-bot trace
+/// needs two distinct names (and offline UUIDs derived from them) on one
+/// vanilla server.
+pub fn join_steps_named(
+    env: &ParityEnv,
+    ids: &PacketIds,
+    server_port: u16,
+    name: &str,
+    view_distance: i8,
+    probe_wait: Duration,
+) -> Vec<Step> {
     let handshake = Handshake {
         protocol_version: env.config.protocol_version,
         server_address: "localhost".to_owned(),
@@ -79,8 +94,8 @@ pub fn join_steps_with_view(
         next_state: NextState::Login,
     };
     let login = LoginStart {
-        name: PLAYER.to_owned(),
-        uuid: protocol::offline_uuid(PLAYER),
+        name: name.to_owned(),
+        uuid: protocol::offline_uuid(name),
     };
     let info = ClientInformation {
         locale: "en_us".to_owned(),
