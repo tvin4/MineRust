@@ -181,6 +181,13 @@ impl Player {
         self.visible = visible;
     }
 
+    /// The visible set, mutably: the visibility pass adds the newly visible
+    /// and drops the gone entries in place instead of rebuilding the map every
+    /// tick (M4.5 Шаг 3.5).
+    pub(crate) fn visible_mut(&mut self) -> &mut BTreeMap<PlayerId, Uuid> {
+        &mut self.visible
+    }
+
     /// The pose last broadcast to this player's viewers, or `None`.
     pub fn last_broadcast(&self) -> Option<PlayerPos> {
         self.last_broadcast

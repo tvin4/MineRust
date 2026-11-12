@@ -18,7 +18,7 @@
 //!
 //! SOURCE: two-bot vanilla trace of 26.3 (byte layout observed), not wiki.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use protocol::{offline_uuid, Uuid};
 
@@ -198,151 +198,212 @@ fn motion_from(previous: &PlayerPos, now: &PlayerPos) -> EntityMotion {
     }
 }
 
+/// The spawn record of a newly visible player: its name and offline UUID are
+/// read from the player state only when a player actually becomes visible,
+/// never per tick for everyone.
+fn spawn_of(region: &Region, id: PlayerId, position: PlayerPos) -> EntitySpawn {
+    // The id is in this tick's snapshot, so the player exists; the fallback is
+    // defensive only and is never hit.
+    let (name, uuid) = match region.get(id) {
+        Some(player) => (player.name().to_owned(), offline_uuid(player.name())),
+        None => (String::new(), Uuid::default()),
+    };
+    EntitySpawn {
+        id,
+        name,
+        uuid,
+        position,
+    }
+}
+
 /// Computes this tick's visibility difference for every region and updates the
 /// players' remembered visible sets and broadcast baselines.
 ///
 /// Runs after the transfers, so `regions` is the final owner of every player.
 /// The result is one event per viewer that has something to hear, ordered by
 /// region then viewer id; empty events are dropped.
+///
+/// Cost is O(P²) pairwise comparisons plus O(P + visible pairs) work for the
+/// events and the write-back: the positions, radii and baselines are snapshotted
+/// into `Vec`s once, the pairwise loop and the per-viewer set operations touch
+/// only those `Vec`s (no `BTreeMap` inside a hot loop), and every player's
+/// visible set is updated in place rather than rebuilt. Names and UUIDs are
+/// read only for the players that actually become visible.
 pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
-    // Snapshot everything once, so the write-back below is the only mutation.
+    // Snapshot everything once, in (region, player id) order — the order the
+    // events are emitted in. `index` maps an id to its dense snapshot index;
+    // `sorted` lists the indices in ascending `PlayerId`, so the pairwise loop
+    // and the merged set operations stay in ascending-id order.
     let mut ids: Vec<PlayerId> = Vec::new();
-    let mut position: BTreeMap<PlayerId, PlayerPos> = BTreeMap::new();
-    let mut radius: BTreeMap<PlayerId, f64> = BTreeMap::new();
-    let mut owner: BTreeMap<PlayerId, RegionId> = BTreeMap::new();
-    let mut name: BTreeMap<PlayerId, String> = BTreeMap::new();
-    let mut uuid: BTreeMap<PlayerId, Uuid> = BTreeMap::new();
-    let mut visible_before: BTreeMap<PlayerId, BTreeMap<PlayerId, Uuid>> = BTreeMap::new();
-    let mut baseline: BTreeMap<PlayerId, Option<PlayerPos>> = BTreeMap::new();
-    for region in regions.iter() {
+    let mut position: Vec<PlayerPos> = Vec::new();
+    let mut radius: Vec<f64> = Vec::new();
+    let mut owner: Vec<RegionId> = Vec::new();
+    let mut owner_region: Vec<usize> = Vec::new();
+    let mut baseline: Vec<Option<PlayerPos>> = Vec::new();
+    let mut before: Vec<Vec<PlayerId>> = Vec::new();
+    let mut index: BTreeMap<PlayerId, usize> = BTreeMap::new();
+    for (region_index, region) in regions.iter().enumerate() {
         for id in region.player_ids() {
             let Some(player) = region.get(id) else {
                 continue;
             };
+            index.insert(id, ids.len());
             ids.push(id);
-            position.insert(id, player.position());
-            radius.insert(id, view_radius(player.view_distance()));
-            owner.insert(id, region.id());
-            name.insert(id, player.name().to_owned());
-            uuid.insert(id, offline_uuid(player.name()));
-            visible_before.insert(id, player.visible().clone());
-            baseline.insert(id, player.last_broadcast());
+            position.push(player.position());
+            radius.push(view_radius(player.view_distance()));
+            owner.push(region.id());
+            owner_region.push(region_index);
+            baseline.push(player.last_broadcast());
+            before.push(player.visible().keys().copied().collect());
         }
     }
     if ids.is_empty() {
         return Vec::new();
     }
+    let sorted: Vec<usize> = index.values().copied().collect();
 
     // The symmetric target: `a` sees `b` iff the distance is within the
-    // smaller radius. Self is never included.
-    let mut target: BTreeMap<PlayerId, BTreeSet<PlayerId>> = BTreeMap::new();
-    for &a in &ids {
-        let mut seen = BTreeSet::new();
-        for &b in &ids {
-            if a != b && mutually_visible(&position[&a], radius[&a], &position[&b], radius[&b]) {
-                seen.insert(b);
+    // smaller radius. Self is never included. `target[a]` is ascending by id.
+    let mut target: Vec<Vec<usize>> = vec![Vec::new(); ids.len()];
+    for &a in &sorted {
+        let pose_a = position[a];
+        let radius_a = radius[a];
+        let seen = &mut target[a];
+        for &b in &sorted {
+            if a != b && mutually_visible(&pose_a, radius_a, &position[b], radius[b]) {
+                seen.push(b);
             }
         }
-        target.insert(a, seen);
     }
 
-    // Movement goes to viewers that saw the subject last tick and still do:
-    // a newly seeing viewer gets the position from the spawn instead, and a
-    // leaving viewer gets a removal.
-    let mut moves: BTreeMap<PlayerId, Vec<EntityMove>> = BTreeMap::new();
+    // Movement of every subject, shared by all its viewers. A moved subject
+    // also resets the baseline every viewer measures the next move from; so
+    // does a subject that just became visible (its spawn carries the position).
+    let mut motion: Vec<Option<EntityMotion>> = vec![None; ids.len()];
     let mut next_baseline = baseline.clone();
-    for &subject in &ids {
-        let Some(previous) = baseline[&subject] else {
+    for &subject in &sorted {
+        let Some(previous) = baseline[subject] else {
             continue;
         };
-        let now = position[&subject];
-        if !pose_differs(&previous, &now) {
-            continue;
+        let now = position[subject];
+        if pose_differs(&previous, &now) {
+            motion[subject] = Some(motion_from(&previous, &now));
+            next_baseline[subject] = Some(now);
         }
-        let motion = motion_from(&previous, &now);
-        for &viewer in &ids {
-            if viewer != subject
-                && visible_before[&viewer].contains_key(&subject)
-                && target[&viewer].contains(&subject)
-            {
-                moves.entry(viewer).or_default().push(EntityMove {
-                    id: subject,
-                    position: now,
-                    motion,
-                });
-            }
-        }
-        next_baseline.insert(subject, Some(now));
     }
 
+    // One event per viewer, in snapshot order. `target[i]` (new) and
+    // `before[i]` (old) are both ascending by id, so a two-pointer merge gives
+    // spawn, remove and moves without any set or map lookup. The spawned
+    // entries are also kept for the in-place write-back below.
     let mut events = Vec::new();
-    let mut visible_after: BTreeMap<PlayerId, BTreeMap<PlayerId, Uuid>> = BTreeMap::new();
-    for &viewer in &ids {
-        let before = &visible_before[&viewer];
-        let now = &target[&viewer];
+    let mut spawn_delta: Vec<Vec<(PlayerId, Uuid)>> = vec![Vec::new(); ids.len()];
+    let mut remove_delta: Vec<Vec<PlayerId>> = vec![Vec::new(); ids.len()];
+    for i in 0..ids.len() {
+        let now = &target[i];
+        let old = &before[i];
         let mut spawn = Vec::new();
-        for &id in now {
-            if !before.contains_key(&id) {
-                spawn.push(EntitySpawn {
-                    id,
-                    name: name[&id].clone(),
-                    uuid: uuid[&id],
-                    position: position[&id],
-                });
-                // The new viewer starts at the current position, so the shared
-                // baseline must move to it as well.
-                next_baseline.insert(id, Some(position[&id]));
-            }
-        }
         let mut remove = Vec::new();
-        for (&id, &entity_uuid) in before {
-            if !now.contains(&id) {
-                remove.push(EntityRemove {
-                    id,
-                    uuid: entity_uuid,
-                    left_world: !position.contains_key(&id),
-                });
+        let mut moves = Vec::new();
+        let (mut n, mut o) = (0usize, 0usize);
+        while n < now.len() || o < old.len() {
+            let now_id = now.get(n).map(|&j| ids[j]);
+            let old_id = old.get(o).copied();
+            match (now_id, old_id) {
+                (Some(left), Some(right)) if left == right => {
+                    // Still visible: a move only if the subject moved.
+                    if let Some(motion) = motion[now[n]] {
+                        moves.push(EntityMove {
+                            id: left,
+                            position: position[now[n]],
+                            motion,
+                        });
+                    }
+                    n += 1;
+                    o += 1;
+                }
+                (Some(left), Some(right)) if left < right => {
+                    let j = now[n];
+                    let record = spawn_of(&regions[owner_region[j]], ids[j], position[j]);
+                    spawn_delta[i].push((left, record.uuid));
+                    spawn.push(record);
+                    next_baseline[j] = Some(position[j]);
+                    n += 1;
+                }
+                (Some(_), Some(_)) => {
+                    let gone = old[o];
+                    let uuid = regions[owner_region[i]]
+                        .get(ids[i])
+                        .and_then(|player| player.visible().get(&gone).copied())
+                        .unwrap_or_default();
+                    remove.push(EntityRemove {
+                        id: gone,
+                        uuid,
+                        left_world: !index.contains_key(&gone),
+                    });
+                    remove_delta[i].push(gone);
+                    o += 1;
+                }
+                (Some(_), None) => {
+                    let j = now[n];
+                    let record = spawn_of(&regions[owner_region[j]], ids[j], position[j]);
+                    spawn_delta[i].push((ids[j], record.uuid));
+                    spawn.push(record);
+                    next_baseline[j] = Some(position[j]);
+                    n += 1;
+                }
+                (None, Some(_)) => {
+                    let gone = old[o];
+                    let uuid = regions[owner_region[i]]
+                        .get(ids[i])
+                        .and_then(|player| player.visible().get(&gone).copied())
+                        .unwrap_or_default();
+                    remove.push(EntityRemove {
+                        id: gone,
+                        uuid,
+                        left_world: !index.contains_key(&gone),
+                    });
+                    remove_delta[i].push(gone);
+                    o += 1;
+                }
+                (None, None) => break,
             }
         }
-        let mut viewer_moves = moves.remove(&viewer).unwrap_or_default();
-        viewer_moves.sort_by_key(|entity| entity.id);
-
-        // The viewer keeps its own record of who it sees, with each UUID, so a
-        // later removal works even after the other player left the world.
-        let mut record = BTreeMap::new();
-        for &id in now {
-            record.insert(id, uuid[&id]);
+        if spawn.is_empty() && remove.is_empty() && moves.is_empty() {
+            continue;
         }
-        visible_after.insert(viewer, record);
-
-        let event = StreamEntities {
-            region: owner[&viewer],
-            player: viewer,
+        events.push(StreamEntities {
+            region: owner[i],
+            player: ids[i],
             // The entity pass runs after the tick's own events; `u32::MAX`
             // sorts it after them inside the region (see `TickOutcome`).
             seq: u32::MAX,
             spawn,
             remove,
-            moves: viewer_moves,
-        };
-        if !event.is_empty() {
-            events.push(event);
-        }
+            moves,
+        });
     }
 
-    // Write the new state back: the visible set and the broadcast baseline.
+    // Write the new visible sets back in place: drop the gone entries, add the
+    // newly visible ones with the UUIDs read at spawn time. Stable entries are
+    // left untouched, so no map is rebuilt per tick.
     for region in regions.iter_mut() {
         let region_ids: Vec<PlayerId> = region.player_ids().collect();
         for id in region_ids {
+            let Some(&i) = index.get(&id) else {
+                continue;
+            };
             let Some(player) = region.get_mut(id) else {
                 continue;
             };
-            if let Some(visible) = visible_after.remove(&id) {
-                player.set_visible(visible);
+            let visible = player.visible_mut();
+            for gone in &remove_delta[i] {
+                visible.remove(gone);
             }
-            if let Some(broadcast) = next_baseline.get(&id) {
-                player.set_last_broadcast(*broadcast);
+            for (new_id, uuid) in &spawn_delta[i] {
+                visible.insert(*new_id, *uuid);
             }
+            player.set_last_broadcast(next_baseline[i]);
         }
     }
     events
