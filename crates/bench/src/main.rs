@@ -15,6 +15,8 @@
 //!   N=100/K=6/side=16 and N=200/K=10/side=16, 3 repeats (BENCH-M4 §5).
 //! * `visibility` — the M4.5 Шаг 3.5 series: the capacity engine on the
 //!   dense and uniform player geometries, P=64/200/512, 3 repeats.
+//! * `visibility-phases` — Шаг 3.5 per-phase timing: the same geometries with
+//!   the tick split into visibility pass, packet build, delivery and the rest.
 //!
 //! Full-matrix series are run manually (D6, `docs/BENCH-M4.md`); CI runs
 //! only the smoke test (`cargo test -p bench`).
@@ -67,12 +69,16 @@ fn main() -> anyhow::Result<()> {
             network::phase_cli(version).await.map(|_| ())
         }),
         "visibility" => runtime.block_on(async { bench::visibility::run_cli().map(|_| ()) }),
+        "visibility-phases" => {
+            runtime.block_on(async { bench::visibility::run_phases_cli().map(|_| ()) })
+        }
         other => anyhow::bail!(
             "usage: bench <capacity|paced|streaming|load|priority> ...\n  \
              capacity/paced [label]\n  \
              load <bots> <workers> <region_side> <seconds>\n  \
              priority (A3: 100 bots + 8 busy threads, 3 repeats per half)\n  \
              visibility (M4.5 Шаг 3.5: dense/uniform geometries, P=64/200/512)\n  \
+             visibility-phases (M4.5 Шаг 3.5: per-phase tick timing)\n  \
              the label names the report file in target/bench/ (got: {other})"
         ),
     }

@@ -52,14 +52,6 @@ const CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
 /// before the process is allowed to exit anyway.
 const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Game mode the tab-list entries of other players announce (M4.5 Шаг 3).
-///
-/// The recorded join of the other player carries game mode 3; the visibility
-/// stream is a stand-in defined by the trace, so the recorded value is used
-/// until the server tracks real game modes.
-// SOURCE: two-bot vanilla trace 26.3 (C1), `player_info_update` game mode 3.
-pub(super) const PLAYER_INFO_GAME_MODE: i32 = 3;
-
 /// Accepts connections until Ctrl+C, then stops the game thread.
 ///
 /// The status document, the loaded game data and the packet ids are shared

@@ -195,26 +195,46 @@ impl Scheduler {
         self.pool.as_ref().map_or(0, Pool::workers)
     }
 
-    /// Ticks every region once, merges what they produced and applies the
-    /// boundary crossings the tick reported.
+    /// Ticks every region once, applies the boundary crossings the tick
+    /// reported and computes this tick's entity-visibility events.
+    ///
+    /// [`Self::tick_core`] plus [`Self::refresh_entities`]; the split exists so
+    /// the Шаг 3.5 benchmark can time the visibility pass apart from the rest
+    /// of the tick.
+    pub fn tick(&mut self, tick: u64, now: Instant) -> TickOutcome {
+        let mut outcome = self.tick_core(tick, now);
+        // M4.5 Шаг 3: the visibility pass sees the final owner and positions,
+        // so a player that crossed a boundary this tick is already in its new
+        // region. Entity streaming is transport state: it never touches the
+        // replay journal.
+        outcome.entities = self.refresh_entities();
+        outcome
+    }
+
+    /// The part of the tick before the visibility pass: ticks every region
+    /// once, merges what they produced and applies the boundary crossings.
     ///
     /// With a pool and more than one region the results are merged by
     /// `region_id`, so the replay order does not depend on which worker
     /// finished first. Transfers are applied after that barrier, in
     /// `(from, seq)` order — the canonical, deterministic order of a tick.
-    pub fn tick(&mut self, tick: u64, now: Instant) -> TickOutcome {
+    pub fn tick_core(&mut self, tick: u64, now: Instant) -> TickOutcome {
         let mut outcome = if self.dispatch() {
             self.tick_pooled(tick, now)
         } else {
             self.tick_inline(tick, now)
         };
         self.apply_transfers(&mut outcome);
-        // M4.5 Шаг 3: the visibility pass sees the final owner and positions,
-        // so a player that crossed a boundary this tick is already in its new
-        // region. Entity streaming is transport state: it never touches the
-        // replay journal.
-        outcome.entities = super::entities::visibility_pass(&mut self.regions);
         outcome
+    }
+
+    /// Computes this tick's entity-visibility difference for every region,
+    /// updating the players' remembered visible sets and broadcast baselines.
+    ///
+    /// Separated from [`Self::tick_core`] so the Шаг 3.5 benchmark times the
+    /// pass alone; the live loop reaches it through [`Self::tick`].
+    pub fn refresh_entities(&mut self) -> Vec<super::entities::StreamEntities> {
+        super::entities::visibility_pass(&mut self.regions)
     }
 
     /// Whether this tick goes through the pool; one region stays inline.

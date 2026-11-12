@@ -7,6 +7,7 @@
 
 pub mod chunks;
 mod connection;
+pub mod entity_packets;
 mod error;
 mod frame;
 pub mod game;

@@ -24,6 +24,10 @@ pub struct BenchPlayer {
     pub spawn: (i32, i32, i32),
     /// Block steps per tick the player walks (+x), `0` = stands still.
     pub step: f64,
+    /// The outbound queue's receiving end, kept so a delivery measurement
+    /// (`try_send`) meets a live queue: a dropped receiver makes every send
+    /// fail with `Closed` at once and hides the channel cost.
+    rx: mpsc::Receiver<ServerMessage>,
     /// Current x position (f64, in blocks).
     x: f64,
     /// The join registration, taken by [`take_join`].
@@ -36,6 +40,12 @@ impl BenchPlayer {
     /// The player id this bench player was built with.
     pub fn id(&self) -> PlayerId {
         self.id
+    }
+
+    /// Empties the outbound queue, so a tick's delivery does not fill it and
+    /// kick the player (M4.5 Шаг 3.5, phase (в)).
+    pub fn drain_outbound(&mut self) {
+        while self.rx.try_recv().is_ok() {}
     }
 
     /// Takes the join registration (the scheduler consumes it).
@@ -104,7 +114,7 @@ fn bench_player(index: usize, chunk_x: i32, chunk_z: i32) -> BenchPlayer {
 
 /// One bench player at an explicit block position (M4.5 Шаг 3.5 layouts).
 fn bench_player_at(index: usize, x: i32, y: i32, z: i32) -> BenchPlayer {
-    let (outbound, _rx) = mpsc::channel::<ServerMessage>(OUTBOUND_CAPACITY);
+    let (outbound, rx) = mpsc::channel::<ServerMessage>(OUTBOUND_CAPACITY);
     let moves = Arc::new(MoveSlot::default());
     let id = index as i32 + 1;
     BenchPlayer {
@@ -122,6 +132,7 @@ fn bench_player_at(index: usize, x: i32, y: i32, z: i32) -> BenchPlayer {
         moves,
         spawn: (x, y, z),
         step: 0.0,
+        rx,
         x: f64::from(x),
         id,
     }
