@@ -6,7 +6,7 @@
 //! outbound queues behind every player never fill: the measurement is of the
 //! tick mechanism, not of backpressure nobody is reading.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use net::game::Scheduler;
 
@@ -84,6 +84,53 @@ pub fn measure(spec: BenchSpec, spread_chunks: i32) -> anyhow::Result<CapacityRe
     set_step(&mut players, 0.25);
     let scheduler = build(spec, &mut players)?;
     run(scheduler, &mut players, spec)
+}
+
+/// A capacity measurement bounded by wall time instead of a tick count:
+/// ticks are taken as fast as the scheduler runs them, the first `warmup`
+/// are discarded and the next `measure` are sampled. This is what the W2
+/// matrix uses (BENCH-M4 §2): a fixed span of 10 s after a 5 s warm-up, so
+/// the tick counts of two configurations with very different tick durations
+/// are still comparable in wall time.
+pub fn run_timed(
+    mut scheduler: Scheduler,
+    players: &mut [BenchPlayer],
+    warmup: Duration,
+    measure: Duration,
+) -> anyhow::Result<CapacityResult> {
+    let start = Instant::now();
+    let mut samples: Vec<f64> = Vec::new();
+    let mut tick: u64 = 0;
+    loop {
+        tick_moves(players);
+        let tick_started = Instant::now();
+        let outcome = scheduler.tick(tick, tick_started);
+        let duration_us = tick_started.elapsed().as_secs_f64() * 1e6;
+        let elapsed = start.elapsed();
+        drop(outcome);
+        if elapsed >= warmup {
+            samples.push(duration_us);
+        }
+        // Stop once the measured span is covered; the sample just pushed is
+        // the first tick that reached the end of the window.
+        if elapsed >= warmup + measure {
+            break;
+        }
+        tick += 1;
+    }
+    if samples.is_empty() {
+        anyhow::bail!(
+            "no measured ticks in {} s of warm-up + {} s window",
+            warmup.as_secs(),
+            measure.as_secs()
+        );
+    }
+    let busy: f64 = samples.iter().sum();
+    let tps = samples.len() as f64 * 1e6 / busy;
+    Ok(CapacityResult {
+        tick_us: percentiles(&samples),
+        tps,
+    })
 }
 
 /// Parses the optional CLI spec: the label either carries a W2 workload

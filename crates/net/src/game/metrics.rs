@@ -9,7 +9,7 @@
 //! through atomics, so reading them never blocks the tick.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// Recompute and publish the percentiles every this many ticks.
@@ -60,6 +60,9 @@ pub struct TickMetricsHandle {
     duration_max_us: AtomicU64,
     late_ticks: AtomicU64,
     late_max_us: AtomicU64,
+    /// Set by a phase-boundary tool (the M4.5 bench) to drop the samples
+    /// collected so far, so the next snapshot covers only this phase.
+    phase_reset: AtomicBool,
 }
 
 impl TickMetricsHandle {
@@ -77,6 +80,20 @@ impl TickMetricsHandle {
             late_ticks: self.late_ticks.load(Ordering::Relaxed),
             late_max_ms: micros_to_ms(self.late_max_us.load(Ordering::Relaxed)),
         }
+    }
+
+    /// Asks the game thread to drop every sample it has collected, so the
+    /// percentiles after the next tick describe only the phase that follows
+    /// (the M4.5 bench separates the join phase from steady walking this
+    /// way). The game thread consumes the request at its next tick; the
+    /// global tick counter and drift keep running.
+    pub fn request_phase_reset(&self) {
+        self.phase_reset.store(true, Ordering::Release);
+    }
+
+    /// Consumes a pending phase reset (the game thread's side).
+    fn take_phase_reset(&self) -> bool {
+        self.phase_reset.swap(false, Ordering::Acquire)
     }
 }
 
@@ -127,6 +144,14 @@ impl Recorder {
         duration: Duration,
         handle: &TickMetricsHandle,
     ) {
+        // A phase boundary (the M4.5 bench): drop everything collected so
+        // far so the next snapshots describe only the new phase.
+        if handle.take_phase_reset() {
+            self.jitter.clear();
+            self.duration.clear();
+            self.late_ticks = 0;
+            self.late_max_us = 0;
+        }
         let late_us = woke.saturating_duration_since(deadline).as_micros() as u64;
         push(&mut self.jitter, late_us);
         push(&mut self.duration, duration.as_micros() as u64);

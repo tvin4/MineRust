@@ -63,34 +63,68 @@ pub fn spread(count: usize, spread_chunks: i32, start: (i32, i32)) -> Vec<BenchP
     for index in 0..count {
         let gx = start.0 + (index as i32 % side) * spread_chunks;
         let gz = start.1 + (index as i32 / side) * spread_chunks;
-        let spawn = (gx * 16 + 8, 64, gz * 16 + 8);
-        let (outbound, _rx) = mpsc::channel::<ServerMessage>(OUTBOUND_CAPACITY);
-        let moves = Arc::new(MoveSlot::default());
-        let id = index as i32 + 1;
-        players.push(BenchPlayer {
-            join: Some(PlayerJoin {
-                id,
-                name: format!("bench-{index}"),
-                view_distance: 10,
-                spawn: protocol::Position {
-                    x: spawn.0,
-                    y: spawn.1,
-                    z: spawn.2,
-                },
-                connection: PlayerConnection {
-                    outbound,
-                    kick: Arc::new(KickFlag::default()),
-                    last_move: Arc::clone(&moves),
-                },
-            }),
-            moves,
-            spawn,
-            step: 0.0,
-            x: f64::from(spawn.0),
-            id,
-        });
+        players.push(bench_player(index, gx, gz));
     }
     players
+}
+
+/// Creates `count` players laid out so that **exactly** `tiles_per_axis²`
+/// region tiles of `region_side` chunks own at least one player: player `i`
+/// sits at the centre chunk of tile `i % tiles`, cycling over the tiles.
+///
+/// This is the W2 control (ARCH-M4 §5, BENCH-M4 §2): the earlier `spread`
+/// with `spread_chunks = 8` and `region_side = 64` put every player in one
+/// tile, so the pool never engaged (measured 2026-11: 1 region, inline at
+/// any K). Placement at a tile's centre keeps a standing player inside it,
+/// so the number of regions with players stays constant for the whole run.
+pub fn spread_over_tiles(
+    count: usize,
+    region_side: i32,
+    tiles_per_axis: i32,
+    start_chunk: (i32, i32),
+) -> Vec<BenchPlayer> {
+    let axis = tiles_per_axis.max(1);
+    let tiles = (axis * axis) as usize;
+    let half = (region_side / 2).max(0);
+    let mut players = Vec::with_capacity(count);
+    for index in 0..count {
+        let tile = (index % tiles) as i32;
+        let gx = start_chunk.0 + (tile % axis) * region_side + half;
+        let gz = start_chunk.1 + (tile / axis) * region_side + half;
+        players.push(bench_player(index, gx, gz));
+    }
+    players
+}
+
+/// One bench player whose chunk is `(chunk_x, chunk_z)`; the shared
+/// construction of every layout ([`spread`], [`spread_over_tiles`]).
+fn bench_player(index: usize, chunk_x: i32, chunk_z: i32) -> BenchPlayer {
+    let spawn = (chunk_x * 16 + 8, 64, chunk_z * 16 + 8);
+    let (outbound, _rx) = mpsc::channel::<ServerMessage>(OUTBOUND_CAPACITY);
+    let moves = Arc::new(MoveSlot::default());
+    let id = index as i32 + 1;
+    BenchPlayer {
+        join: Some(PlayerJoin {
+            id,
+            name: format!("bench-{index}"),
+            view_distance: 10,
+            spawn: protocol::Position {
+                x: spawn.0,
+                y: spawn.1,
+                z: spawn.2,
+            },
+            connection: PlayerConnection {
+                outbound,
+                kick: Arc::new(KickFlag::default()),
+                last_move: Arc::clone(&moves),
+            },
+        }),
+        moves,
+        spawn,
+        step: 0.0,
+        x: f64::from(spawn.0),
+        id,
+    }
 }
 
 /// Sets the walking speed (blocks per tick, +x) of every player.

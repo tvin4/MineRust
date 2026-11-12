@@ -21,6 +21,7 @@ use net::loader::Loader;
 use server::ServerConfig;
 
 use crate::bot::{Bot, BotPlan, BotStop};
+use crate::cpu;
 use crate::{report_dir, world};
 
 /// The protocol version the bench speaks, read from the owner's
@@ -306,6 +307,152 @@ pub async fn load(
         lines.push(format!("- {line}"));
     }
     Ok(lines.join("\n"))
+}
+
+/// One phase's tick metrics plus the system CPU busy share over that phase.
+#[derive(Debug, Clone, Copy)]
+pub struct PhaseMetrics {
+    /// Median tick duration, ms.
+    pub tick_p50_ms: f64,
+    /// 99th percentile tick duration, ms.
+    pub tick_p99_ms: f64,
+    /// Worst tick duration, ms.
+    pub tick_max_ms: f64,
+    /// Ticks that woke more than 20 ms late.
+    pub late_ticks: u64,
+    /// System-wide CPU busy share over the phase, 0..=100 (`None` when the
+    /// platform has no CPU counters or the share was not measured).
+    pub cpu_busy_percent: Option<f64>,
+}
+
+impl PhaseMetrics {
+    fn from_snapshot(snapshot: TickMetrics, cpu_busy_percent: Option<f64>) -> Self {
+        Self {
+            tick_p50_ms: snapshot.duration_p50_ms,
+            tick_p99_ms: snapshot.duration_p99_ms,
+            tick_max_ms: snapshot.duration_max_ms,
+            late_ticks: snapshot.late_ticks,
+            cpu_busy_percent,
+        }
+    }
+}
+
+/// Runs the M4.5 Шаг 0.2 split (BENCH-M4 §5): one join phase, then a steady
+/// walking phase measured `warmup` after the last bot joined.
+///
+/// The join phase is everything the server ticks while the `bots` clients
+/// join (measured through the cumulative metrics, which up to that point
+/// describe only the join). The walking bots then send moves; the metrics are
+/// reset at the start of walking and again after `warmup`, so the steady
+/// phase covers the walking window only and never mixes in the join.
+pub async fn load_phased(
+    bots: usize,
+    workers: usize,
+    region_side: i32,
+    warmup: Duration,
+    measure: Duration,
+    protocol_version: i32,
+) -> anyhow::Result<(PhaseMetrics, PhaseMetrics)> {
+    let (addr, metrics, abort, _estimate) =
+        start_server(workers, region_side, protocol_version, false).await?;
+    let _guard = AbortGuard(Some(abort));
+    let ids = Arc::new(data::PacketIds::compiled());
+    let env = bench_env(protocol_version);
+
+    // --- join phase: everything up to the last bot's entry teleport ---
+    let join_cpu_start = cpu::sample();
+    let mut sessions = Vec::with_capacity(bots);
+    for _ in 0..bots {
+        sessions.push(Bot::join(&env, Arc::clone(&ids), addr.port(), 10).await?);
+    }
+    let join = PhaseMetrics::from_snapshot(
+        metrics.snapshot(),
+        join_cpu_start.and_then(|start| cpu::busy_percent(start, cpu::sample()?)),
+    );
+
+    // --- steady walking: 5 s warm-up discarded, then the measured window ---
+    metrics.request_phase_reset();
+    let seconds = (warmup + measure).as_secs();
+    let plan = BotPlan {
+        steps: seconds * 20,
+        step_len: 0.25,
+        settle: Duration::from_secs(1),
+    };
+    let mut handles = Vec::with_capacity(sessions.len());
+    for bot in sessions {
+        let plan = plan.clone();
+        handles.push(tokio::spawn(async move { bot.play(plan).await }));
+    }
+    tokio::time::sleep(warmup).await;
+    metrics.request_phase_reset();
+    let steady_cpu_start = cpu::sample();
+    for handle in handles {
+        handle.await?;
+    }
+    let steady = PhaseMetrics::from_snapshot(
+        metrics.snapshot(),
+        steady_cpu_start.and_then(|start| cpu::busy_percent(start, cpu::sample()?)),
+    );
+    Ok((join, steady))
+}
+
+/// One-cell CPU percentage for a markdown table row.
+fn cpu_cell(percent: Option<f64>) -> String {
+    percent.map_or_else(|| "n/a".to_owned(), |p| format!("{p:.0}"))
+}
+
+/// Runs the Шаг 0.2 series: N=100/K=6/side=16 and N=200/K=10/side=16, three
+/// repeats each, join phase vs steady walking, and writes the report.
+pub async fn phase_cli(protocol_version: i32) -> anyhow::Result<String> {
+    let warmup = Duration::from_secs(5);
+    let measure = Duration::from_secs(30);
+    let configs = [(100usize, 6usize, 16i32), (200, 10, 16)];
+    let repeats = 3;
+    let mut markdown = String::from(
+        "# M4.5 Шаг 0.2 — join phase vs steady walking (BENCH-M4 §5)\n\n\
+         join = all server ticks while the bots join; steady = walking, from \
+         5 s after the last bot joined, 30 s measured (metrics reset at the \
+         phase boundaries). CPU = system-wide busy share over the phase.\n\n\
+         | N | K | side | repeat | join p50/p99/max ms | join late | join CPU % | steady p50/p99/max ms | steady late | steady CPU % |\n\
+         |---|---|---|---|---|---|---|---|---|---|\n",
+    );
+    for (bots, workers, side) in configs {
+        for repeat in 1..=repeats {
+            let (join, steady) =
+                load_phased(bots, workers, side, warmup, measure, protocol_version).await?;
+            markdown.push_str(&format!(
+                "| {bots} | {workers} | {side} | {repeat} | {:.3}/{:.3}/{:.3} | {} | {} | {:.3}/{:.3}/{:.3} | {} | {} |\n",
+                join.tick_p50_ms,
+                join.tick_p99_ms,
+                join.tick_max_ms,
+                join.late_ticks,
+                cpu_cell(join.cpu_busy_percent),
+                steady.tick_p50_ms,
+                steady.tick_p99_ms,
+                steady.tick_max_ms,
+                steady.late_ticks,
+                cpu_cell(steady.cpu_busy_percent),
+            ));
+            println!(
+                "N={bots} K={workers} side={side} repeat {repeat}: \
+                 join {:.3}/{:.3}/{:.3} ms late={} cpu={} | \
+                 steady {:.3}/{:.3}/{:.3} ms late={} cpu={}",
+                join.tick_p50_ms,
+                join.tick_p99_ms,
+                join.tick_max_ms,
+                join.late_ticks,
+                cpu_cell(join.cpu_busy_percent),
+                steady.tick_p50_ms,
+                steady.tick_p99_ms,
+                steady.tick_max_ms,
+                steady.late_ticks,
+                cpu_cell(steady.cpu_busy_percent),
+            );
+        }
+    }
+    let path = save_report("m45-phase", &markdown)?;
+    println!("\nreport: {}", path.display());
+    Ok(markdown)
 }
 
 /// The A3 priority A/B scenario: 100 network bots walk (paced W1) while 8

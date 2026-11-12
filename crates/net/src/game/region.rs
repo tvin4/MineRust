@@ -451,7 +451,10 @@ impl Region {
         if !self.delay.is_zero() {
             std::thread::sleep(self.delay);
         }
-        if !self.workload.is_zero() {
+        // The W2 workload is "S μs per region that owns at least one player"
+        // (BENCH-M4 §2): an empty region that survived a transfer does no
+        // synthetic work, exactly like a region with nothing to do.
+        if !self.workload.is_zero() && !self.players.is_empty() {
             spin(self.workload);
         }
         let mut outcome = TickOutcome::default();

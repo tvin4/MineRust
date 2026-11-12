@@ -11,6 +11,8 @@
 //!   1.0 block/tick, 120+ chunk crossings (the M4.4 criterion).
 //! * `load N K SIDE SECONDS` — N bots walk SECONDS seconds on an in-process
 //!   server with K workers and SIDE-chunk region tiles.
+//! * `phase` — the Шаг 0.2 series: join phase vs steady walking for
+//!   N=100/K=6/side=16 and N=200/K=10/side=16, 3 repeats (BENCH-M4 §5).
 //!
 //! Full-matrix series are run manually (D6, `docs/BENCH-M4.md`); CI runs
 //! only the smoke test (`cargo test -p bench`).
@@ -57,6 +59,10 @@ fn main() -> anyhow::Result<()> {
             let path = network::save_report("priority", &report)?;
             println!("{report}\nreport: {}", path.display());
             Ok(())
+        }),
+        "phase" => runtime.block_on(async {
+            let version = network::protocol_version()?;
+            network::phase_cli(version).await.map(|_| ())
         }),
         other => anyhow::bail!(
             "usage: bench <capacity|paced|streaming|load|priority> ...\n  \

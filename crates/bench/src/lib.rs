@@ -5,6 +5,7 @@
 
 pub mod bot;
 pub mod capacity;
+pub mod cpu;
 pub mod network;
 pub mod paced;
 pub mod players;
