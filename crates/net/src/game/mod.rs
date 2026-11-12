@@ -11,6 +11,7 @@
 //! choices, thresholds and the replay format are M4.1 **[hypothesis]**
 //! where no trace backs them (see `docs/ARCH-M4.md` §0/§1/§3).
 
+mod entities;
 mod grid;
 mod messages;
 mod metrics;
@@ -21,6 +22,8 @@ mod replay;
 mod scheduler;
 
 #[cfg(test)]
+mod entities_tests;
+#[cfg(test)]
 mod region_tests;
 #[cfg(test)]
 mod replay_tests;
@@ -29,6 +32,10 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
+pub use entities::{
+    byte_angle, pitch_byte, relative_delta, view_radius, EntityMotion, EntityMove, EntityRemove,
+    EntitySpawn, StreamEntities, BLOCKS_PER_CHUNK, PLAYER_ENTITY_TYPE,
+};
 pub use grid::{chunk_of_position, RegionGrid, CHUNK_SIZE};
 pub use messages::{
     KickFlag, KickReason, MoveKind, MoveSlot, MoveState, PlayerConnection, PlayerId, PlayerJoin,
@@ -340,6 +347,7 @@ fn game_loop(
         record_moves(&mut replay, tick, &outcome.moves);
         record_transfers(&mut replay, tick, &outcome.transfers);
         deliver_streams(&mut scheduler, &outcome.streams);
+        deliver_entities(&mut scheduler, &outcome.entities);
         for kick in &outcome.kicks {
             warn!(
                 player = kick.id,
@@ -534,6 +542,30 @@ fn deliver_streams(scheduler: &mut Scheduler, streams: &[StreamChunks]) {
             remove: stream.remove.clone(),
         };
         if let Some(kick) = scheduler.deliver(stream.player, message) {
+            warn!(
+                player = kick.id,
+                reason = kick.reason.message(),
+                "kicking a slow player"
+            );
+        }
+    }
+}
+
+/// Delivers one tick's entity-visibility changes to the connections (M4.5
+/// Шаг 3).
+///
+/// Runs **after** [`deliver_streams`], so the owner index is final. The
+/// message is a plain [`ServerMessage::StreamEntities`]; delivery uses the
+/// shared `try_send` policy ([`Scheduler::deliver`]). The journal is **not**
+/// extended — entity streaming is transport state, not game state.
+fn deliver_entities(scheduler: &mut Scheduler, events: &[StreamEntities]) {
+    for event in events {
+        let message = ServerMessage::StreamEntities {
+            spawn: event.spawn.clone(),
+            remove: event.remove.clone(),
+            moves: event.moves.clone(),
+        };
+        if let Some(kick) = scheduler.deliver(event.player, message) {
             warn!(
                 player = kick.id,
                 reason = kick.reason.message(),

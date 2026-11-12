@@ -7,10 +7,12 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
+use protocol::Uuid;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use tracing::warn;
 
+use super::entities::StreamEntities;
 use super::grid::{chunk_of_position, RegionGrid};
 use super::messages::{
     KickFlag, KickReason, MoveState, PlayerConnection, PlayerId, PlayerJoin, ServerMessage,
@@ -97,6 +99,14 @@ pub struct Player {
     /// chunk first, then the chunk of the newest applied move. The tick
     /// derives a [`StreamChunks`] event whenever this changes.
     window_center: (i32, i32),
+    /// Other players this one currently sees, with their offline UUIDs
+    /// (M4.5 Шаг 3). Part of the player, so a transfer carries it; the tick's
+    /// visibility pass keeps it in step with the world.
+    visible: BTreeMap<PlayerId, Uuid>,
+    /// The pose last broadcast to every current viewer of this player, or
+    /// `None` before the first spawn. The next movement delta is measured
+    /// from it.
+    last_broadcast: Option<PlayerPos>,
     connection: PlayerConnection,
 }
 
@@ -113,6 +123,8 @@ impl Player {
             spawn: join.spawn,
             position,
             window_center,
+            visible: BTreeMap::new(),
+            last_broadcast: None,
             connection: join.connection,
         }
     }
@@ -156,6 +168,27 @@ impl Player {
     /// The chunk the client's chunk-cache centre sits at (M4.4 B).
     pub fn window_center(&self) -> (i32, i32) {
         self.window_center
+    }
+
+    /// Other players this one currently sees, with their offline UUIDs
+    /// (M4.5 Шаг 3).
+    pub fn visible(&self) -> &BTreeMap<PlayerId, Uuid> {
+        &self.visible
+    }
+
+    /// Replaces the visible set (the tick's visibility pass owns it).
+    pub fn set_visible(&mut self, visible: BTreeMap<PlayerId, Uuid>) {
+        self.visible = visible;
+    }
+
+    /// The pose last broadcast to this player's viewers, or `None`.
+    pub fn last_broadcast(&self) -> Option<PlayerPos> {
+        self.last_broadcast
+    }
+
+    /// Replaces the last broadcast pose (the tick's visibility pass owns it).
+    pub fn set_last_broadcast(&mut self, pose: Option<PlayerPos>) {
+        self.last_broadcast = pose;
     }
 
     /// Applies a decoded movement packet to this player.
@@ -265,6 +298,9 @@ pub struct TickOutcome {
     pub transfers: Vec<Transfer>,
     /// Window moves of this tick, in `(region, seq)` order.
     pub streams: Vec<StreamChunks>,
+    /// Entity-visibility changes of this tick (M4.5 Шаг 3), in `(region,
+    /// seq)` order; the scheduler computes them after the transfers.
+    pub entities: Vec<StreamEntities>,
 }
 
 impl TickOutcome {
@@ -272,9 +308,10 @@ impl TickOutcome {
     ///
     /// One compact JSON line per tick result, ordered by `(region, seq)` with
     /// moves, transfers and window moves sharing the region's event counter;
-    /// kicks follow. The transcript is the ordered list of everything the
-    /// ticks produced — M4.3's positions and crossings plus M4.4 B's
-    /// `stream` events. Used by the determinism tests and the replay check.
+    /// entity events (M4.5 Шаг 3) and kicks follow. The transcript is the
+    /// ordered list of everything the ticks produced — M4.3's positions and
+    /// crossings plus M4.4 B's `stream` and M4.5's `entity` events. Used by
+    /// the determinism tests and the replay check.
     pub fn transcript(&self, tick: u64) -> Vec<String> {
         let mut events: Vec<(RegionId, u32, u8, serde_json::Value)> = Vec::new();
         for moved in &self.moves {
@@ -318,6 +355,31 @@ impl TickOutcome {
             });
             events.push((stream.region, stream.seq, 2, value));
         }
+        for entity in &self.entities {
+            let spawn: Vec<PlayerId> = entity.spawn.iter().map(|spawned| spawned.id).collect();
+            let remove: Vec<PlayerId> = entity.remove.iter().map(|removed| removed.id).collect();
+            let moves: Vec<serde_json::Value> = entity
+                .moves
+                .iter()
+                .map(|moved| {
+                    serde_json::json!({
+                        "id": moved.id,
+                        "motion": moved.motion.name(),
+                    })
+                })
+                .collect();
+            let value = serde_json::json!({
+                "tick": tick,
+                "region": entity.region,
+                "kind": "entity",
+                "src": entity.player,
+                "seq": entity.seq,
+                "spawn": spawn,
+                "remove": remove,
+                "move": moves,
+            });
+            events.push((entity.region, entity.seq, 3, value));
+        }
         for kick in &self.kicks {
             let value = serde_json::json!({
                 "tick": tick,
@@ -326,7 +388,7 @@ impl TickOutcome {
                 "src": kick.id,
                 "reason": kick.reason.message(),
             });
-            events.push((kick.region, u32::MAX, 3, value));
+            events.push((kick.region, u32::MAX, 4, value));
         }
         events.sort_by_key(|(region, seq, kind, _)| (*region, *seq, *kind));
         events

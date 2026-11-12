@@ -13,6 +13,8 @@ use std::sync::{Arc, Mutex};
 use protocol::Position;
 use tokio::sync::mpsc;
 
+use super::entities::{EntityMove, EntityRemove, EntitySpawn};
+
 /// Position of a player inside the game thread.
 ///
 /// It is also the entity id of Login (play) for the first player of a
@@ -92,6 +94,18 @@ pub enum ServerMessage {
         add: Vec<(i32, i32)>,
         /// Chunks leaving the window, ascending `(x, z)` (the traced order).
         remove: Vec<(i32, i32)>,
+    },
+    /// The players a viewer starts or stops seeing, plus their movement
+    /// (M4.5 Шаг 3). The connection turns each list into the entity packets
+    /// (spawn order per the trace); delivery uses the same `try_send` policy
+    /// as every other tick → connection message.
+    StreamEntities {
+        /// Entities to spawn, in ascending id.
+        spawn: Vec<EntitySpawn>,
+        /// Entities to remove, in ascending id.
+        remove: Vec<EntityRemove>,
+        /// Movement updates, in ascending id.
+        moves: Vec<EntityMove>,
     },
 }
 

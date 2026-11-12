@@ -3,6 +3,7 @@
 
 mod batch;
 mod chunk_pace;
+mod entities;
 mod join;
 mod keep_alive;
 
@@ -389,6 +390,17 @@ where
                                 "window move before the world was ready"
                             );
                         }
+                    }
+                    // A player became visible, stopped being visible or moved
+                    // (M4.5 Шаг 3): the connection turns the event into the
+                    // entity packets, in the order the trace records.
+                    Some(ServerMessage::StreamEntities {
+                        spawn,
+                        remove,
+                        moves,
+                    }) => {
+                        entities::write_entity_stream(&mut writer, ids, &spawn, &remove, &moves)
+                            .await?;
                     }
                     // The game thread dropped this player (quit); the
                     // connection closes. The kick reason is read in M4.1's

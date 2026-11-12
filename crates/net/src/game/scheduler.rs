@@ -209,6 +209,11 @@ impl Scheduler {
             self.tick_inline(tick, now)
         };
         self.apply_transfers(&mut outcome);
+        // M4.5 Шаг 3: the visibility pass sees the final owner and positions,
+        // so a player that crossed a boundary this tick is already in its new
+        // region. Entity streaming is transport state: it never touches the
+        // replay journal.
+        outcome.entities = super::entities::visibility_pass(&mut self.regions);
         outcome
     }
 
