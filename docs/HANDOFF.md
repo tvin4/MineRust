@@ -1,9 +1,10 @@
 # HANDOFF (state for the next session)
 
-**M4.5 (сервер), Шаг 0 готов** — 12.11.2026, проверены выводы M4.6 (замеры + доклад). База: `7c622c5`.
-- Дефект бенча (не пула): при `region_side=64` раскладка `spread(64,8,(−64,−64))` клала все 64 игрока в **один** регион → `dispatch` inline, K не влиял. Фикс: `spread_over_tiles` + busy-loop только в регионе с игроками, `capacity::run_timed`, CPU-сэмплер `bench::cpu`, фазовый сброс метрик. Gate тёмно-зелёный.
-- Факты 0.1/0.2/0.3: W2 масштабируется ~K (медиана p50 ≈ регионы×S/K; speedup K=10 до 9.0×; потолок — число регионов и ~6 физ. ядер; K=12 SMT без выигрыша); W1 на дешёвом тике пул дороже (11→162 μs); фаза входа дёшева (p50≈0.01 мс), p99 4–14 мс — в установившейся ходьбе. Отчёты: `target/bench/m45-{w2,w1}-matrix.md`, `m45-phase-*.md`.
-- Доки: `docs/BENCH-M4.md` (§0 дефект, §1/§2/§5.1), `docs/DECISIONS.md` D5/D3/D7, `docs/ARCH-M4.md` §5, `docs/PROGRESS.md`.
-- **Дальше — Шаг 1:** `tools/trace-analyze/analyze.py entities-detail` (агрегаты по умолчанию, `--list`; фильтр по id B=77, мобы отдельной строкой), правила видимости из трейса С1/С2/С3 → `docs/ARCH-M4.md` §6. Затем Шаги 2–5: кодеки (`crates/protocol`, только добавление), дизайн видимости + отдельный замер (порог: steady p99 при P=200 > 5 мс — СТОП), тесты а–д, доклад + LIVE-CHECK.
-- Изменяемое на Шагах 1–5: `crates/net`, конфиг в `crates/server`, `crates/protocol` (add-only), `crates/bench`, бот/тесты `crates/parity` (новые, не трогая существующие сверки), `tools/`, `docs/`. `server.toml` владельца не трогать.
-- SMT: K=12 = 6 физ. ядер / 12 логических (Ryzen 5 2600X). Трейсы владельца — `C:\MineRust-data\traces\` (не в репо). Замерять только при простое машины.
+**M4.5 (сервер), Шаг 1 готов** — 12.11.2026, разобраны пакеты о другом игроке. База Шага 1: `e676a3c` (Шаг 0).
+- Инструмент: `analyze.py entities-detail` (фильтр по id B=77, мобы отдельной строкой, `--list`); `python -m py_compile` зелёный.
+- Факты (трейс С1/С2/С3): о id 77 — 9/174/814 пакетов (add, remove, move_entity_pos, move_entity_pos_rot, rotate_head, entity_position_sync, set_entity_data, update_attributes); мобы 19456/23139. `move_entity_rot` и `teleport_entity` о игроке — НЕ наблюдались. `add_entity`(77): uuid `b3b03a00-4714-337e-8103-52c60a6c836f`, type 159, len 48. Порядок входа: add → set_entity_data(11) → move_entity_pos → set_entity_data(14) → update_attributes(32) → [entity_position_sync] → move_entity_pos_rot + rotate_head. Граница видимости: макс. 160.2 (=R 10×16), одиночное мерцание 154.6/154.4.
+- **Гипотеза Шага 3:** круг радиуса `view_distance×16`, без гистерезиса (мерцание — «не установлено»).
+- **Требует решения владельца:** `update_attributes` и `entity_position_sync` о игроке есть в трейсе, но их нет в списке кодеков Шага 2 → точное равенство списка в Шаге 4в недостижимо без них (молча не расширяю).
+- Доки: `docs/ARCH-M4.md` §6 (новый подраздел «Шаг 1»); разборы `target/bench/m45-detail-c{1,2,3}[-list].txt`.
+- **Дальше — Шаг 2:** кодеки в `crates/protocol` (только добавление) с тестами «те же байты из трейса»; решить/пометить `teleport_entity`/`update_attributes`/`entity_position_sync`. Затем Шаги 3–5 (видимость в планировщике + замер с порогом steady p99 P=200 > 5 мс = СТОП; тесты а–д; доклад + LIVE-CHECK).
+- Изменяемое на Шагах 1–5: `crates/net`, конфиг `crates/server`, `crates/protocol` (add-only), `crates/bench`, бот/тесты `crates/parity` (новые), `tools/`, `docs/`. `server.toml` владельца не трогать. Замеры — только при простое машины. Трейсы: `C:\MineRust-data\traces\`.
