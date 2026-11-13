@@ -18,13 +18,25 @@
 //!   vanilla byte` — nothing is silently normalised.
 //!
 //! The run is expected to be **red** until the entity stream matches the
-//! trace. The recorded divergences (С1/С2/С4, `docs/ARCH-M4.md` §6) are: our
-//! stream misses vanilla's periodic zero-delta `move_entity_pos` while a
-//! player stands and its `entity_position_sync` on rotation; our
-//! `update_attributes` uses the С2 key order (8, 26, 13) where С1 records
-//! (26, 13, 8); and С2/С4 differ in the `rotate_head`/`move_entity_rot`
-//! cadence and rotation bytes. (The world-exit order this test recorded —
-//! `player_info_remove` before `remove_entities` — was fixed in Шаг 4 (г).)
+//! trace. Шаг 6.3 (after the Шаг 6.2 cadence fix) leaves four residual
+//! divergence classes, each **not derivable from the trace** (showing the data
+//! and stopping on the item is the owner's rule; `docs/ARCH-M4.md` §6 «Шаг
+//! 6.3» carries the numbers):
+//!
+//! * the `entity_position_sync` trigger (vanilla 8 in С2, 4 in С4; no period,
+//!   step or threshold fits);
+//! * the `rotate_head` byte rule — С2 shows head = the *next* update's yaw
+//!   (56/65), С4 shows head = body − one client tick (45/50); contradictory,
+//!   so no single rule follows;
+//! * the `update_attributes` key order (С1 (26, 13, 8), С2 (8, 26, 13), С4
+//!   (26, 8, 13) — unstable across vanilla runs, so not a rule);
+//! * the zero-delta `move_entity_pos` period in С4 (gaps 38/53/116 ticks vs
+//!   the strict 60 of С1/С2) and vanilla's 1/3/4-tick sampling jitter.
+//!
+//! Everything else matches: С1's type sequence and payloads are byte-identical
+//! after the allowed normalisation except the attribute order. (The
+//! world-exit order this test recorded — `player_info_remove` before
+//! `remove_entities` — was fixed in Шаг 4 (г).)
 //! The failure message points at the written report; the diffs are the (в)
 //! finding, not a silent pass.
 //!
