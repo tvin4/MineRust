@@ -233,22 +233,24 @@ pub fn push_motion(
     Ok(())
 }
 
-/// Pushes the removal of a player: the tab-list entry only when it left the
-/// world, then the entity itself.
+/// Pushes the removal of a player: the entity first, then the tab-list entry
+/// when it left the world — the C1 order (`remove_entities` seq 16554,
+/// `player_info_remove` seq 16556).
+// SOURCE: two-bot vanilla trace 26.3 (C1).
 pub fn push_remove(
     entity: &EntityRemove,
     out: &mut Vec<(PacketKey, Vec<u8>)>,
 ) -> Result<(), CodecError> {
+    let remove = RemoveEntities {
+        entity_ids: vec![entity.id],
+    };
+    out.push((RemoveEntities::KEY, remove.encode_payload()?));
     if entity.left_world {
         let info = PlayerInfoRemove {
             uuids: vec![entity.uuid],
         };
         out.push((PlayerInfoRemove::KEY, info.encode_payload()?));
     }
-    let remove = RemoveEntities {
-        entity_ids: vec![entity.id],
-    };
-    out.push((RemoveEntities::KEY, remove.encode_payload()?));
     Ok(())
 }
 
@@ -269,4 +271,41 @@ pub fn push_entity_stream(
         push_remove(entity, out)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The world exit sends `remove_entities` first and the tab-list
+    /// `player_info_remove` after it — the order recorded in C1
+    /// (`remove_entities` seq 16554, `player_info_remove` seq 16556).
+    // SOURCE: two-bot vanilla trace 26.3 (C1).
+    #[test]
+    fn world_exit_removes_the_entity_before_the_tab_entry() {
+        let remove = EntityRemove {
+            id: 77,
+            uuid: [0xAB; 16],
+            left_world: true,
+        };
+        let mut out = Vec::new();
+        push_remove(&remove, &mut out).expect("encodable");
+        let keys: Vec<PacketKey> = out.iter().map(|(key, _)| *key).collect();
+        assert_eq!(keys, vec![RemoveEntities::KEY, PlayerInfoRemove::KEY]);
+    }
+
+    /// Leaving the view radius (not the world) drops only the entity and
+    /// leaves the tab-list entry.
+    #[test]
+    fn view_exit_removes_only_the_entity() {
+        let remove = EntityRemove {
+            id: 5,
+            uuid: [0; 16],
+            left_world: false,
+        };
+        let mut out = Vec::new();
+        push_remove(&remove, &mut out).expect("encodable");
+        let keys: Vec<PacketKey> = out.iter().map(|(key, _)| *key).collect();
+        assert_eq!(keys, vec![RemoveEntities::KEY]);
+    }
 }
