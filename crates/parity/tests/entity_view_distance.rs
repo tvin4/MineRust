@@ -98,7 +98,11 @@ async fn view_distance_matches_vanilla() {
     }
     let ids = Arc::new(env.packet_ids().expect("packet ids"));
     let env = Arc::new(env);
-    let (port, _guard) = start_server(&env, Arc::clone(&ids), 0).await;
+    // C3 was recorded with both bots in spectator (its `set_entity_data` about
+    // B carries the entity-flags `0x20` update), so the same mode is used here:
+    // the distance measurement is mode-independent, but the trace next to it
+    // should come from the same setup.
+    let (port, _guard) = start_server(&env, Arc::clone(&ids), 3).await;
 
     let a_uuid = protocol::offline_uuid(twobot::BOT_A);
     let b_uuid = protocol::offline_uuid(twobot::BOT_B);

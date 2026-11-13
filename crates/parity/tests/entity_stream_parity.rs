@@ -172,6 +172,37 @@ fn normalized(name: &str, raw: &[u8]) -> Vec<u8> {
     }
 }
 
+/// One fact line about whether the viewer can actually see B: in a
+/// non-spectator mode the spawn must not carry the entity-flags `0x20` entry
+/// that hides the model, so the mode byte in Tab and the metadata must agree.
+/// The check is a fact line, not an assertion: the parity gate stays the
+/// divergence list.
+fn visibility_fact(code: &str, game_mode: i32, about: &[Line]) -> String {
+    let mut records = 0;
+    let mut hidden = 0;
+    for line in about {
+        if line.name.as_deref() != Some("minecraft:set_entity_data") {
+            continue;
+        }
+        let mut reader = PacketReader::new(&line.bytes);
+        let Ok(packet) = SetEntityData::decode_payload(&mut reader) else {
+            continue;
+        };
+        records += 1;
+        // The entity-flags entry is `index 0`, type 0 (byte), value `0x20`
+        // (the invisibility bit seen in the spectator traces), so the record
+        // is the prefix `00 00 20`.
+        if packet.metadata.starts_with(&[0x00, 0x00, 0x20]) {
+            hidden += 1;
+        }
+    }
+    format!(
+        "{code}: mode {game_mode}, {records} set_entity_data about B, invisibility flag in \
+         {hidden}; B is {}",
+        if hidden == 0 { "visible" } else { "hidden" }
+    )
+}
+
 /// The explicit byte diff of one aligned pair: the first differing offset
 /// (in the normalised payload), our byte and the vanilla byte.
 fn byte_diff(ours: &[u8], vanilla: &[u8]) -> String {
@@ -300,6 +331,7 @@ async fn entity_stream_matches_vanilla() {
             ));
             let v_about = about_b(&vanilla, v_id, b_uuid);
             let o_about = about_b(&ours, o_id, b_uuid);
+            facts.push(visibility_fact(code, game_mode, &o_about));
             report.extend(compare(code, &v_about, &o_about));
         }
     }
