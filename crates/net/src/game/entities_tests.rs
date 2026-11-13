@@ -5,7 +5,7 @@
 
 use super::entities::{
     byte_angle, mutually_visible, pitch_byte, pose_differs, relative_delta, view_radius,
-    visibility_pass, EntityMotion, EntityRemove, StreamEntities,
+    visibility_pass, EntityMotion, EntityRemove, StreamEntities, BROADCAST_PERIOD_TICKS,
 };
 use super::test_support::join_at;
 use super::{MoveUpdate, PlayerId, PlayerPos, Region, SINGLE_REGION};
@@ -98,12 +98,18 @@ fn only_position_or_rotation_counts_as_a_change() {
 
 #[test]
 fn byte_angles_match_the_trace() {
-    // yaw 0xa0 is -135 degrees (round(-135 * 256 / 360) = -96 = 0xa0).
+    // yaw 0xa0 is -135 degrees (floor(-135 * 256 / 360) = -96 = 0xa0).
     assert_eq!(byte_angle(-135.0), 0xA0);
     assert_eq!(byte_angle(225.0), 0xA0, "wraps to the same angle");
-    // pitch 0x03 is 4.2 degrees, 0xef is -17 (-23.9 degrees).
-    assert_eq!(pitch_byte(4.2), 3);
+    // Vanilla floors the angle: 4.5 degrees -> 3, while 4.2 -> 2 (round
+    // would give 3 — that was the defect fixed in Шаг 6.2).
+    assert_eq!(pitch_byte(4.5), 3);
+    assert_eq!(pitch_byte(4.2), 2, "floor, not round");
+    // pitch 0xef is -17 (-23.9 degrees floors to -17).
     assert_eq!(pitch_byte(-23.9), -17);
+    // The trace's -20 degree pitch: floor(-14.22) = -15 -> byte 241 = 0xf1.
+    assert_eq!(pitch_byte(-20.0), -15);
+    assert_eq!(pitch_byte(-20.0) as u8, 241);
 }
 
 #[test]
@@ -231,6 +237,9 @@ fn movement_goes_only_to_viewers_that_still_see_the_subject() {
             pitch: None,
             flags: 0,
         });
+    // A pose change is broadcast on every second tick (Шаг 6.2): advance one
+    // tick, then take the event of the update tick.
+    let _ = visibility_pass(&mut regions);
     let events = visibility_pass(&mut regions);
     let event = event_of(&events, 1).expect("viewer 1 hears about 2");
     assert_eq!(event.moves.len(), 1);
@@ -265,6 +274,8 @@ fn a_rotation_only_change_is_reported_as_rotation() {
             pitch: Some(-45.0),
             flags: 0,
         });
+    // Rotation broadcasts on every second tick too (Шаг 6.2).
+    let _ = visibility_pass(&mut regions);
     let events = visibility_pass(&mut regions);
     let event = event_of(&events, 1).expect("viewer 1");
     assert_eq!(event.moves.len(), 1);
@@ -286,6 +297,9 @@ fn a_large_jump_is_a_sync_not_a_relative_move() {
             pitch: None,
             flags: 0,
         });
+    // The jump is still measured from the spawn baseline on the second tick
+    // after it (Шаг 6.2).
+    let _ = visibility_pass(&mut regions);
     let events = visibility_pass(&mut regions);
     let event = event_of(&events, 1).expect("viewer 1");
     assert_eq!(
@@ -325,7 +339,8 @@ fn a_spawn_resets_the_broadcast_baseline() {
         event_of(&events, 1).expect("event").moves.is_empty(),
         "the spawn carries the position, no separate move"
     );
-    // The next move is measured from the spawn baseline, so it is small.
+    // The next move is measured from the spawn baseline on the second tick
+    // after the spawn (Шаг 6.2), so it is small.
     regions[0]
         .get_mut(2)
         .expect("player 2")
@@ -337,6 +352,7 @@ fn a_spawn_resets_the_broadcast_baseline() {
             pitch: None,
             flags: 0,
         });
+    let _ = visibility_pass(&mut regions);
     let events = visibility_pass(&mut regions);
     let event = event_of(&events, 1).expect("viewer 1");
     assert_eq!(
@@ -347,6 +363,71 @@ fn a_spawn_resets_the_broadcast_baseline() {
             dz: 0,
             rotated: false,
         }
+    );
+}
+
+/// A subject that keeps moving is broadcast on every second tick, and each
+/// packet carries the delta accumulated since the previous broadcast (Шаг
+/// 6.2; vanilla С2/С4 gaps 2).
+#[test]
+fn a_moving_subject_broadcasts_every_second_tick() {
+    let mut regions = vec![region_with(&[(1, (0, 64, 0)), (2, (50, 64, 0))])];
+    visibility_pass(&mut regions);
+    let mut broadcasts = Vec::new();
+    for tick in 1..=6 {
+        regions[0]
+            .get_mut(2)
+            .expect("player 2")
+            .apply_move(&MoveUpdate {
+                x: Some(50.5 + 0.2 * f64::from(tick)),
+                y: None,
+                z: None,
+                yaw: None,
+                pitch: None,
+                flags: 0,
+            });
+        let events = visibility_pass(&mut regions);
+        if let Some(event) = event_of(&events, 1) {
+            for moved in event.moves.iter().filter(|moved| moved.id == 2) {
+                broadcasts.push((tick, moved.motion));
+            }
+        }
+    }
+    let ticks: Vec<i32> = broadcasts.iter().map(|(tick, _)| *tick).collect();
+    assert_eq!(ticks, vec![2, 4, 6], "once per two ticks");
+    for (_, motion) in &broadcasts {
+        assert_eq!(
+            *motion,
+            EntityMotion::Position {
+                dx: relative_delta(0.4).expect("0.4 blocks fit"),
+                dy: 0,
+                dz: 0,
+                rotated: false,
+            },
+            "the delta accumulates over the two ticks"
+        );
+    }
+}
+
+/// A subject that stands still gets a zero-delta `move_entity_pos` after the
+/// broadcast period (Шаг 6.2; vanilla С1/С2 ~60 ticks).
+#[test]
+fn a_standing_subject_gets_a_zero_delta_after_the_period() {
+    let mut regions = vec![region_with(&[(1, (0, 64, 0)), (2, (50, 64, 0))])];
+    visibility_pass(&mut regions);
+    let mut zero = Vec::new();
+    for tick in 1..=BROADCAST_PERIOD_TICKS {
+        let events = visibility_pass(&mut regions);
+        if let Some(event) = event_of(&events, 1) {
+            for moved in event.moves.iter().filter(|moved| moved.id == 2) {
+                zero.push((tick, moved.motion));
+            }
+        }
+    }
+    assert_eq!(
+        zero,
+        vec![(BROADCAST_PERIOD_TICKS, EntityMotion::ZeroDelta)],
+        "exactly one zero-delta packet after the period"
     );
 }
 

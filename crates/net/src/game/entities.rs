@@ -28,6 +28,21 @@ use super::region::{PlayerPos, Region, RegionId};
 /// Blocks of horizontal view radius per chunk of view distance.
 pub const BLOCKS_PER_CHUNK: f64 = 16.0;
 
+/// Server ticks between two pose broadcasts of one subject (M4.5 Шаг 6.2).
+///
+/// Vanilla updates a subject once per two ticks: 92/103 gaps between
+/// consecutive updates are 2 B-ticks in С2 and 47/55 in С4.
+// SOURCE: two-bot vanilla trace 26.3 (С2/С4), per-tick tables in §6.
+pub const UPDATE_INTERVAL: u32 = 2;
+
+/// Ticks without a pose change after which a zero-delta `move_entity_pos` is
+/// broadcast (M4.5 Шаг 6.2).
+///
+/// С1 sends it every 2.98/3.00 s (about 60 ticks) and С2 also 2996 ms; С4 is
+/// irregular, so the exact periodicity is «не установлено» and 60 is used.
+// SOURCE: two-bot vanilla trace 26.3 (С1/С2), §6.
+pub const BROADCAST_PERIOD_TICKS: u32 = 60;
+
 /// Entity type id of a player in `add_entity`.
 // SOURCE: two-bot vanilla trace 26.3 (C1–C4): type 159 for the traced player.
 pub const PLAYER_ENTITY_TYPE: i32 = 159;
@@ -57,14 +72,21 @@ pub fn pose_differs(a: &PlayerPos, b: &PlayerPos) -> bool {
     a.x != b.x || a.y != b.y || a.z != b.z || a.yaw != b.yaw || a.pitch != b.pitch
 }
 
-/// A yaw in degrees as the protocol's one-byte angle (`round(deg · 256 / 360)`).
+/// A yaw in degrees as the protocol's one-byte angle
+/// (`floor(deg · 256 / 360)`).
+///
+/// Vanilla floors the angle in f64 (С2: floor 0/68 vs round 33/68; С4: 0/51 vs
+/// 42/51); rounding was our earlier defect.
+// SOURCE: two-bot vanilla trace 26.3 (С2/С4), §6.
 pub fn byte_angle(degrees: f32) -> u8 {
-    (degrees * (256.0 / 360.0)).round() as i32 as u8
+    (f64::from(degrees) * (256.0 / 360.0)).floor() as i32 as u8
 }
 
-/// A pitch in degrees as the protocol's one signed-byte angle.
+/// A pitch in degrees as the protocol's one signed-byte angle
+/// (`floor(deg · 256 / 360)`, two's complement).
+// SOURCE: two-bot vanilla trace 26.3 (С2/С4), §6.
 pub fn pitch_byte(degrees: f32) -> i8 {
-    (degrees * (256.0 / 360.0)).round() as i32 as i8
+    (f64::from(degrees) * (256.0 / 360.0)).floor() as i32 as i8
 }
 
 /// A relative delta in 1/4096 blocks, or `None` when it does not fit an `i16`
@@ -121,6 +143,10 @@ pub enum EntityMotion {
     },
     /// A rotation-only change.
     Rotation,
+    /// No pose change for a whole broadcast period: a zero-delta
+    /// `move_entity_pos`, sent so the client's position stays fresh (M4.5 Шаг
+    /// 6.2).
+    ZeroDelta,
     /// A jump too large for the relative packets; the absolute position is
     /// sent instead.
     Sync,
@@ -132,6 +158,7 @@ impl EntityMotion {
         match self {
             Self::Position { .. } => "position",
             Self::Rotation => "rotation",
+            Self::ZeroDelta => "zero_delta",
             Self::Sync => "sync",
         }
     }
@@ -240,6 +267,7 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
     let mut owner: Vec<RegionId> = Vec::new();
     let mut owner_region: Vec<usize> = Vec::new();
     let mut baseline: Vec<Option<PlayerPos>> = Vec::new();
+    let mut ticks: Vec<u32> = Vec::new();
     let mut before: Vec<Vec<PlayerId>> = Vec::new();
     let mut index: BTreeMap<PlayerId, usize> = BTreeMap::new();
     for (region_index, region) in regions.iter().enumerate() {
@@ -254,6 +282,7 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
             owner.push(region.id());
             owner_region.push(region_index);
             baseline.push(player.last_broadcast());
+            ticks.push(player.ticks_since_broadcast());
             before.push(player.visible().keys().copied().collect());
         }
     }
@@ -276,19 +305,31 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
         }
     }
 
-    // Movement of every subject, shared by all its viewers. A moved subject
-    // also resets the baseline every viewer measures the next move from; so
-    // does a subject that just became visible (its spawn carries the position).
+    // Movement of every subject, shared by all its viewers. Vanilla broadcasts
+    // a subject once per `UPDATE_INTERVAL` ticks and a zero-delta position
+    // packet after `BROADCAST_PERIOD_TICKS` without a change (Шаг 6.2). A moved
+    // subject resets the baseline every viewer measures the next move from, and
+    // so does a subject that just became visible (its spawn carries the
+    // position).
     let mut motion: Vec<Option<EntityMotion>> = vec![None; ids.len()];
     let mut next_baseline = baseline.clone();
+    let mut next_ticks: Vec<u32> = ticks.clone();
     for &subject in &sorted {
+        let counter = ticks[subject].saturating_add(1);
+        next_ticks[subject] = counter;
         let Some(previous) = baseline[subject] else {
             continue;
         };
         let now = position[subject];
         if pose_differs(&previous, &now) {
-            motion[subject] = Some(motion_from(&previous, &now));
-            next_baseline[subject] = Some(now);
+            if counter >= UPDATE_INTERVAL {
+                motion[subject] = Some(motion_from(&previous, &now));
+                next_baseline[subject] = Some(now);
+                next_ticks[subject] = 0;
+            }
+        } else if counter >= BROADCAST_PERIOD_TICKS {
+            motion[subject] = Some(EntityMotion::ZeroDelta);
+            next_ticks[subject] = 0;
         }
     }
 
@@ -328,6 +369,7 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
                     spawn_delta[i].push((left, record.uuid));
                     spawn.push(record);
                     next_baseline[j] = Some(position[j]);
+                    next_ticks[j] = 0;
                     n += 1;
                 }
                 (Some(_), Some(_)) => {
@@ -350,6 +392,7 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
                     spawn_delta[i].push((ids[j], record.uuid));
                     spawn.push(record);
                     next_baseline[j] = Some(position[j]);
+                    next_ticks[j] = 0;
                     n += 1;
                 }
                 (None, Some(_)) => {
@@ -404,6 +447,7 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
                 visible.insert(*new_id, *uuid);
             }
             player.set_last_broadcast(next_baseline[i]);
+            player.set_ticks_since_broadcast(next_ticks[i]);
         }
     }
     events

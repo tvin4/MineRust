@@ -212,6 +212,23 @@ pub fn push_motion(
             };
             out.push((RotateHead::KEY, head.encode_payload()?));
         }
+        EntityMotion::ZeroDelta => {
+            // The periodic no-change packet: header `0x02`/`0x02` and a zero
+            // delta, byte for byte the traced payload
+            // `4d 02 02 00 00 00 00 00 00`.
+            // SOURCE: two-bot vanilla trace 26.3 (C1/C2/C4).
+            let packet = MoveEntityPos {
+                entity_id: id,
+                header: MoveHeader {
+                    flags: 0x02,
+                    kind: Some(0x02),
+                },
+                dx: 0,
+                dy: 0,
+                dz: 0,
+            };
+            out.push((MoveEntityPos::KEY, packet.encode_payload()?));
+        }
         EntityMotion::Sync => {
             let packet = EntityPositionSync {
                 entity_id: id,
@@ -359,9 +376,38 @@ mod tests {
             vec!["minecraft:move_entity_rot", "minecraft:rotate_head"]
         );
         assert_eq!(
+            names(EntityMotion::ZeroDelta),
+            vec!["minecraft:move_entity_pos"]
+        );
+        assert_eq!(
             names(EntityMotion::Sync),
             vec!["minecraft:entity_position_sync"]
         );
+    }
+
+    /// The periodic no-change packet is `move_entity_pos` with header
+    /// `0x02`/`0x02` and a zero delta, byte for byte the traced
+    /// `id 02 02 00 00 00 00 00 00` (Шаг 6.2).
+    // SOURCE: two-bot vanilla trace 26.3 (C1/C2/C4).
+    #[test]
+    fn zero_delta_encodes_the_traced_periodic_packet() {
+        let moved = EntityMove {
+            id: 0x4d,
+            position: PlayerPos {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                yaw: 0.0,
+                pitch: 0.0,
+                flags: 0,
+            },
+            motion: EntityMotion::ZeroDelta,
+        };
+        let mut out = Vec::new();
+        push_motion(&moved, &mut out).expect("encodable");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, MoveEntityPos::KEY);
+        assert_eq!(out[0].1, vec![0x4d, 0x02, 0x02, 0, 0, 0, 0, 0, 0]);
     }
 
     /// `teleport_entity` is out of M4.5 scope: neither a spawn nor any motion
@@ -398,6 +444,7 @@ mod tests {
                 rotated: true,
             },
             EntityMotion::Rotation,
+            EntityMotion::ZeroDelta,
             EntityMotion::Sync,
         ] {
             push_motion(

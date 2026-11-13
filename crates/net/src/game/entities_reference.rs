@@ -1,12 +1,13 @@
 //! The previous, naive visibility pass, kept **verbatim** as the reference of
-//! the M4.5 Шаг 3.5 equivalence test.
+//! the M4.5 Шаг 3.5 equivalence test, plus the Шаг 6.2 broadcast cadence.
 //!
 //! The optimized [`super::entities::visibility_pass`] must produce exactly the
 //! same visible sets as this one for the same input; the random-layout test in
 //! `entities_equivalence_tests.rs` checks that. This module is test-only and
 //! must not be used by production code.
 //!
-//! SOURCE: the M4.5 Шаг 3 implementation (`6c1a850`), copied unchanged.
+//! SOURCE: the M4.5 Шаг 3 implementation (`6c1a850`), with the Шаг 6.2
+//! per-subject counter (`UPDATE_INTERVAL`, `BROADCAST_PERIOD_TICKS`).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -14,7 +15,7 @@ use protocol::{offline_uuid, Uuid};
 
 use super::entities::{
     mutually_visible, pose_differs, relative_delta, view_radius, EntityMotion, EntityMove,
-    EntityRemove, EntitySpawn, StreamEntities,
+    EntityRemove, EntitySpawn, StreamEntities, BROADCAST_PERIOD_TICKS, UPDATE_INTERVAL,
 };
 use super::messages::PlayerId;
 use super::region::{PlayerPos, Region, RegionId};
@@ -50,6 +51,7 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
     let mut uuid: BTreeMap<PlayerId, Uuid> = BTreeMap::new();
     let mut visible_before: BTreeMap<PlayerId, BTreeMap<PlayerId, Uuid>> = BTreeMap::new();
     let mut baseline: BTreeMap<PlayerId, Option<PlayerPos>> = BTreeMap::new();
+    let mut ticks: BTreeMap<PlayerId, u32> = BTreeMap::new();
     for region in regions.iter() {
         for id in region.player_ids() {
             let Some(player) = region.get(id) else {
@@ -63,6 +65,7 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
             uuid.insert(id, offline_uuid(player.name()));
             visible_before.insert(id, player.visible().clone());
             baseline.insert(id, player.last_broadcast());
+            ticks.insert(id, player.ticks_since_broadcast());
         }
     }
     if ids.is_empty() {
@@ -82,15 +85,24 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
 
     let mut moves: BTreeMap<PlayerId, Vec<EntityMove>> = BTreeMap::new();
     let mut next_baseline = baseline.clone();
+    let mut next_ticks = ticks.clone();
     for &subject in &ids {
+        let counter = ticks[&subject].saturating_add(1);
+        next_ticks.insert(subject, counter);
         let Some(previous) = baseline[&subject] else {
             continue;
         };
         let now = position[&subject];
-        if !pose_differs(&previous, &now) {
+        let changed = pose_differs(&previous, &now);
+        let motion = if changed && counter >= UPDATE_INTERVAL {
+            next_baseline.insert(subject, Some(now));
+            reference_motion_from(&previous, &now)
+        } else if !changed && counter >= BROADCAST_PERIOD_TICKS {
+            EntityMotion::ZeroDelta
+        } else {
             continue;
-        }
-        let motion = reference_motion_from(&previous, &now);
+        };
+        next_ticks.insert(subject, 0);
         for &viewer in &ids {
             if viewer != subject
                 && visible_before[&viewer].contains_key(&subject)
@@ -103,7 +115,6 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
                 });
             }
         }
-        next_baseline.insert(subject, Some(now));
     }
 
     let mut events = Vec::new();
@@ -121,6 +132,7 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
                     position: position[&id],
                 });
                 next_baseline.insert(id, Some(position[&id]));
+                next_ticks.insert(id, 0);
             }
         }
         let mut remove = Vec::new();
@@ -166,6 +178,9 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
             }
             if let Some(broadcast) = next_baseline.get(&id) {
                 player.set_last_broadcast(*broadcast);
+            }
+            if let Some(ticks) = next_ticks.get(&id) {
+                player.set_ticks_since_broadcast(*ticks);
             }
         }
     }

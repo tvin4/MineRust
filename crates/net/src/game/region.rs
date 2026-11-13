@@ -107,6 +107,14 @@ pub struct Player {
     /// `None` before the first spawn. The next movement delta is measured
     /// from it.
     last_broadcast: Option<PlayerPos>,
+    /// Server ticks since this player's pose was last broadcast, reset by a
+    /// spawn or any movement packet (M4.5 Шаг 6.2). The visibility pass
+    /// increments it every tick, sends a pose change only every
+    /// [`UPDATE_INTERVAL`](super::entities::UPDATE_INTERVAL) ticks and a
+    /// periodic zero-delta `move_entity_pos` when it reaches
+    /// [`BROADCAST_PERIOD_TICKS`](super::entities::BROADCAST_PERIOD_TICKS) — the
+    /// vanilla cadence of the two-bot trace (C1/C2/C4).
+    ticks_since_broadcast: u32,
     connection: PlayerConnection,
 }
 
@@ -125,6 +133,7 @@ impl Player {
             window_center,
             visible: BTreeMap::new(),
             last_broadcast: None,
+            ticks_since_broadcast: 0,
             connection: join.connection,
         }
     }
@@ -196,6 +205,18 @@ impl Player {
     /// Replaces the last broadcast pose (the tick's visibility pass owns it).
     pub fn set_last_broadcast(&mut self, pose: Option<PlayerPos>) {
         self.last_broadcast = pose;
+    }
+
+    /// Server ticks since this player's pose was last broadcast (M4.5 Шаг
+    /// 6.2); the visibility pass owns it.
+    pub fn ticks_since_broadcast(&self) -> u32 {
+        self.ticks_since_broadcast
+    }
+
+    /// Replaces the broadcast tick counter (the tick's visibility pass owns
+    /// it).
+    pub fn set_ticks_since_broadcast(&mut self, ticks: u32) {
+        self.ticks_since_broadcast = ticks;
     }
 
     /// Applies a decoded movement packet to this player.
