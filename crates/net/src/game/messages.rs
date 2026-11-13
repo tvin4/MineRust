@@ -55,6 +55,9 @@ pub struct PlayerJoin {
     pub view_distance: i32,
     /// Block the player joins at (the save's spawn).
     pub spawn: Position,
+    /// Game mode the join announces (M4.5 Шаг 7.3); from
+    /// [`GameConfig::default_game_mode`](super::GameConfig).
+    pub game_mode: i32,
     /// How the game thread reaches this connection.
     pub connection: PlayerConnection,
 }

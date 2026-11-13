@@ -26,27 +26,36 @@ use crate::game::{
     PLAYER_ENTITY_TYPE,
 };
 
-/// Game mode the tab-list entries of other players announce (M4.5 Шаг 3).
-///
-/// The recorded join of the other player carries game mode 3; the visibility
-/// stream is defined by the trace, so the recorded value is used until the
-/// server tracks real game modes.
-// SOURCE: two-bot vanilla trace 26.3 (C1), `player_info_update` game mode 3.
-pub const PLAYER_INFO_GAME_MODE: i32 = 3;
-
 /// First metadata snapshot of a spawned player (`set_entity_data`, len 11).
 ///
 /// The standing bot's value; the entry layout is «не установлено» and is
-/// reproduced byte for byte.
-// SOURCE: two-bot vanilla trace 26.3 (C1), payload `4d 09 03 41 a0 00 00 10 00 7f ff`.
+/// reproduced byte for byte. Identical in the survival (C5) and creative
+/// (C6) traces.
+// SOURCE: two-bot vanilla trace 26.3 (C1/C5/C6), payload `4d 09 03 41 a0 00 00 10 00 7f ff`.
 const METADATA_SNAPSHOT: &[u8] = &[0x09, 0x03, 0x41, 0xA0, 0x00, 0x00, 0x10, 0x00, 0x7F];
 
-/// Second metadata set of a spawned player (`set_entity_data`, len 14).
+/// Second metadata set of a spawned spectator (`set_entity_data`, len 14):
+/// the record at index 0 (entity flags `0x20`) precedes the standing record.
+///
+/// Only the spectator trace C1 carries it; survival (C5) and creative (C6)
+/// repeat [`METADATA_SNAPSHOT`] byte for byte. The meaning of the `0x20`
+/// flag record is «не установлено»; it is reproduced for game mode 3 only.
+/// Mode 2 (adventure) is untraced: it takes the C5/C6 path («не установлено»).
 // SOURCE: two-bot vanilla trace 26.3 (C1), payload
 // `4d 00 00 20 09 03 41 a0 00 00 10 00 7f ff`.
 const METADATA_UPDATE: &[u8] = &[
     0x00, 0x00, 0x20, 0x09, 0x03, 0x41, 0xA0, 0x00, 0x00, 0x10, 0x00, 0x7F,
 ];
+
+/// The second metadata set of a spawned player, selected by game mode:
+/// the spectator record for mode 3, the plain snapshot for the rest.
+fn metadata_second(game_mode: i32) -> &'static [u8] {
+    if game_mode == 3 {
+        METADATA_UPDATE
+    } else {
+        METADATA_SNAPSHOT
+    }
+}
 
 /// The three attributes the recorded join sends (`update_attributes`).
 ///
@@ -90,7 +99,7 @@ pub fn push_spawn(
             uuid,
             name: entity.name.clone(),
             properties: Vec::new(),
-            game_mode: PLAYER_INFO_GAME_MODE,
+            game_mode: entity.game_mode,
             listed: true,
             latency: 0,
         }],
@@ -135,7 +144,7 @@ pub fn push_spawn(
 
     let update = SetEntityData {
         entity_id: entity.id,
-        metadata: METADATA_UPDATE.to_vec(),
+        metadata: metadata_second(entity.game_mode).to_vec(),
     };
     out.push((SetEntityData::KEY, update.encode_payload()?));
 
@@ -294,6 +303,7 @@ pub fn push_entity_stream(
 mod tests {
     use super::*;
     use crate::game::{relative_delta, PlayerPos};
+    use protocol::PacketReader;
 
     /// The world exit sends `remove_entities` first and the tab-list
     /// `player_info_remove` after it — the order recorded in C1
@@ -427,6 +437,7 @@ mod tests {
             name: "Bot".to_owned(),
             uuid: [0x11; 16],
             position,
+            game_mode: 0,
         };
         let mut out = Vec::new();
         push_spawn(&spawn, &mut out).expect("encodable");
@@ -463,5 +474,48 @@ mod tests {
                 "teleport_entity is not part of the M4.5 stream"
             );
         }
+    }
+
+    #[test]
+    fn the_second_metadata_set_depends_on_the_game_mode() {
+        // M4.5 Шаг 7.3: spectator (3) takes the C1 record with the leading
+        // entity-flags entry; survival (0), creative (1) and adventure (2)
+        // repeat the snapshot byte for byte (C5/C6; 2 is untraced).
+        assert_eq!(metadata_second(3), METADATA_UPDATE, "spectator C1 bytes");
+        assert_eq!(metadata_second(0), METADATA_SNAPSHOT, "survival C5 bytes");
+        assert_eq!(metadata_second(1), METADATA_SNAPSHOT, "creative C6 bytes");
+        assert_eq!(
+            metadata_second(2),
+            METADATA_SNAPSHOT,
+            "adventure is untraced"
+        );
+    }
+
+    #[test]
+    fn the_tab_entry_carries_the_spawned_players_game_mode() {
+        // M4.5 Шаг 7.3: the game mode of a tab-list entry is the spawned
+        // player's own, not a constant copied from the spectator trace.
+        let mut out = Vec::new();
+        let spawn = EntitySpawn {
+            id: 3,
+            name: "Bot".to_owned(),
+            uuid: [0x11; 16],
+            position: PlayerPos {
+                x: 1.0,
+                y: 64.0,
+                z: 2.0,
+                yaw: 0.0,
+                pitch: 0.0,
+                flags: 0,
+            },
+            game_mode: 1,
+        };
+        push_spawn(&spawn, &mut out).expect("encodable");
+        let mut reader = PacketReader::new(&out[0].1);
+        let info = PlayerInfoUpdate::decode_payload(&mut reader).expect("decodable");
+        assert_eq!(
+            info.players[0].game_mode, 1,
+            "creative from the spawn record"
+        );
     }
 }

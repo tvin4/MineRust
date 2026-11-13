@@ -92,6 +92,9 @@ pub struct Player {
     id: PlayerId,
     name: String,
     view_distance: i32,
+    /// Game mode of this player (M4.5 Шаг 7.3): the login `game_mode`, the
+    /// tab-list entry and the mode-dependent metadata bytes all come from it.
+    game_mode: i32,
     teleport_confirmed: bool,
     spawn: protocol::Position,
     position: PlayerPos,
@@ -127,6 +130,7 @@ impl Player {
             id: join.id,
             name: join.name,
             view_distance: join.view_distance,
+            game_mode: join.game_mode,
             teleport_confirmed: false,
             spawn: join.spawn,
             position,
@@ -141,6 +145,11 @@ impl Player {
     /// Player id.
     pub fn id(&self) -> PlayerId {
         self.id
+    }
+
+    /// Game mode of this player (M4.5 Шаг 7.3).
+    pub fn game_mode(&self) -> i32 {
+        self.game_mode
     }
 
     /// Name of Login Start.

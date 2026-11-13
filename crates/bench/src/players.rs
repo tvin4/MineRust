@@ -123,6 +123,7 @@ fn bench_player_at(index: usize, x: i32, y: i32, z: i32) -> BenchPlayer {
             name: format!("bench-{index}"),
             view_distance: 10,
             spawn: protocol::Position { x, y, z },
+            game_mode: 0,
             connection: PlayerConnection {
                 outbound,
                 kick: Arc::new(KickFlag::default()),

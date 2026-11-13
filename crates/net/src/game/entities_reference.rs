@@ -49,6 +49,7 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
     let mut owner: BTreeMap<PlayerId, RegionId> = BTreeMap::new();
     let mut name: BTreeMap<PlayerId, String> = BTreeMap::new();
     let mut uuid: BTreeMap<PlayerId, Uuid> = BTreeMap::new();
+    let mut game_mode: BTreeMap<PlayerId, i32> = BTreeMap::new();
     let mut visible_before: BTreeMap<PlayerId, BTreeMap<PlayerId, Uuid>> = BTreeMap::new();
     let mut baseline: BTreeMap<PlayerId, Option<PlayerPos>> = BTreeMap::new();
     let mut ticks: BTreeMap<PlayerId, u32> = BTreeMap::new();
@@ -63,6 +64,7 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
             owner.insert(id, region.id());
             name.insert(id, player.name().to_owned());
             uuid.insert(id, offline_uuid(player.name()));
+            game_mode.insert(id, player.game_mode());
             visible_before.insert(id, player.visible().clone());
             baseline.insert(id, player.last_broadcast());
             ticks.insert(id, player.ticks_since_broadcast());
@@ -130,6 +132,7 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
                     name: name[&id].clone(),
                     uuid: uuid[&id],
                     position: position[&id],
+                    game_mode: game_mode[&id],
                 });
                 next_baseline.insert(id, Some(position[&id]));
                 next_ticks.insert(id, 0);

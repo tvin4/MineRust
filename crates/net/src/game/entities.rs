@@ -111,6 +111,9 @@ pub struct EntitySpawn {
     pub uuid: Uuid,
     /// Position at the moment it became visible.
     pub position: PlayerPos,
+    /// Game mode of the spawned player (M4.5 Шаг 7.3): the tab-list entry's
+    /// game mode and the mode-dependent metadata bytes come from it.
+    pub game_mode: i32,
 }
 
 /// An entity a viewer stops seeing this tick.
@@ -231,15 +234,20 @@ fn motion_from(previous: &PlayerPos, now: &PlayerPos) -> EntityMotion {
 fn spawn_of(region: &Region, id: PlayerId, position: PlayerPos) -> EntitySpawn {
     // The id is in this tick's snapshot, so the player exists; the fallback is
     // defensive only and is never hit.
-    let (name, uuid) = match region.get(id) {
-        Some(player) => (player.name().to_owned(), offline_uuid(player.name())),
-        None => (String::new(), Uuid::default()),
+    let (name, uuid, game_mode) = match region.get(id) {
+        Some(player) => (
+            player.name().to_owned(),
+            offline_uuid(player.name()),
+            player.game_mode(),
+        ),
+        None => (String::new(), Uuid::default(), 0),
     };
     EntitySpawn {
         id,
         name,
         uuid,
         position,
+        game_mode,
     }
 }
 

@@ -113,6 +113,15 @@ pub struct GameConfig {
     /// Default off: the measured difference is judged in `docs/BENCH-M4.md`
     /// before this is ever recommended.
     pub tick_thread_priority: bool,
+    /// Game mode every joining player gets (M4.5 Шаг 7.3): `0` survival,
+    /// `1` creative, `2` adventure, `3` spectator. It is what the login
+    /// `game_mode` and the tab-list `player_info_update` announce, and what
+    /// selects the mode-dependent `set_entity_data` bytes. Only `0..=3` is
+    /// accepted; [`GameHandle::spawn`] rejects anything else at startup.
+    /// Default `0` — the real server keeps working exactly as before. Mode
+    /// `3` is not fully supported (no `player_abilities`, no spectator
+    /// flight), see `docs/DECISIONS.md`.
+    pub default_game_mode: i32,
 }
 
 impl Default for GameConfig {
@@ -126,6 +135,7 @@ impl Default for GameConfig {
             workers: 0,
             region_side: 0,
             tick_thread_priority: false,
+            default_game_mode: 0,
         }
     }
 }
@@ -215,6 +225,8 @@ pub struct GameHandle {
     next_id: Arc<AtomicI32>,
     metrics: Arc<TickMetricsHandle>,
     stop: Arc<AtomicBool>,
+    /// Game mode the join announces (M4.5 Шаг 7.3); validated at spawn.
+    default_game_mode: i32,
 }
 
 impl GameHandle {
@@ -234,6 +246,16 @@ impl GameHandle {
         config: GameConfig,
         metrics: Option<Arc<TickMetricsHandle>>,
     ) -> io::Result<(GameThread, Self)> {
+        if !(0..=3).contains(&config.default_game_mode) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "default_game_mode {} is out of range: only 0..=3 \
+                     (survival, creative, adventure, spectator) is accepted",
+                    config.default_game_mode
+                ),
+            ));
+        }
         let capacity = config.join_capacity.max(1);
         let (to_game, incoming) = mpsc::channel(capacity);
         let metrics = metrics.unwrap_or_default();
@@ -255,6 +277,7 @@ impl GameHandle {
             next_id: Arc::new(AtomicI32::new(1)),
             metrics,
             stop: Arc::clone(&stop),
+            default_game_mode: config.default_game_mode,
         };
         Ok((
             GameThread {
@@ -268,6 +291,11 @@ impl GameHandle {
     /// The next free player id.
     pub fn next_player_id(&self) -> PlayerId {
         self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Game mode every joining player gets (M4.5 Шаг 7.3).
+    pub fn default_game_mode(&self) -> i32 {
+        self.default_game_mode
     }
 
     /// The last published tick metrics.

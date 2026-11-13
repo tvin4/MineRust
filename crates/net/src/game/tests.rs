@@ -27,6 +27,7 @@ fn join_fixture_with(
         name: format!("player-{id}"),
         view_distance: 10,
         spawn: Position::default(),
+        game_mode: 0,
         connection: PlayerConnection {
             outbound,
             kick: Arc::clone(&kick),
@@ -418,6 +419,43 @@ fn player_ids_start_at_one_and_never_repeat() {
     assert_eq!(handle.next_player_id(), 1, "the first id is the join's");
     assert_eq!(handle.next_player_id(), 2, "ids never repeat");
     thread.join().expect("the game thread panicked");
+}
+
+#[test]
+fn the_configured_game_mode_reaches_the_handle() {
+    // M4.5 Шаг 7.3: the joining player's game mode comes from the server's
+    // `default_game_mode`; the default is survival (0), as before.
+    let config = GameConfig {
+        period: Duration::from_millis(1),
+        ticks_limit: Some(1),
+        default_game_mode: 3,
+        ..GameConfig::default()
+    };
+    let (thread, handle) = GameHandle::spawn(config).expect("spawn the game thread");
+    assert_eq!(handle.default_game_mode(), 3, "the configured mode");
+    thread.join().expect("the game thread panicked");
+
+    let (_thread, handle) =
+        GameHandle::spawn(GameConfig::default()).expect("spawn the game thread");
+    assert_eq!(handle.default_game_mode(), 0, "survival is the default");
+}
+
+#[test]
+fn a_game_mode_outside_zero_to_three_is_rejected_at_startup() {
+    for mode in [-1, 4, 255] {
+        let config = GameConfig {
+            default_game_mode: mode,
+            ..GameConfig::default()
+        };
+        let error = GameHandle::spawn(config)
+            .err()
+            .unwrap_or_else(|| panic!("game mode {mode} must be rejected"));
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::InvalidInput,
+            "game mode {mode}"
+        );
+    }
 }
 
 #[test]

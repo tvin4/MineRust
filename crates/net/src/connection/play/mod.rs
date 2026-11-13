@@ -193,12 +193,16 @@ where
     );
     // Packet 1..6 of the join (module documentation) — recorded packet by
     // packet by the session trace as they go out.
+    // Game mode of the joining player: the login field, the tab-list entry
+    // and the mode-dependent metadata all come from here (M4.5 Шаг 7.3).
+    let game_mode = game.default_game_mode();
     join::send_join(
         &mut writer,
         game_data,
         status,
         player_name,
         player_id,
+        game_mode,
         ids,
         &world.info,
     )
@@ -214,6 +218,7 @@ where
         name: player_name.to_owned(),
         view_distance: radius,
         spawn: world.info.spawn,
+        game_mode,
         connection: PlayerConnection {
             outbound,
             kick: Arc::clone(&kick),

@@ -42,6 +42,7 @@ pub fn join_view(
             y: spawn.1,
             z: spawn.2,
         },
+        game_mode: 0,
         connection: PlayerConnection {
             outbound,
             kick: Arc::new(KickFlag::default()),

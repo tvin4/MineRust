@@ -37,12 +37,17 @@ use super::{WorldInfo, DIMENSION_TYPE_REGISTRY, JOIN_TELEPORT_ID, OVERWORLD, SEA
 /// `entity_id` comes from the game thread's counter, so the first player
 /// of a server keeps the id the join always announced.
 // SOURCE: wiki, unverified (the join order and field values).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the join sequence is one linear send"
+)]
 pub(super) async fn send_join<W>(
     writer: &mut W,
     game_data: &GameData,
     status: &StatusInfo,
     player_name: &str,
     entity_id: i32,
+    game_mode: i32,
     ids: &PacketIds,
     info: &WorldInfo,
 ) -> Result<(), ConnectionError>
@@ -89,7 +94,7 @@ where
         // formula the parity recording verified (test `login_fields`);
         // without a world the default stays zero.
         hashed_seed: info.hashed_seed,
-        game_mode: 0,
+        game_mode,
         previous_game_mode: 0,
         is_debug: false,
         is_flat: false,
@@ -130,7 +135,7 @@ where
             uuid,
             name: player_name.to_owned(),
             properties: Vec::new(),
-            game_mode: 0,
+            game_mode,
             listed: true,
             latency: 0,
         }],
