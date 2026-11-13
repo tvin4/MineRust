@@ -193,30 +193,71 @@ pub struct MoveState {
     pub payload: Vec<u8>,
 }
 
-/// The movement slot of one player: a single latest value, not a queue.
+/// Everything the connection last saw for one player (M4.5 Шаг 8).
 ///
-/// The connection overwrites it as packets arrive; the tick takes the
-/// newest value once per tick. The lock is uncontended (one writer, one
-/// reader, a trivial copy) and is the documented exception of M4.1 — see
-/// `docs/DECISIONS.md`.
+/// Movement keeps its "newest wins" rule; the input flags byte and the swing
+/// events are independent slots, so a `player_input` arriving between two
+/// movement packets cannot swallow the movement (and vice versa). `swings`
+/// counts the `punch` packets since the last [`MoveSlot::take_swings`]; the
+/// tick drains it and the count is the source for the future `animate`
+/// broadcast (not written before the vanilla traces establish its bytes).
 #[derive(Debug, Default)]
-pub struct MoveSlot(Mutex<Option<MoveState>>);
+struct SlotValue {
+    /// The newest movement packet, if any.
+    movement: Option<MoveState>,
+    /// The newest `player_input` flags byte, if any.
+    input: Option<u8>,
+    /// `punch` packets since the last drain.
+    swings: u32,
+}
+
+/// The movement slot of one player: a single latest value per category, not
+/// a queue.
+///
+/// The connection overwrites the movement and input entries as packets
+/// arrive; the tick takes the newest value once per tick. The lock is
+/// uncontended (one writer, one reader, a trivial copy) and is the
+/// documented exception of M4.1 — see `docs/DECISIONS.md`. Step 8 added the
+/// input and swing entries to the same slot rather than a second lock.
+#[derive(Debug, Default)]
+pub struct MoveSlot(Mutex<SlotValue>);
 
 impl MoveSlot {
     /// Stores the newest movement packet, dropping whatever was unread.
     pub fn store(&self, state: MoveState) {
         let mut slot = self.lock();
-        *slot = Some(state);
+        slot.movement = Some(state);
+    }
+
+    /// Stores the newest `player_input` flags byte (M4.5 Шаг 8).
+    pub fn store_input(&self, flags: u8) {
+        self.lock().input = Some(flags);
+    }
+
+    /// Records one `punch` (swing) event (M4.5 Шаг 8).
+    pub fn store_swing(&self) {
+        let mut slot = self.lock();
+        slot.swings = slot.swings.saturating_add(1);
     }
 
     /// Takes the newest movement packet, leaving the slot empty.
     pub fn take(&self) -> Option<MoveState> {
-        self.lock().take()
+        self.lock().movement.take()
+    }
+
+    /// Takes the newest input flags byte, leaving the entry empty.
+    pub fn take_input(&self) -> Option<u8> {
+        self.lock().input.take()
+    }
+
+    /// Takes and resets the swing count.
+    pub fn take_swings(&self) -> u32 {
+        std::mem::take(&mut self.lock().swings)
     }
 
     /// Locks the slot, recovering from a poisoned lock: the value is a
     /// plain copy and never observed half-updated.
-    fn lock(&self) -> std::sync::MutexGuard<'_, Option<MoveState>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, SlotValue> {
         self.0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

@@ -164,6 +164,10 @@ pub fn push_motion(
     let id = moved.id;
     let game_mode = moved.game_mode;
     let yaw = byte_angle(moved.position.yaw);
+    // The head byte comes from the tracked head yaw (M4.5 step 8): no
+    // separate head source is established, so it follows the body and the
+    // bytes stay what the traces record.
+    let head_yaw = byte_angle(moved.position.head_yaw);
     let pitch = pitch_byte(moved.position.pitch);
     match moved.motion {
         EntityMotion::Position {
@@ -191,7 +195,7 @@ pub fn push_motion(
                 out.push((MoveEntityPosRot::KEY, packet.encode_payload()?));
                 let head = RotateHead {
                     entity_id: id,
-                    head_yaw: yaw,
+                    head_yaw,
                 };
                 out.push((RotateHead::KEY, head.encode_payload()?));
             } else {
@@ -218,7 +222,7 @@ pub fn push_motion(
             out.push((MoveEntityRot::KEY, packet.encode_payload()?));
             let head = RotateHead {
                 entity_id: id,
-                head_yaw: yaw,
+                head_yaw,
             };
             out.push((RotateHead::KEY, head.encode_payload()?));
         }
@@ -354,6 +358,7 @@ mod tests {
             z: -3.0,
             yaw: 90.0,
             pitch: -20.0,
+            head_yaw: 90.0,
             flags: 0,
         };
         let names = |motion| -> Vec<&'static str> {
@@ -414,6 +419,7 @@ mod tests {
                 z: 0.0,
                 yaw: 0.0,
                 pitch: 0.0,
+                head_yaw: 0.0,
                 flags: 0,
             },
             motion: EntityMotion::ZeroDelta,
@@ -436,6 +442,7 @@ mod tests {
             z: 2.0,
             yaw: 0.0,
             pitch: 0.0,
+            head_yaw: 0.0,
             flags: 0,
         };
         let spawn = EntitySpawn {
@@ -497,6 +504,7 @@ mod tests {
                     z: 0.0,
                     yaw: 0.0,
                     pitch: 0.0,
+                    head_yaw: 0.0,
                     flags: 0,
                 },
                 motion: EntityMotion::ZeroDelta,
@@ -542,6 +550,7 @@ mod tests {
                 z: 2.0,
                 yaw: 0.0,
                 pitch: 0.0,
+                head_yaw: 0.0,
                 flags: 0,
             },
             game_mode: 1,

@@ -696,6 +696,168 @@ impl ConfirmTeleportation {
     }
 }
 
+/// Serverbound Player Input: the movement keys of one client tick.
+///
+/// The live trace (`target/parity/live-session.json`) carries this packet as
+/// exactly one byte (158 packets, 20 distinct values). The bit names below
+/// follow the public protocol documentation for the direction bits; sneak
+/// (`0x20`) and sprint (`0x40`) are the bits the step-8 report correlates with
+/// the client's crouch and run speed in that trace. `packets.json` carries no
+/// field names, so the bit meanings are not established by data.
+// SOURCE: live trace (payload length and byte values) + wiki (bit names);
+// unverified.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayerInput {
+    /// The input flags byte, kept verbatim.
+    pub flags: u8,
+}
+
+impl PlayerInput {
+    /// Packet id of Player Input (play state, serverbound).
+    pub const ID: u32 = 0x2B;
+
+    /// Key that resolves the Player Input id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::serverbound(ProtocolState::Play, "minecraft:player_input", Self::ID);
+
+    /// Forward key.
+    pub const FORWARD: u8 = 0x01;
+    /// Backward key.
+    pub const BACKWARD: u8 = 0x02;
+    /// Left key.
+    pub const LEFT: u8 = 0x04;
+    /// Right key.
+    pub const RIGHT: u8 = 0x08;
+    /// Jump key.
+    pub const JUMP: u8 = 0x10;
+    /// Sneak (Shift) key: the sneak bit of the step-8 report.
+    pub const SNEAK: u8 = 0x20;
+    /// Sprint key: the sprint bit of the step-8 report.
+    pub const SPRINT: u8 = 0x40;
+
+    /// Whether the sneak bit is set: the source of truth for sneaking.
+    pub fn sneak(&self) -> bool {
+        self.flags & Self::SNEAK != 0
+    }
+
+    /// Whether the sprint bit is set: the source of truth for sprinting.
+    pub fn sprint(&self) -> bool {
+        self.flags & Self::SPRINT != 0
+    }
+
+    /// Encodes the payload (packet id excluded).
+    pub fn encode_payload(&self) -> Vec<u8> {
+        let mut writer = PacketWriter::new();
+        writer.write_u8(self.flags);
+        writer.into_bytes()
+    }
+
+    /// Decodes the payload; the packet id must already be consumed.
+    pub fn decode_payload(reader: &mut PacketReader<'_>) -> Result<Self, CodecError> {
+        Ok(Self {
+            flags: reader.read_u8()?,
+        })
+    }
+
+    /// Encodes the packet as a complete frame.
+    pub fn to_frame(&self) -> Result<Vec<u8>, CodecError> {
+        encode_frame(Self::ID, &self.encode_payload())
+    }
+}
+
+/// Serverbound Player Command: a secondary signal for sneak/sprint.
+///
+/// The live trace carries 36 packets, all `01 01 00` or `01 02 00` — three
+/// single-byte VarInts. The first is the entity id; the meaning of the second
+/// and third is **not established** (`packets.json` has no field names). The
+/// observed values correlate with the sprint key of [`PlayerInput`] (second
+/// VarInt `1` 0–36 ms after sprint-on, `2` 0–50 ms after sprint-off, 18
+/// pairs), and the Shift presses were **not** accompanied by this packet, so
+/// the step-8 plan treats [`PlayerInput`] as the source of truth and this
+/// packet as a secondary signal only. For the observed range `0..=2` a VarInt
+/// and a single byte are indistinguishable on the wire; the trace does not
+/// separate them.
+// SOURCE: live trace (payload bytes `010100`/`010200`, sprint correlation) +
+// wiki (field names); unverified.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayerCommand {
+    /// Entity id this command is about (the sender's own id in the trace).
+    pub entity_id: i32,
+    /// Second VarInt; semantics not established (1 on sprint-on, 2 on
+    /// sprint-off in the live trace).
+    pub action: i32,
+    /// Third VarInt; always 0 in the live trace, semantics not established.
+    pub data: i32,
+}
+
+impl PlayerCommand {
+    /// Packet id of Player Command (play state, serverbound).
+    pub const ID: u32 = 0x2A;
+
+    /// Key that resolves the Player Command id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::serverbound(ProtocolState::Play, "minecraft:player_command", Self::ID);
+
+    /// Encodes the payload (packet id excluded).
+    pub fn encode_payload(&self) -> Vec<u8> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.entity_id);
+        writer.write_varint(self.action);
+        writer.write_varint(self.data);
+        writer.into_bytes()
+    }
+
+    /// Decodes the payload; the packet id must already be consumed.
+    pub fn decode_payload(reader: &mut PacketReader<'_>) -> Result<Self, CodecError> {
+        Ok(Self {
+            entity_id: reader.read_varint()?,
+            action: reader.read_varint()?,
+            data: reader.read_varint()?,
+        })
+    }
+
+    /// Encodes the packet as a complete frame.
+    pub fn to_frame(&self) -> Result<Vec<u8>, CodecError> {
+        encode_frame(Self::ID, &self.encode_payload())
+    }
+}
+
+/// Serverbound Punch: the client swung its arm (or attacked).
+///
+/// The payload is empty in the live trace: 354 packets, zero bytes each.
+/// Which of the two it is (swing vs attack) is **not established** by data;
+/// the step-8 plan records it as a "swing" event until the vanilla traces
+/// separate the cases.
+// SOURCE: live trace (zero-length payload); semantics unverified.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Punch;
+
+impl Punch {
+    /// Packet id of Punch (play state, serverbound).
+    pub const ID: u32 = 0x2E;
+
+    /// Key that resolves the Punch id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::serverbound(ProtocolState::Play, "minecraft:punch", Self::ID);
+
+    /// Encodes the payload (packet id excluded): always empty.
+    pub fn encode_payload(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    /// Decodes the payload; the packet id must already be consumed. Any
+    /// trailing byte is an error rather than a guess.
+    pub fn decode_payload(reader: &mut PacketReader<'_>) -> Result<Self, CodecError> {
+        reader.ensure_empty()?;
+        Ok(Self)
+    }
+
+    /// Encodes the packet as a complete frame.
+    pub fn to_frame(&self) -> Result<Vec<u8>, CodecError> {
+        encode_frame(Self::ID, &self.encode_payload())
+    }
+}
+
 /// Clientbound Synchronize Player Position: teleports the client, which
 /// answers with Confirm Teleportation carrying the same teleport id.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -779,6 +941,7 @@ mod tests {
     use super::*;
     use crate::frame::split_frame;
     use crate::packets::login::offline_uuid;
+    use crate::packets::test_support::hex;
 
     /// Decodes `frame`, checks the packet id and returns the reader.
     macro_rules! decoded {
@@ -1021,6 +1184,70 @@ mod tests {
         let decoded = ConfirmTeleportation::decode_payload(&mut reader).expect("decodable");
         assert_eq!(decoded, packet);
         reader.ensure_empty().expect("no trailing bytes");
+    }
+
+    #[test]
+    fn player_input_decodes_the_one_byte_traces() {
+        // Every observed payload of the live trace: one byte, 20 values.
+        for flags in [
+            0x00, 0x01, 0x02, 0x04, 0x05, 0x06, 0x08, 0x09, 0x0a, 0x11, 0x20, 0x21, 0x24, 0x25,
+            0x40, 0x41, 0x44, 0x45, 0x49, 0x51,
+        ] {
+            let packet = PlayerInput { flags };
+            let payload = packet.encode_payload();
+            assert_eq!(payload, vec![flags], "the trace carries exactly one byte");
+            let mut reader = PacketReader::new(&payload);
+            let decoded = PlayerInput::decode_payload(&mut reader).expect("decodable");
+            assert_eq!(decoded, packet);
+            reader.ensure_empty().expect("no trailing bytes");
+        }
+    }
+
+    #[test]
+    fn player_input_names_the_sneak_and_sprint_bits() {
+        // The live trace shows 0x20 with a Shift press and 0x40 while the
+        // client ran; the bits are named in PlayerInput and asserted here so
+        // a change of the layout has to touch this test.
+        let input = PlayerInput { flags: 0x20 };
+        assert!(input.sneak());
+        assert!(!input.sprint());
+        let input = PlayerInput { flags: 0x40 };
+        assert!(!input.sneak());
+        assert!(input.sprint());
+        let input = PlayerInput { flags: 0x60 };
+        assert!(input.sneak());
+        assert!(input.sprint());
+    }
+
+    #[test]
+    fn player_command_roundtrips_the_two_observed_payloads() {
+        // The only payloads the live trace carries: 010100 and 010200.
+        for (raw, action) in [(hex("010100"), 1), (hex("010200"), 2)] {
+            let mut reader = PacketReader::new(&raw);
+            let decoded = PlayerCommand::decode_payload(&mut reader).expect("decodable");
+            reader.ensure_empty().expect("no trailing bytes");
+            assert_eq!(
+                decoded,
+                PlayerCommand {
+                    entity_id: 1,
+                    action,
+                    data: 0
+                }
+            );
+            assert_eq!(decoded.encode_payload(), raw, "round-trips the trace bytes");
+        }
+    }
+
+    #[test]
+    fn punch_is_the_empty_payload() {
+        // The live trace carries punch with zero bytes; anything else is an
+        // error rather than a guess.
+        let mut reader = PacketReader::new(&[]);
+        let decoded = Punch::decode_payload(&mut reader).expect("decodable");
+        assert_eq!(decoded, Punch);
+        assert!(Punch.encode_payload().is_empty());
+        let mut reader = PacketReader::new(&[0x00]);
+        Punch::decode_payload(&mut reader).expect_err("a trailing byte is not punch");
     }
 
     #[test]

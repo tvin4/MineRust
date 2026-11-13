@@ -18,6 +18,7 @@ fn pose(x: f64, z: f64, yaw: f32, pitch: f32) -> PlayerPos {
         z,
         yaw,
         pitch,
+        head_yaw: yaw,
         flags: 0,
     }
 }

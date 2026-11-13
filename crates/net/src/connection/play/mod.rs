@@ -18,8 +18,9 @@ use chunk_pace::ChunkPace;
 use data::{GameData, PacketIds};
 use protocol::{
     decode_frame, ChunkBatchReceived, ClientInformation, ConfirmTeleportation, KeepAlive,
-    PacketReader, Position, ProtocolState, StatusInfo, MAX_STRING_CHARS, MOVE_PLAYER_POS,
-    MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT, MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
+    PacketReader, PlayerCommand, PlayerInput, Position, ProtocolState, Punch, StatusInfo,
+    MAX_STRING_CHARS, MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT,
+    MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
 };
 use std::sync::Arc;
 
@@ -501,6 +502,35 @@ where
                     }
                     id if id == ids.id(MOVE_PLAYER_STATUS_ONLY) => {
                         store_move(&last_move, MoveKind::StatusOnly, &mut payload, id)?;
+                    }
+                    // Input flags and swings (M4.5 step 8): the connection
+                    // stores them beside the movement, and the game thread
+                    // applies them in the tick. The bits named in
+                    // `PlayerInput` are the step-8 report's hypothesis (0x20
+                    // sneak, 0x40 sprint), not established by data.
+                    id if id == ids.id(PlayerInput::KEY) => {
+                        let input = PlayerInput::decode_payload(&mut payload)?;
+                        payload.ensure_empty()?;
+                        last_move.store_input(input.flags);
+                        trace!(flags = input.flags, "player_input stored");
+                    }
+                    id if id == ids.id(PlayerCommand::KEY) => {
+                        // Secondary signal only (the live trace correlates
+                        // its second VarInt with the sprint key of
+                        // `player_input`); nothing is stored.
+                        let command = PlayerCommand::decode_payload(&mut payload)?;
+                        payload.ensure_empty()?;
+                        debug!(
+                            entity_id = command.entity_id,
+                            action = command.action,
+                            data = command.data,
+                            "player_command seen, secondary signal"
+                        );
+                    }
+                    id if id == ids.id(Punch::KEY) => {
+                        Punch::decode_payload(&mut payload)?;
+                        last_move.store_swing();
+                        trace!("punch stored as a swing");
                     }
                     // M2 has no gameplay: unknown or not-yet-handled
                     // serverbound packets must not drop the connection.

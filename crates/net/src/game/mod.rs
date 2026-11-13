@@ -32,6 +32,8 @@ mod region_tests;
 #[cfg(test)]
 mod replay_tests;
 #[cfg(test)]
+mod state_tests;
+#[cfg(test)]
 mod step4_tests;
 #[cfg(test)]
 mod test_support;

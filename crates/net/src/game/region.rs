@@ -40,6 +40,11 @@ pub struct PlayerPos {
     pub yaw: f32,
     /// Pitch in degrees.
     pub pitch: f32,
+    /// Head yaw in degrees (M4.5 Шаг 8). The serverbound movement packets
+    /// carry only the body yaw/pitch, so no separate head source is
+    /// established: the state tracks it as following the body yaw. The
+    /// encoders that need it (`rotate_head`) read this field.
+    pub head_yaw: f32,
     /// The raw movement flags byte the client sent (bit 0: on the ground,
     /// [`PlayerPos::on_ground`]; other bits are preserved, not interpreted).
     pub flags: u8,
@@ -55,6 +60,7 @@ impl PlayerPos {
             z: f64::from(spawn.z) + 0.5,
             yaw: 0.0,
             pitch: 0.0,
+            head_yaw: 0.0,
             flags: 0,
         }
     }
@@ -77,6 +83,9 @@ impl PlayerPos {
         }
         if let Some(yaw) = update.yaw {
             self.yaw = yaw;
+            // No separate head source is established (see `head_yaw`): the
+            // head follows the body yaw.
+            self.head_yaw = yaw;
         }
         if let Some(pitch) = update.pitch {
             self.pitch = pitch;
@@ -118,6 +127,16 @@ pub struct Player {
     /// [`BROADCAST_PERIOD_TICKS`](super::entities::BROADCAST_PERIOD_TICKS) — the
     /// vanilla cadence of the two-bot trace (C1/C2/C4).
     ticks_since_broadcast: u32,
+    /// Whether the player is sneaking (M4.5 step 8). The source of truth is
+    /// the `player_input` flags byte ([`MoveSlot::take_input`]); the
+    /// `player_command` packet is a secondary signal and is not stored here.
+    sneak: bool,
+    /// Whether the player is sprinting (M4.5 step 8). Same source as `sneak`.
+    sprint: bool,
+    /// `punch` (swing) events not yet consumed by a broadcast (M4.5 step 8).
+    /// The encoders that will send `animate` come with the vanilla traces;
+    /// until then the count is state only.
+    swings: u32,
     connection: PlayerConnection,
 }
 
@@ -138,6 +157,9 @@ impl Player {
             visible: BTreeMap::new(),
             last_broadcast: None,
             ticks_since_broadcast: 0,
+            sneak: false,
+            sprint: false,
+            swings: 0,
             connection: join.connection,
         }
     }
@@ -236,6 +258,43 @@ impl Player {
         self.position.apply(update);
     }
 
+    /// Whether the player is sneaking (M4.5 step 8).
+    pub fn sneak(&self) -> bool {
+        self.sneak
+    }
+
+    /// Whether the player is sprinting (M4.5 step 8).
+    pub fn sprint(&self) -> bool {
+        self.sprint
+    }
+
+    /// Swing events not yet consumed by a broadcast (M4.5 step 8).
+    pub fn swings(&self) -> u32 {
+        self.swings
+    }
+
+    /// Applies the newest `player_input` flags byte (M4.5 step 8).
+    ///
+    /// Sneak (`0x20`) and sprint (`0x40`) are the bits the step-8 report
+    /// correlates with the client's crouch and run speed; the other bits are
+    /// movement keys and stay inside the byte in the connection only.
+    pub fn apply_input(&mut self, flags: u8) {
+        self.sneak = flags & protocol::PlayerInput::SNEAK != 0;
+        self.sprint = flags & protocol::PlayerInput::SPRINT != 0;
+    }
+
+    /// Records `count` swing events (M4.5 step 8).
+    pub fn record_swings(&mut self, count: u32) {
+        self.swings = self.swings.saturating_add(count);
+    }
+
+    /// Takes and resets the pending swing count (M4.5 step 8). The future
+    /// `animate` broadcast drains it; the encoders come with the vanilla
+    /// traces, so nothing consumes it yet.
+    pub fn drain_swings(&mut self) -> u32 {
+        std::mem::take(&mut self.swings)
+    }
+
     /// The connection's outbound queue.
     pub fn outbound(&self) -> &mpsc::Sender<ServerMessage> {
         &self.connection.outbound
@@ -249,6 +308,17 @@ impl Player {
     /// Takes the newest movement packet, leaving the slot empty.
     pub fn take_move(&self) -> Option<MoveState> {
         self.connection.last_move.take()
+    }
+
+    /// Takes the newest `player_input` flags byte, leaving the entry empty
+    /// (M4.5 step 8).
+    pub fn take_input(&self) -> Option<u8> {
+        self.connection.last_move.take_input()
+    }
+
+    /// Takes and resets the swing count of the slot (M4.5 step 8).
+    pub fn take_swings(&self) -> u32 {
+        self.connection.last_move.take_swings()
     }
 }
 
@@ -561,6 +631,17 @@ impl Region {
         // `BTreeMap` iterates keyed by id; the borrow ends before the transfer
         // is pushed, so the region stays the sole owner of the players.
         for (&id, player) in self.players.iter_mut() {
+            // Input flags and swings are independent of movement (M4.5 step
+            // 8): a tick with no movement packet still applies them. The
+            // connection's slot is the queue; the player's fields are the
+            // applied state.
+            if let Some(flags) = player.take_input() {
+                player.apply_input(flags);
+            }
+            let swings = player.take_swings();
+            if swings > 0 {
+                player.record_swings(swings);
+            }
             let Some(state) = player.take_move() else {
                 continue;
             };
