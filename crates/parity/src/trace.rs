@@ -189,6 +189,43 @@ pub fn from_hex(text: &str) -> Result<Vec<u8>, HexError> {
     Ok(out)
 }
 
+/// Decodes standard base64 with padding — the JSONL payload encoding written
+/// by [`crate::walk::Jsonl`] — back into raw bytes.
+///
+/// Returns `None` on any character outside the alphabet or a character after
+/// padding: a broken line is a reading failure, never guessed bytes.
+pub fn from_base64(text: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(text.len() / 4 * 3);
+    let mut acc: u32 = 0;
+    let mut bits: u32 = 0;
+    let mut padded = false;
+    for byte in text.bytes() {
+        if byte == b'=' {
+            padded = true;
+            continue;
+        }
+        if padded {
+            return None;
+        }
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        };
+        acc = (acc << 6) | u32::from(value);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
+}
+
 /// Failure of [`from_hex`].
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum HexError {
@@ -225,6 +262,16 @@ mod tests {
     fn from_hex_rejects_odd_and_invalid() {
         assert!(matches!(from_hex("abc"), Err(HexError::OddLength(3))));
         assert!(from_hex("zz").is_err());
+    }
+
+    #[test]
+    fn base64_decodes_the_jsonl_payload_encoding() {
+        assert_eq!(from_base64(""), Some(Vec::new()));
+        assert_eq!(from_base64("AA=="), Some(vec![0x00]));
+        assert_eq!(from_base64("AAEC"), Some(vec![0x00, 0x01, 0x02]));
+        assert_eq!(from_base64("4dB/"), Some(vec![0xE1, 0xD0, 0x7F]));
+        assert_eq!(from_base64("zz!!"), None);
+        assert_eq!(from_base64("AA=A"), None);
     }
 
     #[test]

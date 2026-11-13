@@ -39,7 +39,8 @@ pub use steps::{
     join_steps, join_steps_named, join_steps_with_view, PROBE_WAIT, PROBE_WAIT_NO_PROBE,
 };
 pub use trace::{
-    from_hex, to_hex, HexError, Trace, TraceDirection, TraceEntry, TraceIoError, TraceState,
+    from_base64, from_hex, to_hex, HexError, Trace, TraceDirection, TraceEntry, TraceIoError,
+    TraceState,
 };
 pub use vanilla::{copy_dir_all, Vanilla, VanillaError};
 pub use walk::{

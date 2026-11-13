@@ -31,6 +31,7 @@ use data::PacketIds;
 use parity::walk::{self, Jsonl};
 use parity::{
     from_hex, join_steps_named, Client, ParityEnv, TraceDirection, TraceEntry, PROBE_WAIT,
+    PROBE_WAIT_NO_PROBE,
 };
 use protocol::{PacketKey, ProtocolState};
 
@@ -272,18 +273,39 @@ pub async fn run_bot<B: Behavior + Send>(
     name: &'static str,
     trace_path: PathBuf,
     safety: Duration,
-    mut behavior: B,
+    behavior: B,
 ) -> BotReport {
     let port = match env.vanilla_port() {
         Ok(port) => port,
         Err(error) => return BotReport::new(End::Join(format!("vanilla port: {error}"))),
     };
+    run_bot_at(env, ids, port, name, trace_path, safety, behavior).await
+}
+
+/// [`run_bot`] against an explicit port: the same bot join and play loop,
+/// dialing our own in-process server instead of vanilla (M4.5 Шаг 4 (в)).
+pub async fn run_bot_at<B: Behavior + Send>(
+    env: Arc<ParityEnv>,
+    ids: Arc<PacketIds>,
+    port: u16,
+    name: &'static str,
+    trace_path: PathBuf,
+    safety: Duration,
+    mut behavior: B,
+) -> BotReport {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let mut client = match Client::connect(name, addr, Arc::clone(&ids)).await {
         Ok(client) => client,
         Err(error) => return BotReport::new(End::Join(format!("connect: {error}"))),
     };
-    let steps = join_steps_named(&env, &ids, port, name, walk::VIEW_DISTANCE, PROBE_WAIT);
+    // Our own server performs no known-packs exchange, so a probe nobody
+    // sends must not burn the vanilla budget (`PROBE_WAIT_NO_PROBE`, the
+    // same rule the walk applies to a non-vanilla port).
+    let probe_wait = match env.vanilla_port() {
+        Ok(vanilla) if vanilla == port => PROBE_WAIT,
+        _ => PROBE_WAIT_NO_PROBE,
+    };
+    let steps = join_steps_named(&env, &ids, port, name, walk::VIEW_DISTANCE, probe_wait);
     if let Err(error) = client.run(&steps).await {
         return BotReport::new(End::Join(format!("join steps: {error}")));
     }
