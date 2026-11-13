@@ -9,11 +9,34 @@ use anyhow::{Context, Result};
 const DEFAULT_CONFIG: &str = "server.toml";
 
 fn main() -> ExitCode {
+    // Logs go through a non-blocking writer (M4.5 step 8): a line logged
+    // from the tick thread only enters a bounded queue, and a separate writer
+    // thread owns stdout, so a slow console cannot block a tick. `lossy(false)`
+    // decides what a full queue does: the logging thread blocks until the
+    // writer catches up (backpressure, `send` on a bounded channel) instead
+    // of dropping lines - a pause reproduction needs every tick line. The
+    // queue holds 128 000 lines by default (`DEFAULT_BUFFERED_LINES_LIMIT`),
+    // so a healthy run never fills it. The guard below is the crate's drop
+    // guard: on drop it signals the writer thread, waits up to one second for
+    // it to flush the queue and joins it, so the last lines survive both a
+    // clean exit and an error return.
+    let (writer, _guard) = tracing_appender::non_blocking::NonBlockingBuilder::default()
+        .lossy(false)
+        .finish(std::io::stdout());
+    tracing_subscriber::fmt()
+        .with_writer(writer)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
     match try_main() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            // Tracing may not be initialised yet, so report startup failures
-            // directly.
+            // Tracing is initialised above and flushed by the guard; the
+            // direct stderr copy gives the launcher a line to capture even
+            // when the log filter hides errors.
             eprintln!("error: {err:#}");
             ExitCode::FAILURE
         }
