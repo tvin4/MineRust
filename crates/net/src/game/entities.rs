@@ -181,6 +181,10 @@ pub struct EntityMove {
     pub position: PlayerPos,
     /// What changed.
     pub motion: EntityMotion,
+    /// Game mode of the moved player (M4.5 Шаг 7.3): the periodic zero-delta
+    /// `move_entity_pos` header differs between spectator (C1 `02 02`) and the
+    /// non-spectator traces (C5/C6 `03 02`).
+    pub game_mode: i32,
 }
 
 /// Everything one viewer must be told about other players this tick.
@@ -276,6 +280,7 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
     let mut owner_region: Vec<usize> = Vec::new();
     let mut baseline: Vec<Option<PlayerPos>> = Vec::new();
     let mut ticks: Vec<u32> = Vec::new();
+    let mut game_mode: Vec<i32> = Vec::new();
     let mut before: Vec<Vec<PlayerId>> = Vec::new();
     let mut index: BTreeMap<PlayerId, usize> = BTreeMap::new();
     for (region_index, region) in regions.iter().enumerate() {
@@ -291,6 +296,7 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
             owner_region.push(region_index);
             baseline.push(player.last_broadcast());
             ticks.push(player.ticks_since_broadcast());
+            game_mode.push(player.game_mode());
             before.push(player.visible().keys().copied().collect());
         }
     }
@@ -366,6 +372,7 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
                             id: left,
                             position: position[now[n]],
                             motion,
+                            game_mode: game_mode[now[n]],
                         });
                     }
                     n += 1;

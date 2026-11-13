@@ -162,6 +162,7 @@ pub fn push_motion(
     out: &mut Vec<(PacketKey, Vec<u8>)>,
 ) -> Result<(), CodecError> {
     let id = moved.id;
+    let game_mode = moved.game_mode;
     let yaw = byte_angle(moved.position.yaw);
     let pitch = pitch_byte(moved.position.pitch);
     match moved.motion {
@@ -222,14 +223,17 @@ pub fn push_motion(
             out.push((RotateHead::KEY, head.encode_payload()?));
         }
         EntityMotion::ZeroDelta => {
-            // The periodic no-change packet: header `0x02`/`0x02` and a zero
-            // delta, byte for byte the traced payload
-            // `4d 02 02 00 00 00 00 00 00`.
-            // SOURCE: two-bot vanilla trace 26.3 (C1/C2/C4).
+            // The periodic no-change packet: header flags `0x02` in every
+            // spectator trace (C1/C2/C4) and `0x03` in the non-spectator ones
+            // (C5 survival, C6 creative), the second byte `0x02` in both.
+            // The meaning is «не установлено»; the mode is the only variable
+            // that correlates with the difference.
+            // SOURCE: two-bot vanilla traces 26.3 (C1 `02 02`, C5/C6 `03 02`).
+            let flags = if game_mode == 3 { 0x02 } else { 0x03 };
             let packet = MoveEntityPos {
                 entity_id: id,
                 header: MoveHeader {
-                    flags: 0x02,
+                    flags,
                     kind: Some(0x02),
                 },
                 dx: 0,
@@ -357,6 +361,7 @@ mod tests {
                 id: 7,
                 position,
                 motion,
+                game_mode: 0,
             };
             let mut out = Vec::new();
             push_motion(&moved, &mut out).expect("encodable");
@@ -395,10 +400,10 @@ mod tests {
         );
     }
 
-    /// The periodic no-change packet is `move_entity_pos` with header
-    /// `0x02`/`0x02` and a zero delta, byte for byte the traced
-    /// `id 02 02 00 00 00 00 00 00` (Шаг 6.2).
-    // SOURCE: two-bot vanilla trace 26.3 (C1/C2/C4).
+    /// The periodic no-change packet is `move_entity_pos` with a zero delta:
+    /// header `02 02` in the spectator traces (C1/C2/C4) and `03 02` in the
+    /// non-spectator ones (C5 survival, C6 creative), Шаг 6.2 + Шаг 7.3.
+    // SOURCE: two-bot vanilla traces 26.3 (C1 `02 02`, C5/C6 `03 02`).
     #[test]
     fn zero_delta_encodes_the_traced_periodic_packet() {
         let moved = EntityMove {
@@ -412,6 +417,7 @@ mod tests {
                 flags: 0,
             },
             motion: EntityMotion::ZeroDelta,
+            game_mode: 3,
         };
         let mut out = Vec::new();
         push_motion(&moved, &mut out).expect("encodable");
@@ -463,6 +469,7 @@ mod tests {
                     id: 3,
                     position,
                     motion,
+                    game_mode: 0,
                 },
                 &mut out,
             )
@@ -474,6 +481,35 @@ mod tests {
                 "teleport_entity is not part of the M4.5 stream"
             );
         }
+    }
+
+    /// The periodic zero-delta header is game-mode dependent (Шаг 7.3):
+    /// spectator keeps `02 02` (C1), every other mode sends `03 02` (C5/C6).
+    // SOURCE: two-bot vanilla traces 26.3 (C1 vs C5/C6).
+    #[test]
+    fn the_zero_delta_header_depends_on_the_game_mode() {
+        let header = |game_mode: i32| -> Vec<u8> {
+            let moved = EntityMove {
+                id: 1,
+                position: PlayerPos {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    flags: 0,
+                },
+                motion: EntityMotion::ZeroDelta,
+                game_mode,
+            };
+            let mut out = Vec::new();
+            push_motion(&moved, &mut out).expect("encodable");
+            out[0].1.clone()
+        };
+        assert_eq!(header(3), vec![0x01, 0x02, 0x02, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(header(0), vec![0x01, 0x03, 0x02, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(header(1), vec![0x01, 0x03, 0x02, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(header(2), vec![0x01, 0x03, 0x02, 0, 0, 0, 0, 0, 0]);
     }
 
     #[test]

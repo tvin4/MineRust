@@ -332,7 +332,14 @@ impl Drop for ServerGuard {
 ///
 /// Mirrors `server::run`: the ready batch is read once **before** the port is
 /// used, so the first join does not trigger the whole read inline.
-pub async fn start_server(env: &ParityEnv, ids: Arc<PacketIds>) -> (u16, ServerGuard) {
+/// `game_mode` becomes the server's [`net::game::GameConfig::default_game_mode`]
+/// (M4.5 Шаг 7.3): the login field, the tab entry and the mode-dependent
+/// metadata bytes of every joining player.
+pub async fn start_server(
+    env: &ParityEnv,
+    ids: Arc<PacketIds>,
+    game_mode: i32,
+) -> (u16, ServerGuard) {
     let mut config = env.config.clone();
     config.world_dir = Some(V3_TEMPLATE.to_owned());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -358,6 +365,7 @@ pub async fn start_server(env: &ParityEnv, ids: Arc<PacketIds>) -> (u16, ServerG
     let game_config = net::game::GameConfig {
         workers: config.workers,
         region_side: config.region_side,
+        default_game_mode: game_mode,
         ..net::game::GameConfig::default()
     };
     let server = tokio::spawn(net::serve_with_metrics(
@@ -388,13 +396,18 @@ pub async fn wait_for_a(shared: &Shared, a: &tokio::task::JoinHandle<BotReport>)
 
 /// Runs one scenario on our server: A joins first, B second; returns A's
 /// trace path and one fact line per bot.
+///
+/// `code` names the trace files (`two-{code}-ours-A.jsonl`): the C1/C2/C4
+/// scripts keep their vanilla code, while the step 7.3 game-mode runs use
+/// `c1` (spectator), `c5` (survival) and `c6` (creative) so each trace sits
+/// next to the vanilla one it is compared with.
 pub async fn run_scene(
     env: &Arc<ParityEnv>,
     ids: &Arc<PacketIds>,
     port: u16,
     scene: Scene,
+    code: &str,
 ) -> (PathBuf, Vec<String>) {
-    let code = scene.code();
     let a_path = Path::new(TRACE_DIR).join(format!("two-{code}-ours-A.jsonl"));
     let b_path = Path::new(TRACE_DIR).join(format!("two-{code}-ours-B.jsonl"));
     let shared = Arc::new(Shared::new());

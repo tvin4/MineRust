@@ -114,6 +114,7 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
                     id: subject,
                     position: now,
                     motion,
+                    game_mode: game_mode[&subject],
                 });
             }
         }

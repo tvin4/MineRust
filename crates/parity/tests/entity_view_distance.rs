@@ -98,13 +98,13 @@ async fn view_distance_matches_vanilla() {
     }
     let ids = Arc::new(env.packet_ids().expect("packet ids"));
     let env = Arc::new(env);
-    let (port, _guard) = start_server(&env, Arc::clone(&ids)).await;
+    let (port, _guard) = start_server(&env, Arc::clone(&ids), 0).await;
 
     let a_uuid = protocol::offline_uuid(twobot::BOT_A);
     let b_uuid = protocol::offline_uuid(twobot::BOT_B);
 
     // Our run.
-    let (ours_path, facts) = run_scene(&env, &ids, port, Scene::Track).await;
+    let (ours_path, facts) = run_scene(&env, &ids, port, Scene::Track, "c3").await;
     for fact in &facts {
         eprintln!("fact: {fact}");
     }

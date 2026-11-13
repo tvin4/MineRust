@@ -11,9 +11,10 @@
 //!   and in С4 the earlier analysis mistook a mob for B);
 //! * the **type sequence** must be exactly equal;
 //! * every payload must be **byte for byte** equal after normalising only the
-//!   values the owner allows — the entity id, the position fields (a packet is
-//!   emitted on a different tick) and the `player_info_update` game mode (our
-//!   server is not in spectator);
+//!   values the owner allows — the entity id and the position fields (a packet
+//!   is emitted on a different tick). The game mode is **not** normalised since
+//!   Шаг 7.3: the server runs each scenario with the mode the vanilla trace was
+//!   recorded in (C1/C2/C4 = 3 spectator, C5 = 0 survival, C6 = 1 creative).
 //! * anything else is printed as an explicit list `type, offset, our byte,
 //!   vanilla byte` — nothing is silently normalised.
 //!
@@ -127,10 +128,12 @@ where
     }
 }
 
-/// Normalises the values the owner allows to differ: the entity id, the
-/// position fields (a packet is emitted on a different tick) and the
-/// `player_info_update` game mode. Everything else stays byte for byte.
-fn normalized(name: &str, raw: &[u8], game_mode: &mut Option<i32>) -> Vec<u8> {
+/// Normalises the values the owner allows to differ: the entity id and the
+/// position fields (a packet is emitted on a different tick). Everything else
+/// stays byte for byte — since Шаг 7.3 the game mode is **not** normalised:
+/// our server announces the player's own mode, so a mode byte that differs is
+/// a real divergence.
+fn normalized(name: &str, raw: &[u8]) -> Vec<u8> {
     match name {
         "minecraft:add_entity" => edit::<AddEntity, _>(raw, |entity| {
             entity.entity_id = 0;
@@ -165,21 +168,6 @@ fn normalized(name: &str, raw: &[u8], game_mode: &mut Option<i32>) -> Vec<u8> {
         "minecraft:remove_entities" => edit::<RemoveEntities, _>(raw, |packet| {
             packet.entity_ids.fill(0);
         }),
-        "minecraft:player_info_update" => {
-            let mut reader = PacketReader::new(raw);
-            match PlayerInfoUpdate::decode_payload(&mut reader) {
-                Ok(mut update) if reader.is_empty() => {
-                    if let Some(entry) = update.players.first() {
-                        *game_mode = Some(entry.game_mode);
-                    }
-                    for entry in &mut update.players {
-                        entry.game_mode = 0;
-                    }
-                    update.encode_payload().unwrap_or_else(|_| raw.to_vec())
-                }
-                _ => raw.to_vec(),
-            }
-        }
         _ => raw.to_vec(),
     }
 }
@@ -235,22 +223,13 @@ fn compare(scene: &str, vanilla: &[Line], ours: &[Line]) -> Vec<String> {
             continue;
         }
         let name = v.name.clone().unwrap_or_default();
-        let mut v_mode = None;
-        let mut o_mode = None;
-        let v_bytes = normalized(&name, &v.bytes, &mut v_mode);
-        let o_bytes = normalized(&name, &o.bytes, &mut o_mode);
+        let v_bytes = normalized(&name, &v.bytes);
+        let o_bytes = normalized(&name, &o.bytes);
         if v_bytes != o_bytes {
             report.push(format!(
                 "{scene}: packet #{index} {name}: {}",
                 byte_diff(&o_bytes, &v_bytes)
             ));
-        }
-        if let Some((vanilla_mode, ours_mode)) = v_mode.zip(o_mode) {
-            if vanilla_mode != ours_mode {
-                report.push(format!(
-                    "{scene}: packet #{index} {name} game mode: vanilla {vanilla_mode}, ours {ours_mode}"
-                ));
-            }
         }
     }
     report
@@ -273,43 +252,56 @@ async fn entity_stream_matches_vanilla() {
     }
     let ids = Arc::new(env.packet_ids().expect("packet ids"));
     let env = Arc::new(env);
-    let (port, _guard) = start_server(&env, Arc::clone(&ids)).await;
 
     let b_uuid = protocol::offline_uuid(twobot::BOT_B);
     let mut report = Vec::new();
     let mut facts = Vec::new();
-    for scene in [Scene::Join, Scene::Walk, Scene::Rotate] {
-        let (ours_path, scene_facts) = run_scene(&env, &ids, port, scene).await;
-        facts.extend(scene_facts);
-        let vanilla_path = Path::new(TRACE_DIR).join(format!("two-{}-A.jsonl", scene.code()));
-        if !vanilla_path.is_file() {
-            report.push(format!(
-                "{}: missing vanilla trace {}",
-                scene.code(),
-                vanilla_path.display()
+    // Шаг 7.3: the game mode is a server parameter and is no longer
+    // normalised. C1/C2/C4 were recorded with both bots in spectator, so
+    // our server runs them with mode 3; C5 (survival) and C6 (creative)
+    // repeat the C1 script with modes 0 and 1.
+    let passes: [(i32, &[(&str, Scene)]); 3] = [
+        (
+            3,
+            &[
+                ("c1", Scene::Join),
+                ("c2", Scene::Walk),
+                ("c4", Scene::Rotate),
+            ],
+        ),
+        (0, &[("c5", Scene::Join)]),
+        (1, &[("c6", Scene::Join)]),
+    ];
+    for (game_mode, scenes) in passes {
+        let (port, _guard) = start_server(&env, Arc::clone(&ids), game_mode).await;
+        for &(code, scene) in scenes {
+            let (ours_path, scene_facts) = run_scene(&env, &ids, port, scene, code).await;
+            facts.extend(scene_facts);
+            let vanilla_path = Path::new(TRACE_DIR).join(format!("two-{code}-A.jsonl"));
+            if !vanilla_path.is_file() {
+                report.push(format!(
+                    "{code}: missing vanilla trace {}",
+                    vanilla_path.display()
+                ));
+                continue;
+            }
+            let vanilla = load_lines(&vanilla_path);
+            let ours = load_lines(&ours_path);
+            let Some(v_id) = b_entity_id(&vanilla, b_uuid) else {
+                report.push(format!("{code}: B never spawned in the vanilla trace"));
+                continue;
+            };
+            let Some(o_id) = b_entity_id(&ours, b_uuid) else {
+                report.push(format!("{code}: B never spawned in our trace"));
+                continue;
+            };
+            facts.push(format!(
+                "{code}: game mode {game_mode}, B entity id vanilla {v_id}, ours {o_id}"
             ));
-            continue;
+            let v_about = about_b(&vanilla, v_id, b_uuid);
+            let o_about = about_b(&ours, o_id, b_uuid);
+            report.extend(compare(code, &v_about, &o_about));
         }
-        let vanilla = load_lines(&vanilla_path);
-        let ours = load_lines(&ours_path);
-        let Some(v_id) = b_entity_id(&vanilla, b_uuid) else {
-            report.push(format!(
-                "{}: B never spawned in the vanilla trace",
-                scene.code()
-            ));
-            continue;
-        };
-        let Some(o_id) = b_entity_id(&ours, b_uuid) else {
-            report.push(format!("{}: B never spawned in our trace", scene.code()));
-            continue;
-        };
-        facts.push(format!(
-            "{}: B entity id vanilla {v_id}, ours {o_id}",
-            scene.code()
-        ));
-        let v_about = about_b(&vanilla, v_id, b_uuid);
-        let o_about = about_b(&ours, o_id, b_uuid);
-        report.extend(compare(scene.code(), &v_about, &o_about));
     }
 
     let text = format!(
