@@ -349,3 +349,81 @@ fn a_spawn_resets_the_broadcast_baseline() {
         }
     );
 }
+
+#[test]
+fn the_radius_boundary_holds_on_several_radii_and_negative_coordinates() {
+    let origin = pose(0.0, 0.0, 0.0, 0.0);
+    for radius in [160.0, 64.0, 16.0, 8.0, 1.0] {
+        let inside = pose(radius - 0.01, 0.0, 0.0, 0.0);
+        let on = pose(radius, 0.0, 0.0, 0.0);
+        let outside = pose(radius + 0.01, 0.0, 0.0, 0.0);
+        assert!(
+            mutually_visible(&origin, radius, &inside, radius),
+            "inside r={radius}"
+        );
+        assert!(
+            mutually_visible(&origin, radius, &on, radius),
+            "exactly on the circle r={radius}"
+        );
+        assert!(
+            !mutually_visible(&origin, radius, &outside, radius),
+            "outside r={radius}"
+        );
+        // The same circle on the negative side of x.
+        let neg_inside = pose(-(radius - 0.01), 0.0, 0.0, 0.0);
+        let neg_outside = pose(-(radius + 0.01), 0.0, 0.0, 0.0);
+        assert!(
+            mutually_visible(&origin, radius, &neg_inside, radius),
+            "negative inside r={radius}"
+        );
+        assert!(
+            !mutually_visible(&origin, radius, &neg_outside, radius),
+            "negative outside r={radius}"
+        );
+    }
+    // Translation invariant: a negative-coordinate centre behaves the same.
+    let centre = pose(-100.0, -100.0, 0.0, 0.0);
+    assert!(mutually_visible(
+        &centre,
+        160.0,
+        &pose(60.0, -100.0, 0.0, 0.0),
+        160.0
+    ));
+    assert!(!mutually_visible(
+        &centre,
+        160.0,
+        &pose(70.0, -100.0, 0.0, 0.0),
+        160.0
+    ));
+    // A zero radius (a non-positive view distance) sees only its own point.
+    assert!(mutually_visible(&origin, 0.0, &origin, 0.0));
+    assert!(!mutually_visible(
+        &origin,
+        0.0,
+        &pose(0.01, 0.0, 0.0, 0.0),
+        0.0
+    ));
+}
+
+#[test]
+fn no_player_sees_itself_even_in_a_crowd() {
+    let mut regions = vec![region_with(&[
+        (1, (0, 64, 0)),
+        (2, (5, 64, 0)),
+        (3, (10, 64, 0)),
+        (4, (15, 64, 0)),
+    ])];
+    let events = visibility_pass(&mut regions);
+    assert_eq!(events.len(), 4, "every player hears about the others");
+    for id in [1, 2, 3, 4] {
+        let seen: Vec<PlayerId> = regions[0]
+            .get(id)
+            .expect("player")
+            .visible()
+            .keys()
+            .copied()
+            .collect();
+        assert!(!seen.contains(&id), "player {id} must not see itself");
+        assert_eq!(seen.len(), 3, "player {id} sees the other three");
+    }
+}

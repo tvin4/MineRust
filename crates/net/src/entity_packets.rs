@@ -276,6 +276,7 @@ pub fn push_entity_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::{relative_delta, PlayerPos};
 
     /// The world exit sends `remove_entities` first and the tab-list
     /// `player_info_remove` after it — the order recorded in C1
@@ -307,5 +308,113 @@ mod tests {
         push_remove(&remove, &mut out).expect("encodable");
         let keys: Vec<PacketKey> = out.iter().map(|(key, _)| *key).collect();
         assert_eq!(keys, vec![RemoveEntities::KEY]);
+    }
+
+    /// The motion kinds map to the traced packets: a relative position to
+    /// `move_entity_pos`, a position + rotation to `move_entity_pos_rot` +
+    /// `rotate_head`, a rotation-only change to `move_entity_rot` +
+    /// `rotate_head`, and a jump too large for the relative packets to
+    /// `entity_position_sync`.
+    #[test]
+    fn motion_encodes_to_the_traced_packets() {
+        let position = PlayerPos {
+            x: 10.0,
+            y: 64.0,
+            z: -3.0,
+            yaw: 90.0,
+            pitch: -20.0,
+            flags: 0,
+        };
+        let names = |motion| -> Vec<&'static str> {
+            let moved = EntityMove {
+                id: 7,
+                position,
+                motion,
+            };
+            let mut out = Vec::new();
+            push_motion(&moved, &mut out).expect("encodable");
+            out.iter().map(|(key, _)| key.name).collect()
+        };
+        let step = relative_delta(0.2).expect("0.2 blocks fit");
+        assert_eq!(
+            names(EntityMotion::Position {
+                dx: step,
+                dy: 0,
+                dz: 0,
+                rotated: false,
+            }),
+            vec!["minecraft:move_entity_pos"]
+        );
+        assert_eq!(
+            names(EntityMotion::Position {
+                dx: step,
+                dy: 0,
+                dz: 0,
+                rotated: true,
+            }),
+            vec!["minecraft:move_entity_pos_rot", "minecraft:rotate_head"]
+        );
+        assert_eq!(
+            names(EntityMotion::Rotation),
+            vec!["minecraft:move_entity_rot", "minecraft:rotate_head"]
+        );
+        assert_eq!(
+            names(EntityMotion::Sync),
+            vec!["minecraft:entity_position_sync"]
+        );
+    }
+
+    /// `teleport_entity` is out of M4.5 scope: neither a spawn nor any motion
+    /// kind may emit it.
+    #[test]
+    fn the_stream_never_uses_teleport_entity() {
+        let position = PlayerPos {
+            x: 1.0,
+            y: 64.0,
+            z: 2.0,
+            yaw: 0.0,
+            pitch: 0.0,
+            flags: 0,
+        };
+        let spawn = EntitySpawn {
+            id: 3,
+            name: "Bot".to_owned(),
+            uuid: [0x11; 16],
+            position,
+        };
+        let mut out = Vec::new();
+        push_spawn(&spawn, &mut out).expect("encodable");
+        for motion in [
+            EntityMotion::Position {
+                dx: 1,
+                dy: 0,
+                dz: 0,
+                rotated: false,
+            },
+            EntityMotion::Position {
+                dx: 1,
+                dy: 0,
+                dz: 0,
+                rotated: true,
+            },
+            EntityMotion::Rotation,
+            EntityMotion::Sync,
+        ] {
+            push_motion(
+                &EntityMove {
+                    id: 3,
+                    position,
+                    motion,
+                },
+                &mut out,
+            )
+            .expect("encodable");
+        }
+        for (key, _) in &out {
+            assert_ne!(
+                key.name, "minecraft:teleport_entity",
+                "teleport_entity is not part of the M4.5 stream"
+            );
+        }
     }
 }
