@@ -75,6 +75,44 @@ pub const TICK_PERIOD: Duration = Duration::from_millis(50);
 /// How often the tick metrics are logged.
 const LOG_EVERY: Duration = Duration::from_secs(5);
 
+/// A tick slower than this is reported with its phase breakdown (M4.5 step
+/// 8). Far above the period, so a healthy tick pays only a few `Instant`
+/// reads and no formatting.
+const PHASE_LOG_MS: u64 = 50;
+
+/// How long each stage of one tick took (M4.5 step 8).
+///
+/// The stages follow the tick loop: applying the queued messages, the
+/// regions' own work, recording the replay, delivering the chunk streams and
+/// delivering the entity streams. The sums are the tick's work between the
+/// wake-up and the end of delivery; comparing them with `wake_late_ms` says
+/// whether a slow tick stalled outside or inside the loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct TickPhases {
+    /// `apply_queued`: draining the game-thread channel.
+    apply_us: u64,
+    /// `scheduler.tick`: every region's movement/visibility work.
+    sched_us: u64,
+    /// `record_moves` + `record_transfers`: the replay journal.
+    moves_us: u64,
+    /// `deliver_streams`: chunk-window events to the connections.
+    streams_us: u64,
+    /// `deliver_entities`: spawn/motion events to the connections.
+    entities_us: u64,
+}
+
+impl TickPhases {
+    /// The sum of the recorded phases, in microseconds.
+    fn total_us(&self) -> u64 {
+        self.apply_us + self.sched_us + self.moves_us + self.streams_us + self.entities_us
+    }
+}
+
+/// Converts a phase duration to whole microseconds (the warn field's unit).
+fn phase_us(took: Duration) -> u64 {
+    u64::try_from(took.as_micros()).unwrap_or(u64::MAX)
+}
+
 /// Environment variable that turns the replay journal on; its value is the
 /// path of the JSONL file (ARCH-M4 §1).
 const REPLAY_ENV: &str = "MINERUST_REPLAY";
@@ -375,20 +413,61 @@ fn game_loop(
             &mut incoming,
             &mut disconnected,
         );
+        let after_apply = Instant::now();
         let outcome = scheduler.tick(tick, deadline);
+        let after_sched = Instant::now();
         // Positions the tick applied (M4.2) are recorded after the queued
         // messages, so `seq` continues the per-tick counter that
         // `apply_queued` opened. Boundary crossings (M4.3 B) are applied after
         // the tick's positions, so they are recorded after them.
         record_moves(&mut replay, tick, &outcome.moves);
         record_transfers(&mut replay, tick, &outcome.transfers);
+        let after_record = Instant::now();
         deliver_streams(&mut scheduler, &outcome.streams);
+        let after_streams = Instant::now();
         deliver_entities(&mut scheduler, &outcome.entities);
+        let after_entities = Instant::now();
         for kick in &outcome.kicks {
             warn!(
                 player = kick.id,
                 reason = kick.reason.message(),
                 "kicking a slow player"
+            );
+        }
+        // Phase timing (M4.5 step 8): one warn line per tick that runs long.
+        // `late_ms` is the tick's total lateness, measured from the deadline
+        // to the moment the tick finished its work (`finished - deadline`),
+        // so it grows with both a late wake and slow work. `wake_late_ms` is
+        // only the wake-up delay (`woke - deadline`): the part the tick
+        // cannot help. When `wake_late_ms` is large and `phases_total_us` is
+        // small the stall is external (OS, console, antivirus); when the
+        // phases are large the stall is this tick's own work and the phase
+        // `*_us` fields name it. The line is written only past
+        // `PHASE_LOG_MS`, so a healthy tick pays only a few `Instant` reads.
+        let phases = TickPhases {
+            apply_us: phase_us(after_apply.duration_since(work)),
+            sched_us: phase_us(after_sched.duration_since(after_apply)),
+            moves_us: phase_us(after_record.duration_since(after_sched)),
+            streams_us: phase_us(after_streams.duration_since(after_record)),
+            entities_us: phase_us(after_entities.duration_since(after_streams)),
+        };
+        let finished = after_entities;
+        let late_ms = finished.saturating_duration_since(deadline);
+        if late_ms > Duration::from_millis(PHASE_LOG_MS) {
+            warn!(
+                tick,
+                late_ms = late_ms.as_secs_f64() * 1000.0,
+                wake_late_ms = late.as_secs_f64() * 1000.0,
+                phases_total_us = phases.total_us(),
+                apply_us = phases.apply_us,
+                sched_us = phases.sched_us,
+                moves_us = phases.moves_us,
+                streams_us = phases.streams_us,
+                entities_us = phases.entities_us,
+                n_moves = outcome.moves.len(),
+                n_streams = outcome.streams.len(),
+                n_entities = outcome.entities.len(),
+                "tick phases"
             );
         }
         recorder.record(tick, deadline, woke, work.elapsed(), metrics);
