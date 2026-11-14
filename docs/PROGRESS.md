@@ -1634,8 +1634,18 @@ warnings`, `cargo test --workspace` — зелёные.
   `move_player_rot`/`player_input`); клиент не готов к командам ~3.5 с после join-строки
   (`player_loaded`); wire и NBT big-endian; playerdata 26.3 — `players/data/<uuid>.dat`
   с реверсом первых трёх групп UUID; `Write-Host` не попадает в pipeline.
-- **Дальше (этап Г)**: прогоны S1–S4 против нашего Rust-сервера, автотрейсы и таблица
-  «байты → эффект» (43/46/41/123/73/74 → факты observe у B).
+- **Этап Г (`run-scenario.ps1 -Target ours`)**: прогоны S1–S4 против нашего
+  Rust-сервера (server.exe за тем же mcproxy 25565→25566; join-gate по self-observe,
+  RCON пропускается и пишется как пробел). Прогон 2026-11-14_1735: **S2 6/6 PASS**
+  (дельты углов доходят до B, `move_entity_rot` ×3); остальное — честные пробелы
+  возможностей сервера (не баги стенда): нет playerdata/`player_rotation` при входе
+  (S1), `drain_swings` не подключён → взмахи невидимы (S3), `player_action` клиент
+  не присылает вообще — копание не стартует (S3), нет RCON → смена game mode
+  невозможна (S4). Таблица «байты → эффект» (43/46/41/123/73/74 + 32/31/1/57/35)
+  с фактическими счётчиками трейсов — в README testclient. Попутно починен баг
+  entry-point сервера: двойная инициализация tracing паниковала `SetGlobalDefaultError`
+  до разбора аргументов (сервер вообще не стартовал); guard-тест
+  `crates/server/tests/entrypoint.rs` (сначала падал, теперь зелёный).
 
 ## Блокеры
 

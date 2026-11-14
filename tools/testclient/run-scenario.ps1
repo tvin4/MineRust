@@ -10,7 +10,9 @@
 # Usage:
 #   .\run-scenario.ps1                    # all scenarios, fresh runDir
 #   .\run-scenario.ps1 -Scenarios s3      # one scenario
-#   .\run-scenario.ps1 -KeepStand         # leave vanilla+mcproxy running
+#   .\run-scenario.ps1 -Target ours       # stage G: our Rust server behind
+#                                         # the same mcproxy instead of vanilla
+#   .\run-scenario.ps1 -KeepStand         # leave stand+mcproxy running
 #
 # Results: <runDir>\summary.json, traces under <runDir>\mcproxy.
 # The stand is always torn down in finally (own vanilla/mcproxy/clients).
@@ -18,6 +20,8 @@
 param(
 	[string[]]$Scenarios = @('s1', 's2', 's3', 's4'),
 	[string]$RunDir = '',
+	[ValidateSet('vanilla', 'ours')]
+	[string]$Target = 'vanilla',
 	[switch]$KeepStand
 )
 $ErrorActionPreference = 'Stop'
@@ -28,35 +32,60 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $vanillaDir = 'E:\MineRust-data\vanilla'
 $serverJar = 'E:\MineRust-data\server.jar'
 $mcproxyExe = 'E:\projects\MineRust\target\debug\mcproxy.exe'
+# Stage G target: our own Rust server (workspace server.toml, listen patched
+# to 25566 because mcproxy reads its upstream port from the vanilla
+# server.properties).
+$serverExe = 'E:\projects\MineRust\target\debug\server.exe'
+$repoServerToml = 'E:\projects\MineRust\server.toml'
+$isVanilla = ($Target -eq 'vanilla')
 if (-not $RunDir) { $RunDir = Join-Path 'E:\MineRust-data\autotests' (Get-Date -Format 'yyyy-MM-dd_HHmm') }
 New-Item -ItemType Directory -Path $RunDir -Force | Out-Null
 $traceDir = Join-Path $RunDir 'mcproxy'
 New-Item -ItemType Directory -Path $traceDir -Force | Out-Null
 $vanillaLog = Join-Path $RunDir 'vanilla-stdout.log'
+$oursLog = Join-Path $RunDir 'ours-stdout.log'
 $rconScript = Join-Path $here 'Invoke-Rcon.ps1'
 $launchScript = Join-Path $here 'launch-fabric-client.ps1'
 $summaryPath = Join-Path $RunDir 'summary.json'
 
 # Stand PIDs, cleaned in finally.
 $script:vanillaPid = $null
+$script:oursPid = $null
 $script:mcproxyPid = $null
 
 function Start-Stand {
-	Start-Process java -WorkingDirectory $vanillaDir `
-		-ArgumentList '-Xmx1G', '-jar', $serverJar, 'nogui' `
-		-RedirectStandardOutput $vanillaLog `
-		-RedirectStandardError (Join-Path $RunDir 'vanilla-stderr.log') -PassThru |
-		ForEach-Object { $script:vanillaPid = $_.Id }
+	if ($isVanilla) {
+		Start-Process java -WorkingDirectory $vanillaDir `
+			-ArgumentList '-Xmx1G', '-jar', $serverJar, 'nogui' `
+			-RedirectStandardOutput $vanillaLog `
+			-RedirectStandardError (Join-Path $RunDir 'vanilla-stderr.log') -PassThru |
+			ForEach-Object { $script:vanillaPid = $_.Id }
+	} else {
+		# Our server takes 25566 directly (mcproxy's upstream port comes
+		# from the vanilla server.properties). The config is generated from
+		# the workspace server.toml with only the listen address changed:
+		# real values (client jar, protocol version) never enter the repo.
+		$oursConfig = Join-Path $RunDir 'server-ours.toml'
+		(Get-Content $repoServerToml -Raw) -replace 'listen\s*=\s*"[^"]*"', 'listen = "127.0.0.1:25566"' |
+			Set-Content $oursConfig -Encoding utf8
+		Start-Process -FilePath $serverExe -ArgumentList '--config', $oursConfig `
+			-WorkingDirectory (Split-Path -Parent $repoServerToml) `
+			-RedirectStandardOutput $oursLog `
+			-RedirectStandardError (Join-Path $RunDir 'ours-stderr.log') -PassThru |
+			ForEach-Object { $script:oursPid = $_.Id }
+	}
 	for ($i = 0; $i -lt 60; $i++) {
 		if (Get-NetTCPConnection -LocalPort 25566 -State Listen -ErrorAction SilentlyContinue) { break }
 		Start-Sleep -Seconds 1
 	}
 	if (-not (Get-NetTCPConnection -LocalPort 25566 -State Listen -ErrorAction SilentlyContinue)) {
-		throw 'vanilla did not open 25566'
+		throw 'the stand server did not open 25566'
 	}
-	for ($i = 0; $i -lt 30; $i++) {
-		if (Get-NetTCPConnection -LocalPort 25575 -State Listen -ErrorAction SilentlyContinue) { break }
-		Start-Sleep -Seconds 1
+	if ($isVanilla) {
+		for ($i = 0; $i -lt 30; $i++) {
+			if (Get-NetTCPConnection -LocalPort 25575 -State Listen -ErrorAction SilentlyContinue) { break }
+			Start-Sleep -Seconds 1
+		}
 	}
 	Start-Process -FilePath $mcproxyExe -ArgumentList '--listen', '127.0.0.1:25565', '--out', $traceDir `
 		-RedirectStandardOutput (Join-Path $RunDir 'mcproxy-live.log') `
@@ -71,6 +100,14 @@ function Stop-Stand {
 	Start-Sleep -Seconds 2
 	if ($script:mcproxyPid) { Stop-Process -Id $script:mcproxyPid -Force -ErrorAction SilentlyContinue }
 	if ($script:vanillaPid) { Stop-Process -Id $script:vanillaPid -Force -ErrorAction SilentlyContinue }
+	if ($script:oursPid) { Stop-Process -Id $script:oursPid -Force -ErrorAction SilentlyContinue }
+}
+
+# One RCON command on the vanilla console. Our server has no RCON (stage G):
+# the call is skipped there and the scenario records the gap instead.
+function Invoke-StandRcon {
+	param([string]$Command)
+	if ($isVanilla) { & $rconScript -Command $Command | Out-Null }
 }
 
 # Launches one test client and waits for its fresh join line in the log,
@@ -87,8 +124,24 @@ function Start-Client {
 	foreach ($line in $out) {
 		if ($line -match 'offline uuid ([0-9a-f-]+)') { $uuid = $Matches[1] }
 	}
-	if (-not (Wait-FreshJoin -Log $vanillaLog -Nick $Nick -Since $Since -TimeoutSec $TimeoutSec)) {
-		throw "$Nick did not join in ${TimeoutSec}s"
+	if ($isVanilla) {
+		if (-not (Wait-FreshJoin -Log $vanillaLog -Nick $Nick -Since $Since -TimeoutSec $TimeoutSec)) {
+			throw "$Nick did not join in ${TimeoutSec}s"
+		}
+	} else {
+		# Our server logs its join differently and has no RCON: the join
+		# gate is the mod's own self-observe (inGame=true), the same gate
+		# the vanilla stand uses its log for.
+		$deadline = (Get-Date).AddSeconds($TimeoutSec)
+		$inGame = $false
+		while ((Get-Date) -lt $deadline) {
+			try {
+				$resp = Invoke-TestCmd $ControlPort (New-ObserveCmd 'join-gate') 3000
+				if ($resp.ok -and $resp.result.inGame) { $inGame = $true; break }
+			} catch { }
+			Start-Sleep -Milliseconds 300
+		}
+		if (-not $inGame) { throw "$Nick did not reach inGame in ${TimeoutSec}s" }
 	}
 	Start-Sleep -Seconds 5
 	return [PSCustomObject]@{ pid = $pidOut; uuid = $uuid }
@@ -122,7 +175,10 @@ function Invoke-S1 {
 	$saved = (Invoke-TestCmd $portA (New-ObserveCmd 's1-saved')).result.rot
 	$null = Invoke-TestCmd $portA (New-SessionCmd 's1-leave' 'disconnect')
 	Start-Sleep -Seconds 2
-	& $rconScript -Command 'save-all flush' | Out-Null
+	# The owner flow saves through RCON; our server has no RCON (stage G),
+	# so the save step is a recorded gap there - the world state is simply
+	# whatever the server keeps in memory at disconnect.
+	Invoke-StandRcon 'save-all flush'
 	$watermark = Stop-Client $nickA
 
 	# A relaunches (fresh process, quickPlay) and only then B launches.
@@ -152,9 +208,9 @@ function Invoke-S1 {
 	$null = Invoke-TestCmd $portA (New-SessionCmd 's1-off' 'disconnect')
 	$null = Invoke-TestCmd $portB (New-SessionCmd 's1-offb' 'disconnect')
 	Start-Sleep -Seconds 3
-	& $rconScript -Command 'save-all flush' | Out-Null
+	Invoke-StandRcon 'save-all flush'
 	Start-Sleep -Seconds 1
-	$nbtPath = Get-PlayerDataPath (Join-Path $vanillaDir 'world') $launchA.uuid
+	$nbtPath = if ($isVanilla) { Get-PlayerDataPath (Join-Path $vanillaDir 'world') $launchA.uuid } else { $null }
 	$rot = $null
 	if ($nbtPath -and (Test-Path $nbtPath)) { $rot = Get-PlayerRotationFromNbt $nbtPath }
 	$nbtHit = ($rot -and [Math]::Abs($rot.yaw - [float]$saved.yaw) -le $tol -and [Math]::Abs($rot.pitch - [float]$saved.pitch) -le $tol)
@@ -164,7 +220,15 @@ function Invoke-S1 {
 		if (Find-RotationInTrace (Read-Trace $trace.FullName) ([float]$saved.yaw) ([float]$saved.pitch) $tol) { $traceHit = $true }
 	}
 	# The owner condition is "NBT OR the relaunch trace": either is enough.
-	$nbtFact = if ($rot) { "yaw=$($rot.yaw) pitch=$($rot.pitch)" } else { 'no NBT file' }
+	# On our server there is no playerdata at all (it never writes one), so
+	# the fact says so explicitly rather than looking like a parse miss.
+	$nbtFact = if ($rot) {
+		"yaw=$($rot.yaw) pitch=$($rot.pitch)"
+	} elseif ($isVanilla) {
+		'no NBT file'
+	} else {
+		'no playerdata (our server does not write one)'
+	}
 	Add-Check $Result 'saved rotation present in playerdata (NBT or relaunch trace)' ($nbtHit -or $traceHit) `
 		("NBT {0}: {1} -> {2}; relaunch trace -> {3} (saved yaw={4} pitch={5})" -f `
 			$nbtPath, $nbtFact, $(if ($nbtHit) { 'hit' } else { 'miss' }), `
@@ -304,11 +368,19 @@ function Invoke-S4 {
 	Add-Check $Result 'B sees A in survival before changes' ($initial.gameMode -eq 'survival') `
 		("gameMode seen by B: {0}" -f $initial.gameMode)
 	foreach ($mode in $Cfg.modes) {
-		& $rconScript -Command ("gamemode {0} {1}" -f $mode, $nickA) | Out-Null
-		Start-Sleep -Milliseconds $settle
-		$seen = (Invoke-TestCmd $portB (New-ObserveCmd 's4-obs' $nickA)).result
-		Add-Check $Result ("B sees A in {0} after RCON gamemode" -f $mode) ($seen.gameMode -eq $mode) `
-			("gameMode seen by B: {0} (expected {1})" -f $seen.gameMode, $mode)
+		# Game mode changes reach A through the console command; our server
+		# has no RCON (stage G), so the change is skipped there and the
+		# check records "no RCON" as the fact instead of a fake pass.
+		if ($isVanilla) {
+			Invoke-StandRcon ("gamemode {0} {1}" -f $mode, $nickA)
+			Start-Sleep -Milliseconds $settle
+			$seen = (Invoke-TestCmd $portB (New-ObserveCmd 's4-obs' $nickA)).result
+			Add-Check $Result ("B sees A in {0} after RCON gamemode" -f $mode) ($seen.gameMode -eq $mode) `
+				("gameMode seen by B: {0} (expected {1})" -f $seen.gameMode, $mode)
+		} else {
+			Add-Check $Result ("B sees A in {0} after gamemode change" -f $mode) $false `
+				'no RCON on our server - the gamemode change path is not wired (owner: S4 vs ours is a recorded gap)'
+		}
 	}
 	$null = Invoke-TestCmd $portA (New-SessionCmd 's4-off' 'disconnect')
 	$null = Invoke-TestCmd $portB (New-SessionCmd 's4-offb' 'disconnect')
@@ -358,6 +430,7 @@ try {
 
 $summary = [PSCustomObject]@{
 	runDir    = $RunDir
+	target    = $Target
 	generated = (Get-Date).ToString('s')
 	scenarios = $allResults
 }
