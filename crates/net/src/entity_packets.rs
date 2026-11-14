@@ -113,10 +113,13 @@ pub fn push_spawn(
         x: entity.position.x,
         y: entity.position.y,
         z: entity.position.z,
-        // The recorded angles are all zero and their order is «не установлено».
-        pitch: 0,
-        yaw: 0,
-        head_yaw: 0,
+        // The posed-player trace (S1b) pins the tail: the angles are the
+        // stored pose quantised to the vanilla byte angle, in the order
+        // `data`, `pitch`, `yaw`, `head yaw`, `trailing`.
+        // SOURCE: vanilla test-client trace 26.3 (S1b, B's join window).
+        pitch: pitch_byte(entity.position.pitch) as u8,
+        yaw: byte_angle(entity.position.yaw),
+        head_yaw: byte_angle(entity.position.head_yaw),
         data: 0,
         tail: 0,
     };
@@ -335,6 +338,50 @@ mod tests {
     use super::*;
     use crate::game::{relative_delta, PlayerPos};
     use protocol::PacketReader;
+
+    /// The spawn of an already-posed player must match the vanilla S1b
+    /// trace byte for byte: the angles come from the stored pose and the
+    /// tail is `data`, `pitch`, `yaw`, `head yaw`, `trailing`.
+    ///
+    /// Observed: `00 40 45 45 00` -> data 0, pitch 0x40 (90 deg),
+    /// yaw 0x45 (97.03 deg), head 0x45 (97.03 deg), tail 0, which is what
+    /// the joining observer's `observe` reads for Alice.
+    // SOURCE: vanilla test-client trace 26.3 (S1b, B's join window).
+    #[test]
+    fn spawn_carries_the_stored_pose_angles() {
+        let entity = EntitySpawn {
+            id: 46,
+            name: "Alice".to_owned(),
+            uuid: [
+                0x10, 0x92, 0x05, 0x08, 0xd5, 0xd8, 0x3e, 0xed, 0x93, 0xd2, 0x92, 0xf1, 0x93, 0xaf,
+                0xe7, 0xd7,
+            ],
+            position: PlayerPos {
+                x: 93.30152942206422,
+                y: 126.0,
+                z: -21.75903247201455,
+                yaw: 97.95024,
+                pitch: 90.0,
+                head_yaw: 97.95024,
+                flags: 0,
+            },
+            game_mode: 0,
+        };
+        let mut out = Vec::new();
+        push_spawn(&entity, &mut out).expect("encodable");
+        let add = out
+            .iter()
+            .find(|(key, _)| *key == AddEntity::KEY)
+            .expect("add_entity is part of the spawn");
+        let hex: Vec<String> = add.1.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            hex.join(" "),
+            "2e 10 92 05 08 d5 d8 3e ed 93 d2 92 f1 93 af e7 d7 9f 01 \
+             40 57 53 4c 42 0f a3 0c 40 5f 80 00 00 00 00 00 c0 35 c2 4f f3 bb e7 8f \
+             00 40 45 45 00",
+            "add_entity payload must match the vanilla S1b trace"
+        );
+    }
 
     /// The world exit sends `remove_entities` first and the tab-list
     /// `player_info_remove` after it — the order recorded in C1

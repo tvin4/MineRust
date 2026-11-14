@@ -12,13 +12,17 @@ use super::packet_impl::play_packet;
 use super::read_count;
 use crate::codec::{CodecError, PacketReader, PacketWriter, Uuid};
 
-/// Add Entity: makes an entity known to the client.
+/// Add Entity: spawns one entity in the observer's world.
 ///
-/// Observed payload (len 48): `entity id`, UUID, entity type, three `f64`
-/// coordinates, three angle bytes, a `VarInt` data value and one trailing
-/// byte. The last five bytes are all zero in every scenario, so neither the
-/// order of the angles nor the meaning of the trailing byte is established.
-// SOURCE: two-bot vanilla trace 26.3 (C1–C4), one observed value per field.
+/// Observed payload: `VarInt` entity id, 16-byte UUID, `VarInt` entity type,
+/// three `f64` coordinates, then the tail: `VarInt data`, `u8 pitch`,
+/// `u8 yaw`, `u8 head yaw`, `u8 trailing`. The angle bytes are the vanilla
+/// byte angle (360/256 per unit). The tail order is verified against two
+/// vanilla player spawns whose angles match the observer's own `observe`
+/// reading (`00 2a 45 45 00` -> data 0, pitch 59.06 deg, yaw 97.03 deg,
+/// head 97.03 deg, tail 0).
+// SOURCE: vanilla test-client traces 26.3 (S1/S1b), two player spawns each
+// matched against the observer's `observe` angles.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AddEntity {
     /// Entity id assigned by the server for this connection.
@@ -34,10 +38,11 @@ pub struct AddEntity {
     /// Z coordinate.
     pub z: f64,
     /// First angle byte; order with the other two is «не установлено».
+    /// Pitch angle byte (`u8`, 360/256 per unit); comes first in the tail.
     pub pitch: u8,
-    /// Second angle byte; order is «не установлено».
+    /// Yaw angle byte (`u8`, 360/256 per unit); comes second in the tail.
     pub yaw: u8,
-    /// Third angle byte; order is «не установлено».
+    /// Head yaw angle byte (`u8`, 360/256 per unit); comes third in the tail.
     pub head_yaw: u8,
     /// Metadata-ish `VarInt`; always 0 in the trace, semantics «не установлено».
     pub data: i32,
@@ -55,10 +60,10 @@ impl AddEntity {
         writer.write_f64(self.x);
         writer.write_f64(self.y);
         writer.write_f64(self.z);
+        writer.write_varint(self.data);
         writer.write_u8(self.pitch);
         writer.write_u8(self.yaw);
         writer.write_u8(self.head_yaw);
-        writer.write_varint(self.data);
         writer.write_u8(self.tail);
         Ok(writer.into_bytes())
     }
@@ -72,10 +77,10 @@ impl AddEntity {
             x: reader.read_f64()?,
             y: reader.read_f64()?,
             z: reader.read_f64()?,
+            data: reader.read_varint()?,
             pitch: reader.read_u8()?,
             yaw: reader.read_u8()?,
             head_yaw: reader.read_u8()?,
-            data: reader.read_varint()?,
             tail: reader.read_u8()?,
         })
     }
@@ -173,6 +178,35 @@ mod tests {
                 tail: 0,
             },
             "4db3b03a004714337e810352c60a6c836f9f0140582000000000004062200000000000c03f8000000000000000000000",
+            AddEntity::encode_payload,
+            AddEntity::decode_payload,
+        );
+    }
+
+    /// The S1b vanilla trace's spawn of the posed player, byte for byte.
+    ///
+    /// Non-zero angle bytes pin the tail order: `data (VarInt)`, `pitch`,
+    /// `yaw`, `head yaw`, `trailing`. The values match the observer's own
+    /// `observe` reading for Alice (yaw 97.03 deg, pitch 90 deg):
+    /// `00 40 45 45 00` -> data 0, pitch 0x40 (90), yaw 0x45 (97.03),
+    /// head 0x45 (97.03), tail 0.
+    #[test]
+    fn add_entity_tail_order_matches_the_pose_trace() {
+        check(
+            AddEntity {
+                entity_id: 46,
+                uuid: uuid("10920508d5d83eed93d292f193afe7d7"),
+                entity_type: 159,
+                x: 93.30152942206422,
+                y: 126.0,
+                z: -21.75903247201455,
+                pitch: 0x40,
+                yaw: 0x45,
+                head_yaw: 0x45,
+                data: 0,
+                tail: 0,
+            },
+            "2e10920508d5d83eed93d292f193afe7d79f014057534c420fa30c405f800000000000c035c24ff3bbe78f0040454500",
             AddEntity::encode_payload,
             AddEntity::decode_payload,
         );
