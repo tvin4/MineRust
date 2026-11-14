@@ -17,13 +17,13 @@
 
 use protocol::{
     AddEntity, AttributeEntry, CodecError, EntityPositionSync, MoveEntityPos, MoveEntityPosRot,
-    MoveEntityRot, MoveHeader, PacketKey, PlayerInfoEntry, PlayerInfoRemove, PlayerInfoUpdate,
-    RemoveEntities, RotateHead, SetEntityData, UpdateAttributes,
+    MoveEntityRot, MoveHeader, PacketKey, PacketWriter, PlayerInfoEntry, PlayerInfoRemove,
+    PlayerInfoUpdate, RemoveEntities, RotateHead, SetEntityData, UpdateAttributes,
 };
 
 use crate::game::{
-    byte_angle, pitch_byte, EntityMotion, EntityMove, EntityRemove, EntitySpawn, PlayerId,
-    PLAYER_ENTITY_TYPE,
+    byte_angle, pitch_byte, EntityMotion, EntityMove, EntityRemove, EntitySpawn, EntityStateUpdate,
+    PlayerId, PLAYER_ENTITY_TYPE,
 };
 
 /// First metadata snapshot of a spawned player (`set_entity_data`, len 11).
@@ -288,9 +288,29 @@ pub fn push_remove(
     Ok(())
 }
 
+/// Pushes one entity metadata transition (`set_entity_data`).
+///
+/// The payload is `entity id`, `index 0`, `type 0`, `flags`, `0xff`; it is
+/// the shape every traced transition shares.
+// SOURCE: owner's S5 trace, B observer connection (set_entity_data rows).
+fn push_state_update(
+    update: &EntityStateUpdate,
+    out: &mut Vec<(PacketKey, Vec<u8>)>,
+) -> Result<(), CodecError> {
+    let mut metadata = PacketWriter::new();
+    metadata.write_varint(update.id);
+    metadata.write_u8(0x00);
+    metadata.write_u8(0x00);
+    metadata.write_u8(update.flags);
+    metadata.write_u8(0xff);
+    out.push((SetEntityData::KEY, metadata.into_bytes()));
+    Ok(())
+}
+
 /// Pushes every packet of one entity-stream event, in send order.
 pub fn push_entity_stream(
     spawn: &[EntitySpawn],
+    states: &[EntityStateUpdate],
     remove: &[EntityRemove],
     moves: &[EntityMove],
     out: &mut Vec<(PacketKey, Vec<u8>)>,
@@ -300,6 +320,9 @@ pub fn push_entity_stream(
     }
     for moved in moves {
         push_motion(moved, out)?;
+    }
+    for update in states {
+        push_state_update(update, out)?;
     }
     for entity in remove {
         push_remove(entity, out)?;

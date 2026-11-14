@@ -199,16 +199,35 @@ pub struct StreamEntities {
     pub seq: u32,
     /// Entities to spawn, in ascending id.
     pub spawn: Vec<EntitySpawn>,
+    /// Metadata-state transitions, in ascending entity id.
+    pub states: Vec<EntityStateUpdate>,
     /// Entities to remove, in ascending id.
     pub remove: Vec<EntityRemove>,
     /// Movement updates, in ascending id.
     pub moves: Vec<EntityMove>,
 }
 
+/// A metadata-state transition of one entity.
+///
+/// The struct carries the state only; the encoder that turns it into
+/// `set_entity_data` arrives with the trace that pins its payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EntityStateUpdate {
+    /// Entity id.
+    pub id: PlayerId,
+    /// Metadata flags of the new state.
+    pub flags: u8,
+    /// Sprint transition, which also changes the sprinting attribute.
+    pub sprinting: Option<bool>,
+}
+
 impl StreamEntities {
     /// Whether this event carries nothing and can be skipped.
     pub fn is_empty(&self) -> bool {
-        self.spawn.is_empty() && self.remove.is_empty() && self.moves.is_empty()
+        self.spawn.is_empty()
+            && self.states.is_empty()
+            && self.remove.is_empty()
+            && self.moves.is_empty()
     }
 }
 
@@ -437,6 +456,7 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
             // sorts it after them inside the region (see `TickOutcome`).
             seq: u32::MAX,
             spawn,
+            states: Vec::new(),
             remove,
             moves,
         });

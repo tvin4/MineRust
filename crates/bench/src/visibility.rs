@@ -228,7 +228,13 @@ pub fn measure_phases(
         // (б) the packets the connections would build, in send order.
         packets.clear();
         for event in &events {
-            push_entity_stream(&event.spawn, &event.remove, &event.moves, &mut packets)?;
+            push_entity_stream(
+                &event.spawn,
+                &event.states,
+                &event.remove,
+                &event.moves,
+                &mut packets,
+            )?;
         }
         let t3 = Instant::now();
 
@@ -236,6 +242,7 @@ pub fn measure_phases(
         for event in events {
             let message = ServerMessage::StreamEntities {
                 spawn: event.spawn,
+                states: event.states,
                 remove: event.remove,
                 moves: event.moves,
             };

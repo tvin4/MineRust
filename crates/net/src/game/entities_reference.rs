@@ -163,6 +163,7 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
             player: viewer,
             seq: u32::MAX,
             spawn,
+            states: Vec::new(),
             remove,
             moves: viewer_moves,
         };

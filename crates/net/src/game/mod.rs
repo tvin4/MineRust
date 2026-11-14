@@ -42,7 +42,7 @@ mod tests;
 
 pub use entities::{
     byte_angle, pitch_byte, relative_delta, view_radius, EntityMotion, EntityMove, EntityRemove,
-    EntitySpawn, StreamEntities, BLOCKS_PER_CHUNK, PLAYER_ENTITY_TYPE,
+    EntitySpawn, EntityStateUpdate, StreamEntities, BLOCKS_PER_CHUNK, PLAYER_ENTITY_TYPE,
 };
 pub use grid::{chunk_of_position, RegionGrid, CHUNK_SIZE};
 pub use messages::{
@@ -677,6 +677,7 @@ fn deliver_entities(scheduler: &mut Scheduler, events: &[StreamEntities]) {
     for event in events {
         let message = ServerMessage::StreamEntities {
             spawn: event.spawn.clone(),
+            states: event.states.clone(),
             remove: event.remove.clone(),
             moves: event.moves.clone(),
         };

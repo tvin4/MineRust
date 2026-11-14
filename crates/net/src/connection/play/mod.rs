@@ -402,11 +402,19 @@ where
                     // entity packets, in the order the trace records.
                     Some(ServerMessage::StreamEntities {
                         spawn,
+                        states,
                         remove,
                         moves,
                     }) => {
-                        entities::write_entity_stream(&mut writer, ids, &spawn, &remove, &moves)
-                            .await?;
+                        entities::write_entity_stream(
+                            &mut writer,
+                            ids,
+                            &spawn,
+                            &states,
+                            &remove,
+                            &moves,
+                        )
+                        .await?;
                     }
                     // The game thread dropped this player (quit); the
                     // connection closes. The kick reason is read in M4.1's

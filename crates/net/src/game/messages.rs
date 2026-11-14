@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use protocol::Position;
 use tokio::sync::mpsc;
 
-use super::entities::{EntityMove, EntityRemove, EntitySpawn};
+use super::entities::{EntityMove, EntityRemove, EntitySpawn, EntityStateUpdate};
 
 /// Position of a player inside the game thread.
 ///
@@ -105,6 +105,8 @@ pub enum ServerMessage {
     StreamEntities {
         /// Entities to spawn, in ascending id.
         spawn: Vec<EntitySpawn>,
+        /// Metadata-state transitions, in ascending entity id.
+        states: Vec<EntityStateUpdate>,
         /// Entities to remove, in ascending id.
         remove: Vec<EntityRemove>,
         /// Movement updates, in ascending id.
