@@ -44,13 +44,9 @@ fn main() -> ExitCode {
 }
 
 fn try_main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
-
+    // Tracing is initialised once in `main` (non-blocking writer); a second
+    // `.init()` here would panic `SetGlobalDefaultError` before argument
+    // parsing (Шаг 9, stage G: the binary never reached `--help`).
     let config_path = parse_args()?;
     let config = server::load_config(&config_path)
         .with_context(|| format!("failed to load config {}", config_path.display()))?;
