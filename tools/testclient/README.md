@@ -75,7 +75,8 @@ jar-сборка, кэш Gradle/Loom и run-каталоги — нет.
 |---|---|
 | `mod/build.gradle`, `settings.gradle`, `gradle.properties` | каркас Loom по официальным версиям Fabric (см. ниже) |
 | `mod/src/main/resources/fabric.mod.json` | манифест мода (`id=testclient`, entrypoint `client`) |
-| `mod/src/main/java/dev/minerust/testclient/` | код мода: `TestClientMod` (entrypoint), `ControlServer` (JSON-сокет 127.0.0.1), `CommandDispatcher` (команды на клиентском тике), `InputCommands` (`look`/`key`), `ObserveCommand` (`observe`) |
+| `mod/src/main/java/dev/minerust/testclient/` | код мода: `TestClientMod` (entrypoint), `ControlServer` (JSON-сокет 127.0.0.1), `CommandDispatcher` (команды на клиентском тике), `InputCommands` (`look`/`key`), `ObserveCommand` (`observe`), `SessionCommands` (сессия), `TickQueue` (планировщик тиков) |
+| `Invoke-Rcon.ps1` | RCON-клиент консоли ванили (`save-all flush`, `/tp`, `/gamemode` для оркестратора; RCON включён в `server.properties` стенда, только 127.0.0.1) |
 
 **Версии (все — официальные источники Fabric/Mojang, проверены 14.11.2026):**
 Minecraft `26.3`, fabric-loader `0.20.1` (meta.fabricmc.net/v2/versions/*),
@@ -137,6 +138,11 @@ Fabric loader + fabric-api берутся с официального maven.fabr
   `keyUseDown`, тип цели прицела (`MISS`/`BLOCK`/`ENTITY`) и блок под
   прицелом. `screen == null` в 26.3 публичного API не имеет — факт
   «экран открыт» заменён эквивалентом `mouseGrabbed == false`.
+  Форма `observe {player:"Alice"}` — что видит этот клиент у другого
+  игрока (поза/углы из `ClientLevel.players()`, режим игры из
+  player-info): это и есть проверка «клиент B у игрока A» (Б5, подтверждено
+  запуском: yaw A у B 12.66 ≈ локальные 12.75 с учётом квантизации углов
+  сервером, режим игры совпадает).
 
 **Команды этапа Б4** (сессия):
 
@@ -151,12 +157,14 @@ Fabric loader + fabric-api берутся с официального maven.fabr
   (путь экрана чата); ответ сервера приходит как chat, не в ответе.
 - `screenshot {name?}` — `Screenshot.takeScreenshot` (путь F2) пишет
   `<gameDir>/screenshots/<name>.png` и возвращает путь + факт файла.
-- `connect` — **заблокирован** (две попытки исчерпаны, вопрос владельцу):
-  `ConnectScreen.startConnecting` с parent=null молчит вовсе; с
-  parent=экран сохранения стартует «Connecting…», но логина не происходит.
-  В 26.3 у `Minecraft` нет публичного метода подключения. До решения
-  владельца сценарии используют запуск клиента сразу подключённым
-  (`launch-fabric-client.ps1`, quickPlay).
+- `connect` — **заблокировано, причина не установлена** (две попытки,
+  третья не делается — решение владельца, Б4). Гипотезы (не проверены,
+  декомпиляция запрещена): (а) parent-экран обязателен ненулевой
+  (`JoinMultiplayerScreen`); (б) приватное `Minecraft.pendingConnection`
+  блокирует повторный connect; (в) `ServerData` требует
+  инициализированного состояния. Команда остаётся в коде; сценарии
+  используют запуск клиента сразу подключённым (quickPlay
+  `launch-fabric-client.ps1`).
 
 **Диагностика входа атаки (Б3, решение владельца: сначала факты).**
 Факты `observe` до/во время/после атаки: при пустом приёме
@@ -179,8 +187,7 @@ Fabric loader + fabric-api берутся с официального maven.fabr
   приёмка пройдена трейсом mcproxy: serverbound `player_input` (43) при
   hold движения, `punch` (46) при атаке в воздух, `player_action` (41) +
   `punch` (46) при копании блока; B4 (wait/disconnect/command/screenshot)
-  готов, приёмка пройдена (wait 1540 ms на 1500, screenshot пишет файл,
-  disconnect → чистый `Disconnected` в логе сервера, command уходит);
-  `connect` заблокирован (2 попытки, вопрос владельцу); B5 (полная приёмка
-  этапа Б) — после решения по connect.
+  готов, приёмка пройдена; `connect` заблокировано (см. выше); B5 (полная
+  приёмка этапа Б) готов: два клиента, у A ввод (43/46/41 в трейсе),
+  B наблюдает A через `observe {player}` (поза/углы/режим игры).
 - Этап В (оркестратор/сценарии), Г (автотрейсы) — следуют.
