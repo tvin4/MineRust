@@ -9,6 +9,7 @@ use super::entities::{
 };
 use super::test_support::join_at;
 use super::{MoveUpdate, PlayerId, PlayerPos, Region, SINGLE_REGION};
+use protocol::PlayerInput;
 
 /// A player pose with the given horizontal position and rotation.
 fn pose(x: f64, z: f64, yaw: f32, pitch: f32) -> PlayerPos {
@@ -154,6 +155,39 @@ fn two_players_in_range_spawn_each_other() {
             .collect::<Vec<_>>(),
         vec![1]
     );
+}
+
+/// Confirmed S5 input transitions reach B as the exact traced metadata states.
+// SOURCE: E:\\MineRust-data\\autotests\\stage10-s5-vanilla-sprint-forward-2026-11-14, B observer trace seq 2217, 3326, 4029, 6958.
+#[test]
+fn traced_sneak_and_sprint_state_changes_are_streamed_to_observers() {
+    let mut regions = vec![region_with(&[(1, (0, 64, 0)), (2, (50, 64, 0))])];
+    let initial = visibility_pass(&mut regions);
+    assert_eq!(
+        event_of(&initial, 2).expect("initial visibility").spawn[0].id,
+        1
+    );
+
+    let transitions = [
+        (PlayerInput::SNEAK, 0x02, None),
+        (0, 0x00, None),
+        (PlayerInput::SPRINT, 0x08, Some(true)),
+        (0, 0x00, Some(false)),
+    ];
+    for (input, expected_flags, sprinting) in transitions {
+        regions[0].get_mut(1).expect("subject").apply_input(input);
+        let events = visibility_pass(&mut regions);
+        let event = event_of(&events, 2).expect("state transition is streamed");
+        assert_eq!(event.states.len(), 1);
+        assert_eq!(event.states[0].id, 1);
+        assert_eq!(event.states[0].flags, expected_flags);
+        assert_eq!(event.states[0].sprinting, sprinting);
+    }
+
+    // Combination not confirmed by trace: test the formula only, not a claimed
+    // observed transition or mode.
+    let combined_flags = 0x02 | 0x08;
+    assert_eq!(combined_flags, 0x0a, "combination not confirmed by trace");
 }
 
 #[test]

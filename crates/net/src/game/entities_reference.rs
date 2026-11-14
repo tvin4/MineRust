@@ -14,8 +14,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use protocol::{offline_uuid, Uuid};
 
 use super::entities::{
-    mutually_visible, pose_differs, relative_delta, view_radius, EntityMotion, EntityMove,
-    EntityRemove, EntitySpawn, StreamEntities, BROADCAST_PERIOD_TICKS, UPDATE_INTERVAL,
+    mutually_visible, pose_differs, relative_delta, state_flags, view_radius, EntityMotion,
+    EntityMove, EntityRemove, EntitySpawn, EntityStateUpdate, StreamEntities,
+    BROADCAST_PERIOD_TICKS, UPDATE_INTERVAL,
 };
 use super::messages::PlayerId;
 use super::region::{PlayerPos, Region, RegionId};
@@ -50,6 +51,8 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
     let mut name: BTreeMap<PlayerId, String> = BTreeMap::new();
     let mut uuid: BTreeMap<PlayerId, Uuid> = BTreeMap::new();
     let mut game_mode: BTreeMap<PlayerId, i32> = BTreeMap::new();
+    let mut state: BTreeMap<PlayerId, (bool, bool)> = BTreeMap::new();
+    let mut broadcast_state: BTreeMap<PlayerId, Option<(bool, bool)>> = BTreeMap::new();
     let mut visible_before: BTreeMap<PlayerId, BTreeMap<PlayerId, Uuid>> = BTreeMap::new();
     let mut baseline: BTreeMap<PlayerId, Option<PlayerPos>> = BTreeMap::new();
     let mut ticks: BTreeMap<PlayerId, u32> = BTreeMap::new();
@@ -65,6 +68,8 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
             name.insert(id, player.name().to_owned());
             uuid.insert(id, offline_uuid(player.name()));
             game_mode.insert(id, player.game_mode());
+            state.insert(id, (player.sneak(), player.sprint()));
+            broadcast_state.insert(id, player.broadcast_state());
             visible_before.insert(id, player.visible().clone());
             baseline.insert(id, player.last_broadcast());
             ticks.insert(id, player.ticks_since_broadcast());
@@ -87,6 +92,7 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
 
     let mut moves: BTreeMap<PlayerId, Vec<EntityMove>> = BTreeMap::new();
     let mut next_baseline = baseline.clone();
+    let mut next_broadcast_state = broadcast_state.clone();
     let mut next_ticks = ticks.clone();
     for &subject in &ids {
         let counter = ticks[&subject].saturating_add(1);
@@ -94,6 +100,7 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
         let Some(previous) = baseline[&subject] else {
             continue;
         };
+        next_broadcast_state.insert(subject, Some(state[&subject]));
         let now = position[&subject];
         let changed = pose_differs(&previous, &now);
         let motion = if changed && counter >= UPDATE_INTERVAL {
@@ -126,6 +133,7 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
         let before = &visible_before[&viewer];
         let now = &target[&viewer];
         let mut spawn = Vec::new();
+        let mut states = Vec::new();
         for &id in now {
             if !before.contains_key(&id) {
                 spawn.push(EntitySpawn {
@@ -136,7 +144,19 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
                     game_mode: game_mode[&id],
                 });
                 next_baseline.insert(id, Some(position[&id]));
+                next_broadcast_state.insert(id, Some(state[&id]));
                 next_ticks.insert(id, 0);
+            } else if game_mode[&id] == 0 {
+                if let Some(previous) = broadcast_state[&id] {
+                    if previous != state[&id] {
+                        states.push(EntityStateUpdate {
+                            id,
+                            flags: state_flags(state[&id].0, state[&id].1),
+                            sprinting: (previous.1 != state[&id].1).then_some(state[&id].1),
+                        });
+                        next_broadcast_state.insert(id, Some(state[&id]));
+                    }
+                }
             }
         }
         let mut remove = Vec::new();
@@ -163,7 +183,7 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
             player: viewer,
             seq: u32::MAX,
             spawn,
-            states: Vec::new(),
+            states,
             remove,
             moves: viewer_moves,
         };
@@ -186,6 +206,9 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
             }
             if let Some(ticks) = next_ticks.get(&id) {
                 player.set_ticks_since_broadcast(*ticks);
+            }
+            if let Some(state) = next_broadcast_state.get(&id) {
+                player.set_broadcast_state(*state);
             }
         }
     }

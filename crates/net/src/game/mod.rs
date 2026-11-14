@@ -41,8 +41,9 @@ mod test_support;
 mod tests;
 
 pub use entities::{
-    byte_angle, pitch_byte, relative_delta, view_radius, EntityMotion, EntityMove, EntityRemove,
-    EntitySpawn, EntityStateUpdate, StreamEntities, BLOCKS_PER_CHUNK, PLAYER_ENTITY_TYPE,
+    byte_angle, pitch_byte, relative_delta, state_flags, view_radius, EntityMotion, EntityMove,
+    EntityRemove, EntitySpawn, EntityStateUpdate, StreamEntities, BLOCKS_PER_CHUNK,
+    PLAYER_ENTITY_TYPE,
 };
 pub use grid::{chunk_of_position, RegionGrid, CHUNK_SIZE};
 pub use messages::{

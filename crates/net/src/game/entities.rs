@@ -207,17 +207,29 @@ pub struct StreamEntities {
     pub moves: Vec<EntityMove>,
 }
 
-/// A metadata-state transition of one entity.
+/// Entity metadata flags of a confirmed sneak/sprint state.
 ///
-/// The struct carries the state only; the encoder that turns it into
-/// `set_entity_data` arrives with the trace that pins its payload.
+/// The value is the OR of the two bits the S5 trace shows separately (sneak
+/// `0x02`, sprint `0x08`). The combination `0x0a` is formula-derived: a
+/// simultaneously sneaking and sprinting player was not observed.
+// SOURCE: owner's S5 trace, transition metadata payloads.
+pub fn state_flags(sneak: bool, sprint: bool) -> u8 {
+    (if sneak { 0x02 } else { 0 }) | if sprint { 0x08 } else { 0 }
+}
+
+/// A traced sneak/sprint metadata transition for a survival player.
+///
+/// Combined flag values such as `0x0a` are the OR of confirmed bits but the
+/// combination is not confirmed by trace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EntityStateUpdate {
     /// Entity id.
     pub id: PlayerId,
-    /// Metadata flags of the new state.
+    /// OR of the trace-confirmed metadata flags: sneak `0x02`, sprint `0x08`.
+    /// The combined value `0x0a` is formula-derived; a combined sneak+sprint
+    /// state was not observed in the trace.
     pub flags: u8,
-    /// Sprint transition, which also changes the sprinting attribute.
+    /// Sprint transition, which also changes the traced sprinting attribute.
     pub sprinting: Option<bool>,
 }
 
@@ -300,6 +312,8 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
     let mut baseline: Vec<Option<PlayerPos>> = Vec::new();
     let mut ticks: Vec<u32> = Vec::new();
     let mut game_mode: Vec<i32> = Vec::new();
+    let mut state: Vec<(bool, bool)> = Vec::new();
+    let mut broadcast_state: Vec<Option<(bool, bool)>> = Vec::new();
     let mut before: Vec<Vec<PlayerId>> = Vec::new();
     let mut index: BTreeMap<PlayerId, usize> = BTreeMap::new();
     for (region_index, region) in regions.iter().enumerate() {
@@ -316,6 +330,8 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
             baseline.push(player.last_broadcast());
             ticks.push(player.ticks_since_broadcast());
             game_mode.push(player.game_mode());
+            state.push((player.sneak(), player.sprint()));
+            broadcast_state.push(player.broadcast_state());
             before.push(player.visible().keys().copied().collect());
         }
     }
@@ -346,6 +362,7 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
     // position).
     let mut motion: Vec<Option<EntityMotion>> = vec![None; ids.len()];
     let mut next_baseline = baseline.clone();
+    let mut next_broadcast_state = broadcast_state.clone();
     let mut next_ticks: Vec<u32> = ticks.clone();
     for &subject in &sorted {
         let counter = ticks[subject].saturating_add(1);
@@ -377,6 +394,7 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
         let now = &target[i];
         let old = &before[i];
         let mut spawn = Vec::new();
+        let mut states = Vec::new();
         let mut remove = Vec::new();
         let mut moves = Vec::new();
         let (mut n, mut o) = (0usize, 0usize);
@@ -385,6 +403,20 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
             let old_id = old.get(o).copied();
             match (now_id, old_id) {
                 (Some(left), Some(right)) if left == right => {
+                    let subject = now[n];
+                    if game_mode[subject] == 0 {
+                        if let Some(previous) = broadcast_state[subject] {
+                            if previous != state[subject] {
+                                states.push(EntityStateUpdate {
+                                    id: left,
+                                    flags: state_flags(state[subject].0, state[subject].1),
+                                    sprinting: (previous.1 != state[subject].1)
+                                        .then_some(state[subject].1),
+                                });
+                                next_broadcast_state[subject] = Some(state[subject]);
+                            }
+                        }
+                    }
                     // Still visible: a move only if the subject moved.
                     if let Some(motion) = motion[now[n]] {
                         moves.push(EntityMove {
@@ -403,6 +435,7 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
                     spawn_delta[i].push((left, record.uuid));
                     spawn.push(record);
                     next_baseline[j] = Some(position[j]);
+                    next_broadcast_state[j] = Some(state[j]);
                     next_ticks[j] = 0;
                     n += 1;
                 }
@@ -426,6 +459,7 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
                     spawn_delta[i].push((ids[j], record.uuid));
                     spawn.push(record);
                     next_baseline[j] = Some(position[j]);
+                    next_broadcast_state[j] = Some(state[j]);
                     next_ticks[j] = 0;
                     n += 1;
                 }
@@ -446,7 +480,7 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
                 (None, None) => break,
             }
         }
-        if spawn.is_empty() && remove.is_empty() && moves.is_empty() {
+        if spawn.is_empty() && states.is_empty() && remove.is_empty() && moves.is_empty() {
             continue;
         }
         events.push(StreamEntities {
@@ -456,15 +490,15 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
             // sorts it after them inside the region (see `TickOutcome`).
             seq: u32::MAX,
             spawn,
-            states: Vec::new(),
+            states,
             remove,
             moves,
         });
     }
 
-    // Write the new visible sets back in place: drop the gone entries, add the
-    // newly visible ones with the UUIDs read at spawn time. Stable entries are
-    // left untouched, so no map is rebuilt per tick.
+    // Write the new visible sets and observer-state baselines back in place:
+    // drop gone entries, add newly visible UUIDs, and record only transitions
+    // queued above. Stable entries are left untouched.
     for region in regions.iter_mut() {
         let region_ids: Vec<PlayerId> = region.player_ids().collect();
         for id in region_ids {
@@ -483,6 +517,7 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
             }
             player.set_last_broadcast(next_baseline[i]);
             player.set_ticks_since_broadcast(next_ticks[i]);
+            player.set_broadcast_state(next_broadcast_state[i]);
         }
     }
     events

@@ -133,6 +133,10 @@ pub struct Player {
     sneak: bool,
     /// Whether the player is sprinting (M4.5 step 8). Same source as `sneak`.
     sprint: bool,
+    /// The sneak/sprint state currently represented in each viewer's metadata.
+    /// `None` means no observer state has been sent yet; whether an already
+    /// sneaking/sprinting spawn carries these flags is not established by trace.
+    broadcast_state: Option<(bool, bool)>,
     /// `punch` (swing) events not yet consumed by a broadcast (M4.5 step 8).
     /// The encoders that will send `animate` come with the vanilla traces;
     /// until then the count is state only.
@@ -159,6 +163,7 @@ impl Player {
             ticks_since_broadcast: 0,
             sneak: false,
             sprint: false,
+            broadcast_state: None,
             swings: 0,
             connection: join.connection,
         }
@@ -266,6 +271,16 @@ impl Player {
     /// Whether the player is sprinting (M4.5 step 8).
     pub fn sprint(&self) -> bool {
         self.sprint
+    }
+
+    /// State flags last sent to observers, if initialized by a spawn.
+    pub(crate) fn broadcast_state(&self) -> Option<(bool, bool)> {
+        self.broadcast_state
+    }
+
+    /// Updates the observer-state baseline after the visibility pass.
+    pub(crate) fn set_broadcast_state(&mut self, state: Option<(bool, bool)>) {
+        self.broadcast_state = state;
     }
 
     /// Swing events not yet consumed by a broadcast (M4.5 step 8).

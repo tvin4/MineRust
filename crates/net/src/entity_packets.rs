@@ -116,7 +116,6 @@ pub fn push_spawn(
         // The posed-player trace (S1b) pins the tail: the angles are the
         // stored pose quantised to the vanilla byte angle, in the order
         // `data`, `pitch`, `yaw`, `head yaw`, `trailing`.
-        // SOURCE: vanilla test-client trace 26.3 (S1b, B's join window).
         pitch: pitch_byte(entity.position.pitch) as u8,
         yaw: byte_angle(entity.position.yaw),
         head_yaw: byte_angle(entity.position.head_yaw),
@@ -291,11 +290,13 @@ pub fn push_remove(
     Ok(())
 }
 
-/// Pushes one entity metadata transition (`set_entity_data`).
+/// Pushes one traced sneak/sprint state transition.
 ///
-/// The payload is `entity id`, `index 0`, `type 0`, `flags`, `0xff`; it is
-/// the shape every traced transition shares.
-// SOURCE: owner's S5 trace, B observer connection (set_entity_data rows).
+/// The metadata payload is exact for entity ids that fit the observed one-byte
+/// VarInt. Sprint transitions additionally carry the traced `sprinting`
+/// attribute. Its registry key/value/modifier are copied from the user's S5
+/// trace; other attribute transitions or game modes are not handled here.
+// SOURCE: E:\\MineRust-data\\autotests\\stage10-s5-vanilla-sprint-forward-2026-11-14\\mcproxy\\proxy-conn-2.jsonl (seq 4029/4030/6958/6959); registry names from the user's reports/packets.json.
 fn push_state_update(
     update: &EntityStateUpdate,
     out: &mut Vec<(PacketKey, Vec<u8>)>,
@@ -307,6 +308,23 @@ fn push_state_update(
     metadata.write_u8(update.flags);
     metadata.write_u8(0xff);
     out.push((SetEntityData::KEY, metadata.into_bytes()));
+
+    if let Some(sprinting) = update.sprinting {
+        let mut attributes = PacketWriter::new();
+        attributes.write_varint(update.id);
+        attributes.write_varint(1);
+        attributes.write_varint(26);
+        attributes.write_f64(f64::from(0.1_f32));
+        if sprinting {
+            attributes.write_varint(1);
+            attributes.write_string("minecraft:sprinting", 32767)?;
+            attributes.write_f64(f64::from(0.3_f32));
+            attributes.write_u8(2);
+        } else {
+            attributes.write_varint(0);
+        }
+        out.push((UpdateAttributes::KEY, attributes.into_bytes()));
+    }
     Ok(())
 }
 
@@ -321,6 +339,14 @@ pub fn push_entity_stream(
     for entity in spawn {
         push_spawn(entity, out)?;
     }
+    // Sprint transitions are ordered against the subject's own movement in the
+    // S5 trace: `entity_position_sync` (4028) then metadata (4029) then the
+    // sprint attribute (4030), and `move_entity_pos` (6957) then metadata
+    // (6958) then the attribute (6959). The sneak packets (2217/3326) have no
+    // movement of the same entity around them — the neighbours belong to
+    // other entities — so sneak-vs-movement order is not established; the
+    // sprint-confirmed order is used for every transition.
+    // SOURCE: owner's S5 trace, B observer connection.
     for moved in moves {
         push_motion(moved, out)?;
     }
@@ -413,6 +439,63 @@ mod tests {
         push_remove(&remove, &mut out).expect("encodable");
         let keys: Vec<PacketKey> = out.iter().map(|(key, _)| *key).collect();
         assert_eq!(keys, vec![RemoveEntities::KEY]);
+    }
+
+    /// Each S5 metadata transition is byte-exact, including the sprint
+    /// attribute packet and its ordering immediately after metadata.
+    // SOURCE: E:\\MineRust-data\\autotests\\stage10-s5-vanilla-sprint-forward-2026-11-14, B observer trace; packet ids from reports/packets.json.
+    #[test]
+    fn sneak_and_sprint_transitions_match_the_vanilla_s5_payloads() {
+        let cases = [
+            (0x02, None, "21 00 00 02 ff", None),
+            (0x00, None, "21 00 00 00 ff", None),
+            (
+                0x08,
+                Some(true),
+                "21 00 00 08 ff",
+                Some("21 01 1a 3f b9 99 99 a0 00 00 00 01 13 6d 69 6e 65 63 72 61 66 74 3a 73 70 72 69 6e 74 69 6e 67 3f d3 33 33 40 00 00 00 02"),
+            ),
+            (
+                0x00,
+                Some(false),
+                "21 00 00 00 ff",
+                Some("21 01 1a 3f b9 99 99 a0 00 00 00 00"),
+            ),
+        ];
+        for (flags, sprinting, metadata_hex, attributes_hex) in cases {
+            let update = EntityStateUpdate {
+                id: 0x21,
+                flags,
+                sprinting,
+            };
+            let mut packets = Vec::new();
+            push_state_update(&update, &mut packets).expect("encodable");
+            assert_eq!(packets[0].0.name, "minecraft:set_entity_data");
+            assert_eq!(
+                packets[0].1,
+                parse_hex(metadata_hex),
+                "metadata bytes for flags {flags:#04x}"
+            );
+            match attributes_hex {
+                Some(expected) => {
+                    assert_eq!(packets.len(), 2, "sprint transition has attribute update");
+                    assert_eq!(packets[1].0.name, "minecraft:update_attributes");
+                    assert_eq!(packets[1].1, parse_hex(expected));
+                }
+                None => assert_eq!(packets.len(), 1, "sneak transition has metadata only"),
+            }
+        }
+
+        // Combination not confirmed by trace: only the OR formula is checked.
+        let combined_flags = 0x02 | 0x08;
+        assert_eq!(combined_flags, 0x0a, "combination not confirmed by trace");
+    }
+
+    fn parse_hex(value: &str) -> Vec<u8> {
+        value
+            .split_whitespace()
+            .map(|byte| u8::from_str_radix(byte, 16).expect("valid test hex"))
+            .collect()
     }
 
     /// The motion kinds map to the traced packets: a relative position to
