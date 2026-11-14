@@ -1,15 +1,13 @@
 package dev.minerust.testclient;
 
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.List;
-
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Options;
 import net.minecraft.client.input.MouseButtonInfo;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.component.SwingAnimation;
+
+import java.util.concurrent.CompletableFuture;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -32,10 +30,6 @@ import com.google.gson.JsonObject;
  * hand-swing path a real attack uses.
  */
 final class InputCommands {
-	/** Delayed actions: key taps complete over several client ticks. */
-	private record Scheduled(int dueTick, Runnable action) {
-	}
-
 	/** Client tick rate (50 ms per tick); used to convert hold_ms to ticks. */
 	private static final int MS_PER_TICK = 50;
 
@@ -44,31 +38,17 @@ final class InputCommands {
 	private static final int GLFW_PRESS = 1;
 
 	private final Minecraft minecraft;
-	/** One-based tick counter, incremented once per client tick. */
-	private int tickCount;
-	private final List<Scheduled> scheduled = new ArrayList<>();
+	private final TickQueue ticks;
 
-	InputCommands(Minecraft minecraft) {
+	InputCommands(Minecraft minecraft, TickQueue ticks) {
 		this.minecraft = minecraft;
-	}
-
-	/** Client-thread pump: executes due tap completions. Called every tick. */
-	void tick() {
-		tickCount++;
-		Iterator<Scheduled> it = scheduled.iterator();
-		while (it.hasNext()) {
-			Scheduled task = it.next();
-			if (task.dueTick() <= tickCount) {
-				it.remove();
-				task.action().run();
-			}
-		}
+		this.ticks = ticks;
 	}
 
 	/** Registers the input commands on the dispatcher. */
 	void register(CommandDispatcher dispatcher) {
-		dispatcher.register("look", this::look);
-		dispatcher.register("key", this::key);
+		dispatcher.register("look", args -> CompletableFuture.completedFuture(look(args)));
+		dispatcher.register("key", args -> CompletableFuture.completedFuture(key(args)));
 	}
 
 	/**
@@ -138,7 +118,7 @@ final class InputCommands {
 
 	private void scheduleTapUp(String key, long holdMs) {
 		int delay = Math.max(1, (int) (holdMs / MS_PER_TICK));
-		scheduled.add(new Scheduled(tickCount + delay, () -> setDown(key, false)));
+		ticks.schedule(delay, () -> setDown(key, false));
 	}
 
 	private void setDown(String key, boolean down) {
@@ -158,11 +138,10 @@ final class InputCommands {
 
 	/**
 	 * Presses, releases or taps the attack/use binding through the client's
-	 * key-binding path (owner variant 2). Default. {@code path: "mouse"}
-	 * switches to the GLFW mouse callback path (MouseHandler.onButton) -
-	 * kept for comparison: with all observe gates open (window active, mouse
-	 * grabbed, no screen, crosshair on a block) it produced no serverbound
-	 * packets at all.
+	 * key-binding path. This is the accepted attack path (owner decision,
+	 * stage B3) and the only one scenarios use. {@code path: "mouse"} is a
+	 * diagnostic-only alternative ({@code MouseHandler.onButton}); it
+	 * produces no serverbound packets and is never used by scenarios.
 	 */
 	private void heldMouse(KeyMapping mapping, String action, long holdMs, String path) {
 		if ("mouse".equals(path)) {
@@ -172,7 +151,7 @@ final class InputCommands {
 		if ("tap".equals(action)) {
 			mappingDown(mapping, true);
 			int delay = Math.max(1, (int) (Math.max(holdMs, 100) / MS_PER_TICK));
-			scheduled.add(new Scheduled(tickCount + delay, () -> mappingDown(mapping, false)));
+			ticks.schedule(delay, () -> mappingDown(mapping, false));
 			return;
 		}
 		if (!"down".equals(action) && !"up".equals(action)) {
@@ -198,7 +177,7 @@ final class InputCommands {
 		if ("tap".equals(action)) {
 			mouseButton(button, GLFW_PRESS);
 			int delay = Math.max(1, (int) (100 / MS_PER_TICK));
-			scheduled.add(new Scheduled(tickCount + delay, () -> mouseButton(button, GLFW_RELEASE)));
+			ticks.schedule(delay, () -> mouseButton(button, GLFW_RELEASE));
 			return;
 		}
 		if (!"down".equals(action) && !"up".equals(action)) {

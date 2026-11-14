@@ -25,15 +25,17 @@ public class TestClientMod implements ClientModInitializer {
 	public void onInitializeClient() {
 		CommandDispatcher dispatcher = new CommandDispatcher();
 		Minecraft minecraft = Minecraft.getInstance();
-		InputCommands input = new InputCommands(minecraft);
+		TickQueue ticks = new TickQueue();
+		InputCommands input = new InputCommands(minecraft, ticks);
 		input.register(dispatcher);
 		new ObserveCommand(minecraft).register(dispatcher);
+		new SessionCommands(minecraft, ticks).register(dispatcher);
 		int port = Integer.getInteger("testclient.port", DEFAULT_PORT);
 		new ControlServer(port, dispatcher).start();
 		ClientTickEvents.END_CLIENT_TICK.register(client -> {
-			input.tick();
+			ticks.tick();
 			dispatcher.tick();
 		});
-		LOGGER.info("testclient mod loaded (stage B3: input-path commands)");
+		LOGGER.info("testclient mod loaded (stage B4: session commands)");
 	}
 }

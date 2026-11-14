@@ -127,14 +127,36 @@ Fabric loader + fabric-api берутся с официального maven.fabr
   `punch`, id 46, и `player_action`, id 41, при копании — подтверждено);
   `swing` — `player.swing(MAIN_HAND, SwingAnimation.DEFAULT, broadcast)`
   (сам по себе 46 не даёт; используется как часть сценария).
-  Для `attack`/`use` есть диагностический `path:"mouse"` — старый путь
-  `MouseHandler.onButton`, оставлен для сравнения: он не производит ни 41,
-  ни 46 (см. «Диагностика входа атаки»).
+  Путь `path:"mouse"` (`MouseHandler.onButton`) — **только диагностический,
+  сценариями не используется** (решение владельца, Б4): он не производит ни
+  41, ни 46. Для S3: взмах в воздух и удержание на блоке различаются по
+  трейсу (удержание даёт много 46 — факт и порядок пакетов, количество не
+  считается).
 - `observe` — снимок состояния: позиция, yaw/pitch, режим игры, версия,
   maxMemory, `windowActive`, `mouseGrabbed`, `paused`, `keyAttackDown`,
   `keyUseDown`, тип цели прицела (`MISS`/`BLOCK`/`ENTITY`) и блок под
   прицелом. `screen == null` в 26.3 публичного API не имеет — факт
   «экран открыт» заменён эквивалентом `mouseGrabbed == false`.
+
+**Команды этапа Б4** (сессия):
+
+- `wait {ms}` — ответ приходит после `ms` реальных клиентских тиков
+  (мир продолжает тикать; клиентский тред никогда не блокируется).
+  Таймаут сокета поднимается автоматически (мс + 3 с).
+- `disconnect` — `Minecraft.disconnectFromWorld(Component)` (путь кнопки
+  Disconnect): сервер сразу видит чистый `Disconnected`. Альтернатива
+  `disconnectWithSavingScreen` (попытка 1) обнуляет игрока, но оставляет
+  соединение до keepalive-таймаута — не используется.
+- `command {text}` — чат-команда через `ClientPacketListener.sendCommand`
+  (путь экрана чата); ответ сервера приходит как chat, не в ответе.
+- `screenshot {name?}` — `Screenshot.takeScreenshot` (путь F2) пишет
+  `<gameDir>/screenshots/<name>.png` и возвращает путь + факт файла.
+- `connect` — **заблокирован** (две попытки исчерпаны, вопрос владельцу):
+  `ConnectScreen.startConnecting` с parent=null молчит вовсе; с
+  parent=экран сохранения стартует «Connecting…», но логина не происходит.
+  В 26.3 у `Minecraft` нет публичного метода подключения. До решения
+  владельца сценарии используют запуск клиента сразу подключённым
+  (`launch-fabric-client.ps1`, quickPlay).
 
 **Диагностика входа атаки (Б3, решение владельца: сначала факты).**
 Факты `observe` до/во время/после атаки: при пустом приёме
@@ -156,6 +178,9 @@ Fabric loader + fabric-api берутся с официального maven.fabr
   команда ping) готов, приёмка пройдена; B3 (команды ввода) готов,
   приёмка пройдена трейсом mcproxy: serverbound `player_input` (43) при
   hold движения, `punch` (46) при атаке в воздух, `player_action` (41) +
-  `punch` (46) при копании блока; B4 (connect/disconnect/wait/command/
-  screenshot/observe-расширения) и B5 (полная приёмка этапа Б) — в работе.
+  `punch` (46) при копании блока; B4 (wait/disconnect/command/screenshot)
+  готов, приёмка пройдена (wait 1540 ms на 1500, screenshot пишет файл,
+  disconnect → чистый `Disconnected` в логе сервера, command уходит);
+  `connect` заблокирован (2 попытки, вопрос владельцу); B5 (полная приёмка
+  этапа Б) — после решения по connect.
 - Этап В (оркестратор/сценарии), Г (автотрейсы) — следуют.

@@ -22,4 +22,11 @@ final class Json {
 		}
 		return args.get(name).getAsDouble();
 	}
+
+	/** Reads an optional number member with a default. */
+	static long optLong(JsonObject args, String name, long fallback) {
+		return args.has(name) && args.get(name).isJsonPrimitive() && args.get(name).getAsJsonPrimitive().isNumber()
+				? args.get(name).getAsLong()
+				: fallback;
+	}
 }

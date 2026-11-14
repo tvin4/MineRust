@@ -5,6 +5,8 @@ import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 
+import java.util.concurrent.CompletableFuture;
+
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
@@ -28,7 +30,15 @@ final class ObserveCommand {
 
 	/** Registers the {@code observe} command on the dispatcher. */
 	void register(CommandDispatcher dispatcher) {
-		dispatcher.register("observe", args -> snapshot());
+		dispatcher.register("observe", args -> {
+			try {
+				return CompletableFuture.completedFuture(snapshot());
+			} catch (Exception error) {
+				CompletableFuture<JsonElement> failed = new CompletableFuture<>();
+				failed.completeExceptionally(error);
+				return failed;
+			}
+		});
 	}
 
 	private JsonElement snapshot() throws Exception {
