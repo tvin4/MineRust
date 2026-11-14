@@ -65,7 +65,41 @@ tools\testclient\client.bat Bob 127.0.0.1:25565
 мода — не коммитятся (см. `.gitignore`). В репозитории только скрипты,
 исходники мода, README и JSON-сценарии.
 
+## Состав (Этап Б, мод)
+
+Каталог `mod/` — Fabric-мод, который превращает клиент 26.3 в управляемый
+тестовый клиент (JSON-команды по локальному сокету). Исходники мода в репо;
+jar-сборка, кэш Gradle/Loom и run-каталоги — нет.
+
+| Файл | Что делает |
+|---|---|
+| `mod/build.gradle`, `settings.gradle`, `gradle.properties` | каркас Loom по официальным версиям Fabric (см. ниже) |
+| `mod/src/main/resources/fabric.mod.json` | манифест мода (`id=testclient`, entrypoint `client`) |
+| `mod/src/main/java/dev/minerust/testclient/` | код мода (B1 — скелет, B2+ — сокет и команды) |
+
+**Версии (все — официальные источники Fabric/Mojang, проверены 14.11.2026):**
+Minecraft `26.3`, fabric-loader `0.20.1` (meta.fabricmc.net/v2/versions/*),
+fabric-loom `1.19.4` (maven.fabricmc.net), Fabric API `0.166.2+26.3`
+(maven.fabricmc.net), Gradle `9.9.1` (services.gradle.org, SHA256 сверен),
+Java 25 (JDK Adoptium 25.0.4 — совместим с runtime клиента 25.0.1).
+
+**Сборка** (из каталога `mod/`, Gradle-дистрибутив и кэш — на E:):
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-25.0.4.7-hotspot'
+$env:GRADLE_USER_HOME = 'E:\MineRust-data\gradle-home'
+& 'E:\MineRust-data\gradle-dist\gradle-9.9.1\bin\gradle.bat' build
+```
+
+Артефакт: `mod/build/libs/testclient-mod-<версия>.jar`. Loom скачивает
+Minecraft и библиотеки только с официальных серверов Mojang/Fabric
+(piston, launcher.mojang.com, maven.fabricmc.net).
+
 ## Статус
 
-- Этап А (батники): готов, приёмка — см. отчёт Шага 9.
-- Этап Б (Fabric-мод), В (оркестратор/сценарии), Г (автотрейсы) — следуют.
+- Этап А (батники): готов, приёмка пройдена (оба клиента на ванили 25566
+  через mcproxy 25565, `-Xms512M -Xmx2048M`).
+- Этап Б (Fabric-мод): B1 (каркас Loom + сборка) готов; B2–B5 (сокет,
+  команды ввода через клиентский путь → serverbound id 43/46, приёмка) —
+  в работе.
+- Этап В (оркестратор/сценарии), Г (автотрейсы) — следуют.

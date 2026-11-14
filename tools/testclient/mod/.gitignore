@@ -1,0 +1,6 @@
+# Gradle/Loom build artifacts (never committed: no jars, no caches).
+build/
+.gradle/
+run/
+out/
+*.log

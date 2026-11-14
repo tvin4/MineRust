@@ -1,0 +1,22 @@
+{
+	"schemaVersion": 1,
+	"id": "testclient",
+	"version": "${version}",
+	"name": "MineRust Test Client Mod",
+	"description": "Drives a vanilla 26.3 client as a test client over a local socket (MineRust step 9). Control socket binds to 127.0.0.1 only.",
+	"authors": [
+		"MineRust"
+	],
+	"environment": "*",
+	"entrypoints": {
+		"client": [
+			"dev.minerust.testclient.TestClientMod"
+		]
+	},
+	"depends": {
+		"fabricloader": ">=0.20.1",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}
