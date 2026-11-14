@@ -75,7 +75,7 @@ jar-сборка, кэш Gradle/Loom и run-каталоги — нет.
 |---|---|
 | `mod/build.gradle`, `settings.gradle`, `gradle.properties` | каркас Loom по официальным версиям Fabric (см. ниже) |
 | `mod/src/main/resources/fabric.mod.json` | манифест мода (`id=testclient`, entrypoint `client`) |
-| `mod/src/main/java/dev/minerust/testclient/` | код мода (B1 — скелет, B2+ — сокет и команды) |
+| `mod/src/main/java/dev/minerust/testclient/` | код мода: `TestClientMod` (entrypoint), `ControlServer` (JSON-сокет 127.0.0.1), `CommandDispatcher` (команды на клиентском тике) |
 
 **Версии (все — официальные источники Fabric/Mojang, проверены 14.11.2026):**
 Minecraft `26.3`, fabric-loader `0.20.1` (meta.fabricmc.net/v2/versions/*),
@@ -95,11 +95,27 @@ $env:GRADLE_USER_HOME = 'E:\MineRust-data\gradle-home'
 Minecraft и библиотеки только с официальных серверов Mojang/Fabric
 (piston, launcher.mojang.com, maven.fabricmc.net).
 
+**Запуск Fabric-клиента** (мод + сокет, команды — newline-delimited JSON):
+
+```powershell
+& tools\testclient\launch-fabric-client.ps1 -Nick Alice -Address 127.0.0.1:25565 -ControlPort 25571
+```
+
+Протокол сокета: запрос `{"id":1,"cmd":"ping","args":{}}` (по строке),
+ответ `{"id":1,"ok":true,"result":{...}}` либо `{"id":1,"ok":false,"error":"..."}`.
+Сокет слушает только `127.0.0.1`, по умолчанию порт `25571`
+(переопределяется `-Dtestclient.port`). Мод ставится в `<gameDir>/mods`,
+Fabric loader + fabric-api берутся с официального maven.fabricmc.net
+(SHA1 сверяется) и кэшируются в `E:\MineRust-data\testclient-libs`.
+Профиль клиента — официальный JSON Fabric
+(`meta.fabricmc.net/v2/versions/loader/26.3/0.20.1/profile/json`).
+
 ## Статус
 
 - Этап А (батники): готов, приёмка пройдена (оба клиента на ванили 25566
   через mcproxy 25565, `-Xms512M -Xmx2048M`).
-- Этап Б (Fabric-мод): B1 (каркас Loom + сборка) готов; B2–B5 (сокет,
-  команды ввода через клиентский путь → serverbound id 43/46, приёмка) —
-  в работе.
+- Этап Б (Fabric-мод): B1 (каркас Loom + сборка) готов; B2 (JSON-сокет
+  127.0.0.1, команда ping) готов, приёмка пройдена (мод загрузился, сокет
+  отвечает, Alice вошла в игру); B3–B5 (команды ввода через клиентский путь
+  → serverbound id 43/46, приёмка) — в работе.
 - Этап В (оркестратор/сценарии), Г (автотрейсы) — следуют.

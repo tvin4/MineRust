@@ -267,6 +267,7 @@ foreach ($a in $meta.arguments.game) { Expand-Node $a $gameArgs }
 return @{
     JavaExe    = $JavaExe
     MainClass  = [string]$meta.mainClass
+    Classpath  = ($classpath -join ';')
     JvmArgs    = $jvmArgs
     GameArgs   = $gameArgs
     GameDir    = $gameDir
