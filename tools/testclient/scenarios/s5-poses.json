@@ -1,0 +1,13 @@
+{
+  "id": "s5",
+  "title": "sneak and sprint flags: player_input vs set_entity_data seen by B (stage 10, encoder B)",
+  "playerA": "Alice",
+  "playerB": "Bob",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "poses": [
+    { "name": "sneak", "key": "shift", "holdMs": 1500 },
+    { "name": "sprint-forward", "key": "sprint", "alsoKey": "up", "holdMs": 2500 }
+  ],
+  "notes": "A holds each pose key (shift / sprint) long enough for several ticks, then releases. Facts come from the traces: serverbound player_input flags around the hold in A's trace vs clientbound set_entity_data for A's entity id in B's trace (index, type, value). Counts are never asserted."
+}

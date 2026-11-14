@@ -1647,8 +1647,41 @@ warnings`, `cargo test --workspace` — зелёные.
   до разбора аргументов (сервер вообще не стартовал); guard-тест
   `crates/server/tests/entrypoint.rs` (сначала падал, теперь зелёный).
 
+## Шаг 10: ванильные трейсы позы и состояний сущностей (14.11.2026)
+
+Текущий незакоммиченный этап. D (плавание) и playerdata остаются долгами; изменения
+этого шага не коммитить до отдельного подтверждения.
+
+| Сценарий | До | После / факты |
+|---|---|---|
+| S1b — углы при входе наблюдателя (A) | `add_entity` использовал нулевые углы | Vanilla B payload завершает spawn хвостом `00 40 45 45 00` (data/pitch/yaw/head-yaw/trailing); encoder A берёт сохранённые углы. Побайтный тест есть; vanilla S1b `2026-11-14_1831` (`… 00 40 45 45 00`), локальный S1b `2026-11-14_s1b-ours-final` (`… 00 10 f5 f5 00`, yaw/pitch A на момент входа) — оба зелёные. |
+| S5 — sneak/sprint (B) | Ввод применялся в состоянии игрока, observer metadata не отправлялась; сценарий проверял только наличие | Vanilla B для entity `0x21`: sneak on/off `21 00 00 02 ff` / `21 00 00 00 ff`; sprint on/off `21 00 00 08 ff` / `21 00 00 00 ff`. Sprint дополнительно требует атрибутов: on `21 01 1a 3f b9 99 99 a0 00 00 00 01 13 6d 69 6e 65 63 72 61 66 74 3a 73 70 72 69 6e 74 69 6e 67 3f d3 33 33 40 00 00 00 02`, off `21 01 1a 3f b9 99 99 a0 00 00 00 00`. Encoder и тесты добавлены; S5 усилен точными значениями/порядком. Live run на нашем сервере зелёный: `E:\MineRust-data\autotests\2026-11-14_s5-ours3` — metadata `01 00 00 02 ff`, `01 00 00 00 ff`, `01 00 00 08 ff`, `01 00 00 00 ff` (seq 659/825/925/1230), sprint attribute `01 01 1a …` сразу после metadata (seq 926/1231), move (1229) перед metadata в sprint-off. |
+| S3 — swing (C) | `drain_swings` не подключён | B получил 11 пакетов `swing_animation` (id 123, clientbound), все побайтно `8a 08 00 01 06` — VarInt entity id A = `8a 08` (1034), затем `00 01 06` (смысл трёх хвостовых байт **не установлен**). A послал 22 `punch` (46) и 2 `player_action` (41); A получил 0 swing (рассылка идёт только наблюдателям). 3 swing до первого action, 8 после; 6 из 11 идут двумя тройками сразу после `block_destruction` (seq 4919 → 4920/4921/4922 и 5092 → 5094/5095/5096), остальные — по одному после чанк-батчей. Связь punch→swing не один-к-одному, C остановлен без encoder. |
+| S6 — `player_action` 41 | Причина отсутствия пакета неизвестна | Vanilla S6: miss, survival; клиент не видел блок под прицелом, потому 41 не послал. |
+
+Packet IDs (все — из пользовательского `E:\MineRust-data\reports\packets.json`, `play`): `swing_animation` clientbound 123, `punch` serverbound 46, `player_action` serverbound 41, `update_attributes` clientbound 134, `set_entity_data` clientbound 101.
+
+**Пункт 0b (углы `add_entity` при входе наблюдателя) — закрыт.** Хвост пакета ванильного B: `… 00 40 45 45 00` = `data=0`, `pitch=0x40` (90°), `yaw=0x45`, `head_yaw=0x45`, `trailing=0`. Наш сервер теперь кодирует `pitch/yaw/head_yaw` из сохранённой `PlayerPos` (квантование `pitch_byte`/`byte_angle`), тест `spawn_carries_the_stored_pose_angles` сравнивает payload побайтно с ванильным S1b. Live S1b на нашем сервере: B видит yaw=-15.47°, pitch=22.5° (поза A на момент входа), проверка PASS.
+
+Для B в S5 есть только отдельные sneak и sprint переходы. Формула flags — OR подтверждённых битов `0x02` и `0x08`; комбинация `0x0a` помечена «комбинация не подтверждена трейсом». Не обобщать на другие game modes. Сценарий с уже приседающим/бегущим игроком при входе наблюдателя не найден: add_entity/set_entity_data с такими spawn-флагами — **не установлено**, encoder ничего не угадывает. Обычные movement packets остаются в своём потоке. Порядок подтверждён только для sprint и только относительно движения той же сущности: `entity_position_sync` (4028) → metadata (4029) → attribute (4030), и `move_entity_pos` (6957) → metadata (6958) → attribute (6959). У sneak соседние пакеты принадлежат другим сущностям (`set_entity_motion` 2218 и `move_entity_pos_rot` 2219 — entity `0x40`; `move_entity_pos` 3327 — entity 129), поэтому **порядок sneak относительно собственного движения трейсом не установлен**; encoder применяет подтверждённый sprint-порядок (движение перед metadata) ко всем переходам. Live run на нашем сервере подтвердил тот же порядок: sprint-off move 1229 → metadata 1230 → attribute 1231. См. ванильный S5 `E:\\MineRust-data\\autotests\\stage10-s5-vanilla-sprint-forward-2026-11-14\\mcproxy\\proxy-conn-2.jsonl`.
+
+Источники A: `E:\\MineRust-data\\autotests\\2026-11-14_1831\\mcproxy\\proxy-conn-2.jsonl` (vanilla) и `E:\\MineRust-data\\autotests\\2026-11-14_s1b-ours-final\\mcproxy\\proxy-conn-2.jsonl` (ours). Источники C: S3 `E:\\MineRust-data\\autotests\\2026-11-14_1644\\mcproxy\\proxy-conn-6.jsonl` (A) и `proxy-conn-7.jsonl` (B). Перекрёстное сопоставление времён A/B не делается: отсчёты connection независимы.
+
+Gate шага 10 (на момент отчёта): `cargo fmt --all -- --check` — чисто; `cargo clippy --workspace --all-targets -- -D warnings` — чисто; `cargo test --workspace` — всё зелёное (в т.ч. 125 unit в `net`, 131 в `protocol`). Live: S5 `2026-11-14_s5-ours3` 4/4 PASS, S1b `2026-11-14_s1b-ours-final` PASS.
+
+### Сценарии до/после
+
+| Сценарий | До | После изменений |
+|---|---|---|
+| S1b | углы AddEntity не передавались | A закодирован; побайтный unit test и сохранённые vanilla/ours traces зелёные |
+| S5 | факт наличия общих metadata пакетов | точные payloads `02 → 00 → 08 → 00`, sprint attribute payloads и относительный порядок проверяются; live run `2026-11-14_s5-ours3` зелёный (4/4 check) |
+| S3 | vanilla swings были только диагностикой, ours не передавал их | факты дополнены; C не кодируется из-за неоднозначности частоты/связи |
+| S6 | диагностика причины отсутствующего 41 | confirmed: crosshair miss в survival |
+
 ## Блокеры
 
+- **Шаг 10 C:** punch→swing не детерминирован один-к-одному на S3 (22 punch, 11 swing); правила drain/aggregation и удержания на блоке не установлены. Нужны новые подтверждённые трейсы/семантика перед реализацией.
+- **Шаг 10 B live acceptance:** закрыт. Усиленный S5 (`-Target ours`, run `2026-11-14_s5-ours3`) дал 4/4 PASS: `player_input` `20 00 01 41 01 00`, metadata `02 → 00 → 08 → 00`, sprint-on/off attribute payloads. Попутно исправлен сам сценарий: ожидаемые attribute payloads теперь строятся от runtime entity id (раньше были жёстко с ванильным `21`), а сообщение проверки не использовало неподдерживаемый в PS 5.1 `if`-expression.
 - **Решения владельца по остаткам (в) Шага 6.3** (п. 1–4 выше): нормализовать
   ли порядок `update_attributes`; принять ли эвристику `entity_position_sync`;
   какое правило `rotate_head` (C2 и C4 противоречат); мириться ли с джиттером

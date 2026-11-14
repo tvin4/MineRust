@@ -18,7 +18,7 @@
 # The stand is always torn down in finally (own vanilla/mcproxy/clients).
 [CmdletBinding()]
 param(
-	[string[]]$Scenarios = @('s1', 's2', 's3', 's4'),
+	[string[]]$Scenarios = @('s1', 's1b', 's2', 's3', 's4', 's5'),
 	[string]$RunDir = '',
 	[ValidateSet('vanilla', 'ours')]
 	[string]$Target = 'vanilla',
@@ -235,6 +235,44 @@ function Invoke-S1 {
 			$(if ($traceHit) { 'hit' } else { 'miss' }), $saved.yaw, $saved.pitch)
 }
 
+# --- S1b: observer joins while A is already turned (stage 10, encoder A) ----
+# A enters, turns (west, down), taps movement and stands still; only then B
+# enters. Check: B sees A with non-zero yaw/pitch within 500 ms of B's entry.
+# The vanilla reference gives the join-packet bytes (add_entity angles, head
+# yaw, packet order); our run is expected red until encoder A lands.
+function Invoke-S1b {
+	param($Cfg, $Result)
+	$portA = [int]$Cfg.controlPortA
+	$portB = [int]$Cfg.controlPortB
+	$nickA = [string]$Cfg.playerA
+	$nickB = [string]$Cfg.playerB
+
+	$watermark = Get-Date
+	$null = Start-Client $nickA $portA $watermark
+	$null = Invoke-TestCmd $portA (New-LookCmd 's1b-turn' $Cfg.turn.dx $Cfg.turn.dy)
+	$null = Invoke-TestCmd $portA (New-KeyCmd 's1b-tap' 'up' 'tap')
+	Start-Sleep -Milliseconds 500
+	$posed = (Invoke-TestCmd $portA (New-ObserveCmd 's1b-posed')).result.rot
+	# A stands still from here on; B joins and looks at A at once.
+	$null = Start-Client $nickB $portB (Get-Date).AddSeconds(-5)
+	$limit = [int]$Cfg.bCheckLimitMs
+	$poll = [int]$Cfg.bCheckPollMs
+	$seen = $null
+	$deadline = (Get-Date).AddMilliseconds($limit)
+	while ((Get-Date) -lt $deadline) {
+		$seen = (Invoke-TestCmd $portB (New-ObserveCmd 's1b-obs' $nickA)).result
+		if ($seen.found -and $seen.rot.yaw -ne 0 -and $seen.rot.pitch -ne 0) { break }
+		Start-Sleep -Milliseconds $poll
+	}
+	$nonZero = ($seen -and $seen.found -and $seen.rot.yaw -ne 0 -and $seen.rot.pitch -ne 0)
+	Add-Check $Result 'B sees non-zero yaw/pitch of A within 500 ms of entry' $nonZero `
+		("observed yaw={0} pitch={1} found={2} (A posed yaw={3} pitch={4})" -f `
+			$seen.rot.yaw, $seen.rot.pitch, $seen.found, $posed.yaw, $posed.pitch)
+	$null = Invoke-TestCmd $portA (New-SessionCmd 's1b-off' 'disconnect')
+	$null = Invoke-TestCmd $portB (New-SessionCmd 's1b-offb' 'disconnect')
+	Start-Sleep -Seconds 3
+}
+
 # --- S2: angle deltas reach the server and the other client ----------------
 function Invoke-S2 {
 	param($Cfg, $Result)
@@ -351,6 +389,152 @@ function Invoke-S3 {
 		("clientbound swing_animation/animate rows in B's trace ({0}): {1}" -f $bTrace.Name, $bSwings)
 }
 
+# --- S5: sneak and sprint flags seen by B (stage 10, encoder B reference) ---
+# A holds shift / sprint, then releases. Facts come from the traces: the
+# serverbound player_input flags in A's trace vs the clientbound
+# set_entity_data rows for A's entity id in B's trace (index, type, value).
+# S5 asserts the trace-confirmed state payloads and the sprint attribute order.
+function Invoke-S5 {
+	param($Cfg, $Result)
+	$portA = [int]$Cfg.controlPortA
+	$portB = [int]$Cfg.controlPortB
+	$nickA = [string]$Cfg.playerA
+	$nickB = [string]$Cfg.playerB
+
+	$watermark = Get-Date
+	$launchA = Start-Client $nickA $portA $watermark
+	$null = Start-Client $nickB $portB $watermark
+	foreach ($pose in $Cfg.poses) {
+		if ($pose.alsoKey) {
+			$null = Invoke-TestCmd $portA (New-KeyCmd ('s5-' + $pose.name + '-also-on') $pose.alsoKey 'down')
+		}
+		$null = Invoke-TestCmd $portA (New-KeyCmd ('s5-' + $pose.name + '-on') $pose.key 'down')
+		Start-Sleep -Milliseconds ([int]$pose.holdMs)
+		$null = Invoke-TestCmd $portA (New-KeyCmd ('s5-' + $pose.name + '-off') $pose.key 'up')
+		if ($pose.alsoKey) {
+			$null = Invoke-TestCmd $portA (New-KeyCmd ('s5-' + $pose.name + '-also-off') $pose.alsoKey 'up')
+		}
+		Start-Sleep -Milliseconds 800
+	}
+	$null = Invoke-TestCmd $portA (New-SessionCmd 's5-off' 'disconnect')
+	$null = Invoke-TestCmd $portB (New-SessionCmd 's5-offb' 'disconnect')
+	Start-Sleep -Seconds 3
+
+	$traces = Get-NewTraceFiles $traceDir $watermark
+	$aTrace = $traces | Select-Object -First 1
+	$bTrace = $traces | Select-Object -Skip 1 | Select-Object -First 1
+	if (-not $aTrace -or -not $bTrace) {
+		Add-Check $Result 'S5 has A and B traces' $false ("A={0}; B={1}" -f $aTrace, $bTrace)
+		return
+	}
+	$aRows = Read-Trace $aTrace.FullName
+	$bRows = Read-Trace $bTrace.FullName
+	$inputFlags = @($aRows | Where-Object { $_.dir -eq 'serverbound' -and $_.name -eq 'minecraft:player_input' } |
+		ForEach-Object { $payload = ConvertFrom-TraceB64 $_.b64; if ($payload.Length) { [int]$payload[0] } })
+	$expectedInputs = @(0x20, 0x00, 0x01, 0x41, 0x01, 0x00)
+	$inputMatch = $inputFlags.Count -ge $expectedInputs.Count
+	if ($inputMatch) {
+		for ($i = 0; $i -lt $expectedInputs.Count; $i++) {
+			if ($inputFlags[$i] -ne $expectedInputs[$i]) { $inputMatch = $false; break }
+		}
+	}
+	Add-Check $Result 'A sends trace-confirmed player_input flags 20 00 01 41 01 00' $inputMatch `
+		("player_input flags: {0}" -f (($inputFlags | ForEach-Object { '{0:x2}' -f $_ }) -join ' '))
+
+	# Resolve A's entity id from the AddEntity UUID in B's own trace so the
+	# scenario also works against our server, whose runtime ids differ.
+	$uuidBytes = ([guid]::Parse($launchA.uuid)).ToByteArray()
+	$spawn = $bRows | Where-Object {
+		if ($_.dir -ne 'clientbound' -or $_.name -ne 'minecraft:add_entity') { return $false }
+		$payload = ConvertFrom-TraceB64 $_.b64
+		if ($payload.Length -lt 17) { return $false }
+		for ($i = 0; $i -lt 16; $i++) { if ($payload[$i + 1] -ne $uuidBytes[$i]) { return $false } }
+		return $true
+	} | Select-Object -First 1
+	$entityId = $null
+	if ($spawn) { $spawnPayload = ConvertFrom-TraceB64 $spawn.b64; if ($spawnPayload[0] -lt 0x80) { $entityId = [int]$spawnPayload[0] } }
+	if ($null -eq $entityId) {
+		Add-Check $Result 'S5 resolves A entity id from B add_entity' $false 'missing spawn or entity id is not a one-byte VarInt'
+		return
+	}
+
+	$metadata = @($bRows | Where-Object {
+		if ($_.dir -ne 'clientbound' -or $_.name -ne 'minecraft:set_entity_data') { return $false }
+		$p = ConvertFrom-TraceB64 $_.b64
+		$p.Length -eq 5 -and $p[0] -eq $entityId -and $p[1] -eq 0 -and $p[2] -eq 0 -and $p[4] -eq 0xff
+	} | ForEach-Object { $p = ConvertFrom-TraceB64 $_.b64; [PSCustomObject]@{ seq=[int]$_.seq; flags=[int]$p[3]; hex=[BitConverter]::ToString($p).Replace('-', ' ').ToLowerInvariant() } })
+	$expectedFlags = @(0x02, 0x00, 0x08, 0x00)
+	$found = @()
+	$cursor = 0
+	foreach ($expected in $expectedFlags) {
+		$match = $null
+		for ($i = $cursor; $i -lt $metadata.Count; $i++) {
+			if ($metadata[$i].flags -eq $expected) { $match = $metadata[$i]; $cursor = $i + 1; break }
+		}
+		$found += ,$match
+	}
+	$stateMatch = $found.Count -eq 4 -and @($found | Where-Object { $null -eq $_ }).Count -eq 0
+	Add-Check $Result 'B receives exact metadata flags 02 00 08 00 in order' $stateMatch `
+		("entity={0}; seq/hex: {1}" -f $entityId, (($found | ForEach-Object { if ($_){ "$($_.seq)/$($_.hex)" } }) -join ', '))
+
+	$attributes = @($bRows | Where-Object {
+		if ($_.dir -ne 'clientbound' -or $_.name -ne 'minecraft:update_attributes') { return $false }
+		$p = ConvertFrom-TraceB64 $_.b64
+		$p.Length -ge 3 -and $p[0] -eq $entityId -and $p[1] -eq 1 -and $p[2] -eq 0x1a
+	} | ForEach-Object { $p = ConvertFrom-TraceB64 $_.b64; [PSCustomObject]@{seq=[int]$_.seq; hex=[BitConverter]::ToString($p).Replace('-', ' ').ToLowerInvariant(); sprint=([Text.Encoding]::ASCII.GetString($p).Contains('minecraft:sprinting'))} })
+	$onAttribute = $null
+	$offAttribute = $null
+	if ($stateMatch) {
+		$onAttribute = $attributes | Where-Object { $_.seq -gt $found[2].seq -and $_.sprint } | Select-Object -First 1
+		$offAttribute = $attributes | Where-Object { $_.seq -gt $found[3].seq -and -not $_.sprint } | Select-Object -First 1
+	}
+	# The attribute payload's head is the entity's runtime id (a one-byte
+	# VarInt here); the rest is the traced vanilla payload of the sprinting
+	# attribute (S5 trace: 21 01 1a ...).
+	$onHex = ('{0:x2} ' -f $entityId) + '01 1a 3f b9 99 99 a0 00 00 00 01 13 6d 69 6e 65 63 72 61 66 74 3a 73 70 72 69 6e 74 69 6e 67 3f d3 33 33 40 00 00 00 02'
+	$offHex = ('{0:x2} ' -f $entityId) + '01 1a 3f b9 99 99 a0 00 00 00 00'
+	$onPass = $null -ne $onAttribute -and $onAttribute.hex -eq $onHex -and $onAttribute.seq -gt $found[2].seq
+	$offPass = $null -ne $offAttribute -and $offAttribute.hex -eq $offHex -and $offAttribute.seq -gt $found[3].seq
+	$onDetail = 'missing'
+	if ($onAttribute) { $onDetail = "seq=$($onAttribute.seq) hex=$($onAttribute.hex)" }
+	$offDetail = 'missing'
+	if ($offAttribute) { $offDetail = "seq=$($offAttribute.seq) hex=$($offAttribute.hex)" }
+	Add-Check $Result 'Sprint-on attribute payload follows flags 08' $onPass $onDetail
+	Add-Check $Result 'Sprint-off attribute payload follows flags 00' $offPass $offDetail
+}
+
+# --- S6: dig probe (stage 10, subtask 0d, facts only) ----------------------
+# A looks down, snapshots observe (hitType, gameMode, block under crosshair),
+# holds attack, snapshots again. The facts explain why no player_action (41)
+# is sent on our server: crosshair miss, wrong game mode or cooldown. No check
+# asserts a dig outcome.
+function Invoke-S6 {
+	param($Cfg, $Result)
+	$portA = [int]$Cfg.controlPortA
+	$nickA = [string]$Cfg.playerA
+
+	$watermark = Get-Date
+	$null = Start-Client $nickA $portA $watermark
+	$null = Invoke-TestCmd $portA (New-LookCmd 's6-look' $Cfg.lookDown.dx $Cfg.lookDown.dy)
+	$null = Invoke-TestCmd $portA (New-KeyCmd 's6-tap' 'up' 'tap')
+	Start-Sleep -Milliseconds 500
+	$before = (Invoke-TestCmd $portA (New-ObserveCmd 's6-before')).result
+	$null = Invoke-TestCmd $portA (New-KeyCmd 's6-attack-on' 'attack' 'down')
+	Start-Sleep -Milliseconds ([int]$Cfg.attackHoldMs)
+	$during = (Invoke-TestCmd $portA (New-ObserveCmd 's6-during')).result
+	$null = Invoke-TestCmd $portA (New-KeyCmd 's6-attack-off' 'attack' 'up')
+	$null = Invoke-TestCmd $portA (New-SessionCmd 's6-off' 'disconnect')
+	Start-Sleep -Seconds 3
+
+	$fmt = {
+		param($o)
+		'hitType={0} gameMode={1} block=({2},{3},{4}) crosshairEntity={5}' -f `
+			$o.hitType, $o.gameMode, $o.block.x, $o.block.y, $o.block.z, $o.crosshairEntity
+	}
+	Add-Check $Result 'dig probe facts captured (before attack)' ($null -ne $before) (& $fmt $before)
+	Add-Check $Result 'dig probe facts captured (during attack)' ($null -ne $during) (& $fmt $during)
+}
+
 # --- S4: game mode changes are visible to the other client -----------------
 function Invoke-S4 {
 	param($Cfg, $Result)
@@ -413,9 +597,12 @@ try {
 		Start-Sleep -Seconds 2
 		switch ($cfg.id) {
 			's1' { Invoke-S1 $cfg $result }
+			's1b' { Invoke-S1b $cfg $result }
 			's2' { Invoke-S2 $cfg $result }
 			's3' { Invoke-S3 $cfg $result }
 			's4' { Invoke-S4 $cfg $result }
+			's5' { Invoke-S5 $cfg $result }
+			's6' { Invoke-S6 $cfg $result }
 			default { throw "unknown scenario '$($cfg.id)'" }
 		}
 		Stop-ClientByName $cfg.playerA

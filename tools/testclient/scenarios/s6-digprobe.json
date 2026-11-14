@@ -1,0 +1,11 @@
+{
+  "id": "s6",
+  "title": "dig probe: why no player_action (41) on attack - observe facts only (stage 10, subtask 0d)",
+  "playerA": "Alice",
+  "playerB": "Bob",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "lookDown": { "dx": 0, "dy": 150 },
+  "attackHoldMs": 2500,
+  "notes": "A enters, looks down at the block under its feet, snapshots observe (hitType, gameMode, block under crosshair), holds attack for attackHoldMs, snapshots observe again, releases. Facts only: no check asserts a dig outcome. Purpose: find why the client sends no player_action (41) on our server - crosshair miss, wrong game mode or client-side cooldown."
+}

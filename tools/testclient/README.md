@@ -236,7 +236,7 @@ self-`observe` (`inGame`), а не по логу ванили.
 |---|---|---|
 | 32 `move_player_rot` (S2: 3, S3: 2) | `store_move` → тик `apply_move` | **углы доходят**: 3 clientbound `move_entity_rot` (57) у B, дельты yaw/pitch сходятся (6/6, ошибка ≤ 0.7° — квантование 1.40625°) |
 | 31 `move_player_pos_rot` (0) / 30 `move_player_pos` | `store_move` → `apply_move` | поза доходит: `entity_position_sync` (35) при прыжках за пределы delta-кодирования; B видит координаты A |
-| 43 `player_input` (S2: 6, S3: 0) | `store_input` → `apply_input` | флаги в состоянии игрока; отдельного видимого эффекта у B нет |
+| 43 `player_input` (S2: 6, S3: 0) | `store_input` → `apply_input` | флаги в состоянии игрока; с шага 10 подтверждённые переходы sneak/sprint дают B `set_entity_data` (101) `02 → 00 → 08 → 00` + `update_attributes` (134) для sprint (S5, `01 00 00 02 ff` …) |
 | 46 `punch` (S3: 4) | `store_swing` → тик `record_swings` | **взмах невидим**: clientbound `swing_animation` (123) / `animate` у B — 0 (броадкаст не подключён: `drain_swings` не вызывается) |
 | 1 `attack` (S3: 4) | игнорируется (default-ветка) | нет эффекта |
 | 41 `player_action` (S3: **0**) | — | **копание не стартует**: на ванили удержание на блоке даёт `player_action` ×4 + `punch` ×19, у нас — только `attack`(1) + `punch`(46); клиент не считает это копанием (SOURCE: наблюдение, причина не установлена — чанки присланы, 473 `level_chunk_with_light`) |
@@ -260,6 +260,8 @@ self-`observe` (`inGame`), а не по логу ванили.
    Решение о персистентности — за планом M-этапов.
 2. **Броадкаст взмахов** (S3 check 3): `record_swings` копит взмахи, но `drain_swings`
    никуда не подключён — `animate`/`swing_animation` наблюдателям не уходит.
+   Ваниль на S3 прислала B 11 `swing_animation` (`8a 08 00 01 06`) на 22 `punch`,
+   поэтому связь punch→swing не один-к-одному (шаг 10 C, см. `docs/PROGRESS.md`).
 3. **`player_action` (копание)** (S3 check 2): клиент вообще не прислал 41 —
    удержание на блоке не считается копанием (причина не установлена; чанки
    присланы, копать не по чему или состояние блока не позволяет).
