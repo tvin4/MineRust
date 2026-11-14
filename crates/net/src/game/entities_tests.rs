@@ -26,9 +26,14 @@ fn pose(x: f64, z: f64, yaw: f32, pitch: f32) -> PlayerPos {
 
 /// One region with a confirmed player at each `(id, spawn)`.
 fn region_with(players: &[(PlayerId, (i32, i32, i32))]) -> Region {
+    region_with_mode(players, 0)
+}
+
+fn region_with_mode(players: &[(PlayerId, (i32, i32, i32))], game_mode: i32) -> Region {
     let mut region = Region::new(SINGLE_REGION);
     for (id, spawn) in players {
-        let (join, _slot, _receiver) = join_at(*id, *spawn);
+        let (mut join, _slot, _receiver) = join_at(*id, *spawn);
+        join.game_mode = game_mode;
         region.insert(join);
     }
     region
@@ -168,6 +173,10 @@ fn traced_sneak_and_sprint_state_changes_are_streamed_to_observers() {
         1
     );
 
+    assert_state_transitions(&mut regions);
+}
+
+fn assert_state_transitions(mut regions: &mut [Region]) {
     let transitions = [
         (PlayerInput::SNEAK, 0x02, None),
         (0, 0x00, None),
@@ -188,6 +197,19 @@ fn traced_sneak_and_sprint_state_changes_are_streamed_to_observers() {
     // observed transition or mode.
     let combined_flags = 0x02 | 0x08;
     assert_eq!(combined_flags, 0x0a, "combination not confirmed by trace");
+}
+
+// SOURCE: E:\\MineRust-data\\autotests\\2026-11-14_s5-creative-retry, creative A input and B observer metadata/attribute trace.
+#[test]
+fn traced_sneak_and_sprint_state_changes_are_streamed_for_creative_players() {
+    let mut regions = vec![region_with_mode(&[(1, (0, 64, 0)), (2, (50, 64, 0))], 1)];
+    let initial = visibility_pass(&mut regions);
+    assert_eq!(
+        event_of(&initial, 2).expect("initial visibility").spawn[0].id,
+        1
+    );
+
+    assert_state_transitions(&mut regions);
 }
 
 #[test]

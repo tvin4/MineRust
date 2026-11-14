@@ -146,7 +146,7 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
                 next_baseline.insert(id, Some(position[&id]));
                 next_broadcast_state.insert(id, Some(state[&id]));
                 next_ticks.insert(id, 0);
-            } else if game_mode[&id] == 0 {
+            } else if matches!(game_mode[&id], 0 | 1) {
                 if let Some(previous) = broadcast_state[&id] {
                     if previous != state[&id] {
                         states.push(EntityStateUpdate {

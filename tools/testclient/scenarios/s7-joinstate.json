@@ -1,0 +1,14 @@
+{
+  "id": "s7",
+  "title": "observer joins while A holds sneak or sprint (vanilla facts only)",
+  "playerA": "Alice",
+  "playerB": "Bob",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "safeSpawn": { "x": 96.5, "y": 145.0, "z": -31.5, "precheck": "must pass runtime observe block collision and onGround checks before input" },
+  "poses": [
+    { "name": "held-sneak", "key": "shift", "holdMs": 1500 },
+    { "name": "held-sprint", "key": "sprint", "holdMs": 1500, "alsoKey": "up" }
+  ],
+  "notes": "Separate fresh A/B joins. A holds one pose before B joins. Record A player_input and B add_entity plus nearby entity metadata/attributes. Facts only: do not infer spawn-state semantics from missing packets."
+}

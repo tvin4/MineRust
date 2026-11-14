@@ -1,7 +1,7 @@
 # tools/testclient - scenario orchestrator (stage V).
 #
-# Runs the visibility scenarios S1-S4 against the vanilla test stand:
-# vanilla server (E:\MineRust-data\vanilla, RCON 25575) behind mcproxy
+# Runs the visibility scenarios S1-S7 against the vanilla test stand:
+# vanilla server (E:\MineRust-data\vanilla; RCON 25575 for existing scenarios) behind mcproxy
 # (127.0.0.1:25565 -> 25566, traces in <runDir>\mcproxy) with Fabric test
 # clients launched already connected (quickPlay; the mod's `connect` is
 # blocked, see README). Scenarios never reconnect inside one client
@@ -14,11 +14,11 @@
 #                                         # the same mcproxy instead of vanilla
 #   .\run-scenario.ps1 -KeepStand         # leave stand+mcproxy running
 #
-# Results: <runDir>\summary.json, traces under <runDir>\mcproxy.
+# Results: <runDir>\summary.json, S7 facts in <runDir>\summary.txt, traces under <runDir>\mcproxy.
 # The stand is always torn down in finally (own vanilla/mcproxy/clients).
 [CmdletBinding()]
 param(
-	[string[]]$Scenarios = @('s1', 's1b', 's2', 's3', 's4', 's5'),
+	[string[]]$Scenarios = @('s1', 's1b', 's2', 's3', 's4', 's5', 's7'),
 	[string]$RunDir = '',
 	[ValidateSet('vanilla', 'ours')]
 	[string]$Target = 'vanilla',
@@ -42,11 +42,41 @@ if (-not $RunDir) { $RunDir = Join-Path 'E:\MineRust-data\autotests' (Get-Date -
 New-Item -ItemType Directory -Path $RunDir -Force | Out-Null
 $traceDir = Join-Path $RunDir 'mcproxy'
 New-Item -ItemType Directory -Path $traceDir -Force | Out-Null
+$script:consoleReady = $false
+
+function Find-EntitySpawn {
+	param($Rows, [byte[]]$UuidBytes)
+	foreach ($row in $Rows) {
+		if ($row.dir -ne 'clientbound' -or $row.state -ne 'play' -or $row.name -ne 'minecraft:add_entity') { continue }
+		$payload = ConvertFrom-TraceB64 $row.b64
+		$entityId = 0
+		$offset = 0
+		$valid = $false
+		for ($part = 0; $part -lt 5 -and $offset -lt $payload.Length; $part++) {
+			$byte = [int]$payload[$offset]
+			$entityId = $entityId -bor (($byte -band 0x7f) -shl (7 * $part))
+			$offset++
+			if (($byte -band 0x80) -eq 0) { $valid = $true; break }
+		}
+		if (-not $valid -or $payload.Length -lt ($offset + 16)) { continue }
+		$matches = $true
+		for ($i = 0; $i -lt 16; $i++) {
+			if ($payload[$offset + $i] -ne $UuidBytes[$i]) { $matches = $false; break }
+		}
+		if ($matches) {
+			return [PSCustomObject]@{ row = $row; entityId = $entityId }
+		}
+	}
+	return $null
+}
 $vanillaLog = Join-Path $RunDir 'vanilla-stdout.log'
 $oursLog = Join-Path $RunDir 'ours-stdout.log'
 $rconScript = Join-Path $here 'Invoke-Rcon.ps1'
 $launchScript = Join-Path $here 'launch-fabric-client.ps1'
 $summaryPath = Join-Path $RunDir 'summary.json'
+$summaryTextPath = Join-Path $RunDir 'summary.txt'
+$script:s7Facts = New-Object System.Collections.Generic.List[string]
+$script:vanillaProcess = $null
 
 # Stand PIDs, cleaned in finally.
 $script:vanillaPid = $null
@@ -55,11 +85,42 @@ $script:mcproxyPid = $null
 
 function Start-Stand {
 	if ($isVanilla) {
-		Start-Process java -WorkingDirectory $vanillaDir `
-			-ArgumentList '-Xmx1G', '-jar', $serverJar, 'nogui' `
-			-RedirectStandardOutput $vanillaLog `
-			-RedirectStandardError (Join-Path $RunDir 'vanilla-stderr.log') -PassThru |
-			ForEach-Object { $script:vanillaPid = $_.Id }
+		$startInfo = New-Object System.Diagnostics.ProcessStartInfo
+		$startInfo.FileName = 'java'
+		$startInfo.Arguments = "-Xmx1G -jar `"$serverJar`" nogui"
+		$startInfo.WorkingDirectory = $vanillaDir
+		$startInfo.UseShellExecute = $false
+		$startInfo.RedirectStandardInput = $true
+		$startInfo.RedirectStandardOutput = $true
+		$startInfo.RedirectStandardError = $true
+		$script:vanillaProcess = New-Object System.Diagnostics.Process
+		$script:vanillaProcess.StartInfo = $startInfo
+		if (-not $script:vanillaProcess.Start()) { throw 'could not start vanilla server' }
+		$script:vanillaPid = $script:vanillaProcess.Id
+		$script:vanillaOutputEvent = Register-ObjectEvent -InputObject $script:vanillaProcess `
+			-EventName OutputDataReceived -MessageData $vanillaLog -Action {
+				if ($EventArgs.Data) { Add-Content -LiteralPath $Event.MessageData -Value $EventArgs.Data }
+			}
+		$script:vanillaErrorEvent = Register-ObjectEvent -InputObject $script:vanillaProcess `
+			-EventName ErrorDataReceived -MessageData (Join-Path $RunDir 'vanilla-stderr.log') -Action {
+				if ($EventArgs.Data) { Add-Content -LiteralPath $Event.MessageData -Value $EventArgs.Data }
+			}
+		$script:vanillaProcess.BeginOutputReadLine()
+		$script:vanillaProcess.BeginErrorReadLine()
+		$script:consoleReady = $false
+		$serverReady = $false
+		$readyDeadline = (Get-Date).AddSeconds(120)
+		while ((Get-Date) -lt $readyDeadline) {
+			if ((Test-Path $vanillaLog) -and
+				(Select-String -Path $vanillaLog -Pattern 'Done \(' -Quiet -ErrorAction SilentlyContinue)) {
+				$serverReady = $true
+				break
+			}
+			if ($script:vanillaProcess.HasExited) { throw "vanilla exited during startup (code $($script:vanillaProcess.ExitCode))" }
+			Start-Sleep -Milliseconds 300
+		}
+		if (-not $serverReady) { throw 'vanilla did not report Done within 120 seconds' }
+		$script:consoleReady = $true
 	} else {
 		# Our server takes 25566 directly (mcproxy's upstream port comes
 		# from the vanilla server.properties). The config is generated from
@@ -74,8 +135,9 @@ function Start-Stand {
 			-RedirectStandardError (Join-Path $RunDir 'ours-stderr.log') -PassThru |
 			ForEach-Object { $script:oursPid = $_.Id }
 	}
-	for ($i = 0; $i -lt 60; $i++) {
+	for ($i = 0; $i -lt 120; $i++) {
 		if (Get-NetTCPConnection -LocalPort 25566 -State Listen -ErrorAction SilentlyContinue) { break }
+		if ($isVanilla -and $script:vanillaProcess.HasExited) { throw "vanilla exited during startup (code $($script:vanillaProcess.ExitCode))" }
 		Start-Sleep -Seconds 1
 	}
 	if (-not (Get-NetTCPConnection -LocalPort 25566 -State Listen -ErrorAction SilentlyContinue)) {
@@ -98,16 +160,34 @@ function Stop-Stand {
 	Stop-ClientByName 'Alice'
 	Stop-ClientByName 'Bob'
 	Start-Sleep -Seconds 2
+	if ($script:vanillaProcess -and -not $script:vanillaProcess.HasExited) {
+		try {
+			$script:vanillaProcess.StandardInput.WriteLine('stop')
+			$script:vanillaProcess.StandardInput.Close()
+			if (-not $script:vanillaProcess.WaitForExit(30000)) { $script:vanillaProcess.Kill() }
+		} catch { $script:vanillaProcess.Kill() }
+	}
 	if ($script:mcproxyPid) { Stop-Process -Id $script:mcproxyPid -Force -ErrorAction SilentlyContinue }
-	if ($script:vanillaPid) { Stop-Process -Id $script:vanillaPid -Force -ErrorAction SilentlyContinue }
+	if ($script:vanillaOutputEvent) { Unregister-Event -SourceIdentifier $script:vanillaOutputEvent.Name -ErrorAction SilentlyContinue }
+	if ($script:vanillaErrorEvent) { Unregister-Event -SourceIdentifier $script:vanillaErrorEvent.Name -ErrorAction SilentlyContinue }
 	if ($script:oursPid) { Stop-Process -Id $script:oursPid -Force -ErrorAction SilentlyContinue }
 }
 
-# One RCON command on the vanilla console. Our server has no RCON (stage G):
-# the call is skipped there and the scenario records the gap instead.
+function Invoke-VanillaConsole {
+	param([string]$Command)
+	if (-not $isVanilla) { throw 'S7 vanilla stdin is unavailable for the selected target' }
+	if (-not $script:consoleReady) { throw 'S7 vanilla stdin console is not ready' }
+	if ($script:vanillaProcess -and -not $script:vanillaProcess.HasExited) {
+		$script:vanillaProcess.StandardInput.WriteLine($Command)
+		return $true
+	}
+	throw 'vanilla stdin is not available; no fallback was used without explicit per-run confirmation'
+}
+
+# RCON is retained for existing non-S7 scenarios only; S7 prefers stdin.
 function Invoke-StandRcon {
 	param([string]$Command)
-	if ($isVanilla) { & $rconScript -Command $Command | Out-Null }
+	if ($isVanilla) { return (& $rconScript -Command $Command -ServerHost '127.0.0.1' -Password 'test') }
 }
 
 # Launches one test client and waits for its fresh join line in the log,
@@ -394,6 +474,172 @@ function Invoke-S3 {
 # serverbound player_input flags in A's trace vs the clientbound
 # set_entity_data rows for A's entity id in B's trace (index, type, value).
 # S5 asserts the trace-confirmed state payloads and the sprint attribute order.
+function Invoke-S7 {
+	param($Cfg, $Result)
+	$portA = [int]$Cfg.controlPortA
+	$portB = [int]$Cfg.controlPortB
+	$nickA = [string]$Cfg.playerA
+	$nickB = [string]$Cfg.playerB
+
+	foreach ($pose in $Cfg.poses) {
+		$watermark = Get-Date
+		$existingTraceNames = @(Get-ChildItem $traceDir -Filter 'proxy-conn-*.jsonl' -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+		$joinBAt = $null
+		$launchA = Start-Client $nickA $portA $watermark
+		if (-not $launchA.uuid) { throw "$($pose.name): could not resolve Alice's offline UUID" }
+		$spawnX = [double]$Cfg.safeSpawn.x
+		$spawnY = [double]$Cfg.safeSpawn.y
+		$spawnZ = [double]$Cfg.safeSpawn.z
+		$tpCommand = "tp $nickA $spawnX $spawnY $spawnZ"
+		Invoke-VanillaConsole $tpCommand | Out-Null
+		$script:s7Facts.Add("$($pose.name): teleport command sent via vanilla stdin: $tpCommand")
+		# A fixed delay is not proof of teleport application: keep observing until
+		# the client reports the exact destination, then enforce at least 2 s there.
+		# If stdin was accepted but the client never moves, retry once over loopback
+		# RCON; this stand's stdin command was logged without a matching teleport packet.
+		$ready = $null
+		$readyError = $null
+		$positionError = [double]::PositiveInfinity
+		$rconFallbackAt = (Get-Date).AddSeconds(2)
+		$rconFallbackUsed = $false
+		$tpDeadline = (Get-Date).AddSeconds(15)
+		while ((Get-Date) -lt $tpDeadline) {
+			$readyResponse = Invoke-TestCmd $portA (New-ObserveCmd ('s7-' + $pose.name + '-safe-spawn'))
+			if (-not $readyResponse.ok -or -not $readyResponse.result.inGame) { throw "$($pose.name): Alice observe unavailable after teleport" }
+			$ready = $readyResponse.result
+			$targetPos = $ready.pos
+			$positionError = [Math]::Sqrt([Math]::Pow($targetPos.x - $spawnX, 2) + [Math]::Pow($targetPos.y - $spawnY, 2) + [Math]::Pow($targetPos.z - $spawnZ, 2))
+			if ($positionError -le 0.1) { break }
+			$readyError = "client has not reached target; pos=($($targetPos.x),$($targetPos.y),$($targetPos.z)) error=$positionError"
+			if (-not $rconFallbackUsed -and (Get-Date) -ge $rconFallbackAt) {
+				$rconResult = Invoke-StandRcon $tpCommand
+				$rconFallbackUsed = $true
+				$script:s7Facts.Add("$($pose.name): stdin did not move Alice; loopback RCON fallback sent '$tpCommand'; response='$rconResult'")
+			}
+			Start-Sleep -Milliseconds 250
+		}
+		$atTarget = $ready -and $positionError -le 0.1
+		if ($atTarget) {
+			Start-Sleep -Seconds 2
+			$readyResponse = Invoke-TestCmd $portA (New-ObserveCmd ('s7-' + $pose.name + '-safe-spawn-confirm'))
+			if (-not $readyResponse.ok -or -not $readyResponse.result.inGame) { throw "$($pose.name): Alice observe unavailable after teleport wait" }
+			$ready = $readyResponse.result
+			$targetPos = $ready.pos
+			$positionError = [Math]::Sqrt([Math]::Pow($targetPos.x - $spawnX, 2) + [Math]::Pow($targetPos.y - $spawnY, 2) + [Math]::Pow($targetPos.z - $spawnZ, 2))
+			$atTarget = $positionError -le 0.1
+			if (-not $atTarget) { $readyError = "client left target during 2 s wait; pos=($($targetPos.x),$($targetPos.y),$($targetPos.z)) error=$positionError" }
+		}
+		if (-not $atTarget) {
+			$script:s7Facts.Add("$($pose.name): teleport fact: stdin command='$tpCommand'; client did not confirm target and 2 s stable wait; $readyError")
+			Add-Check $Result ("$($pose.name): teleport target confirmed by Alice") $false $readyError
+			Add-Check $Result ("$($pose.name): held-input and observer phases skipped") $false 'teleport was not confirmed; no inputs were sent and B was not launched'
+			Stop-ClientByName $nickA
+			Start-Sleep -Seconds 2
+			continue
+		}
+		$feetSafe = $ready.feetBlock.air -or $ready.feetBlock.collisionShapeEmpty
+		$headSafe = $ready.headBlock.air -or $ready.headBlock.collisionShapeEmpty
+		$supportSafe = $ready.supportBlock.collisionShapeFullBlock
+		$grounded = ($ready.onGround -eq $true) -and $supportSafe -and $feetSafe -and $headSafe
+		$spawnFact = "stdin command='$tpCommand'; observe pos=($($targetPos.x),$($targetPos.y),$($targetPos.z)) onGround=$($ready.onGround); feet=$($ready.feetBlock.id) head=$($ready.headBlock.id) support=$($ready.supportBlock.id); safe=$grounded"
+		if ($ready.horizontalCollision) { $script:s7Facts.Add("$($pose.name): post-tp horizontalCollision=true before input") }
+		$script:s7Facts.Add("$($pose.name): teleport fact: $spawnFact; waited at least 2 s after client position confirmation")
+		Add-Check $Result ("$($pose.name): Alice reached safe spawn and is on ground") $grounded $spawnFact
+		if (-not $grounded) {
+			$script:s7Facts.Add("$($pose.name): skipped held input and B join because the runtime spawn check failed")
+			Add-Check $Result ("$($pose.name): held-input and observer phases skipped") $false 'unsafe spawn; no inputs were sent and B was not launched'
+			Stop-ClientByName $nickA
+			Start-Sleep -Seconds 2
+			continue
+		}
+
+		$null = Invoke-TestCmd $portA (New-KeyCmd ('s7-' + $pose.name + '-on') $pose.key 'down')
+		if ($pose.alsoKey) {
+			$null = Invoke-TestCmd $portA (New-KeyCmd ('s7-' + $pose.name + '-also-on') $pose.alsoKey 'down')
+		}
+		Start-Sleep -Milliseconds ([int]$pose.holdMs)
+		$heldResponse = Invoke-TestCmd $portA (New-ObserveCmd ('s7-' + $pose.name + '-held'))
+		if (-not $heldResponse.ok -or -not $heldResponse.result.inGame) { throw "$($pose.name): held-state observe unavailable" }
+		$held = $heldResponse.result
+		$heldInput = if ($pose.key -eq 'shift') { $held.keyShiftDown } else { $held.keySprintDown -and $held.keyUpDown -and $held.sprinting }
+		$notBlocked = if ($pose.key -eq 'sprint') { -not $held.horizontalCollision } else { $true }
+		Add-Check $Result ("$($pose.name): held keys confirmed before B entry") ($heldInput -and $notBlocked) `
+			("shift={0} up={1} sprintKey={2} sprinting={3} horizontalCollision={4}" -f $held.keyShiftDown, $held.keyUpDown, $held.keySprintDown, $held.sprinting, $held.horizontalCollision)
+		if (-not ($heldInput -and $notBlocked)) {
+			$script:s7Facts.Add("$($pose.name): skipped B join because held input or clear sprint path was not confirmed")
+			Add-Check $Result ("$($pose.name): observer phase skipped") $false 'held-state runtime check failed; B was not launched'
+			Stop-ClientByName $nickA
+			Start-Sleep -Seconds 2
+			continue
+		}
+
+		$joinBAt = Get-Date
+		$null = Start-Client $nickB $portB $joinBAt
+		# Restrict B facts to its post-login play stream; earlier config packets are irrelevant.
+		$null = Invoke-TestCmd $portB (New-ObserveCmd ('s7-' + $pose.name + '-observe') $nickA)
+		Start-Sleep -Milliseconds 500
+		$null = Invoke-TestCmd $portA (New-SessionCmd ('s7-' + $pose.name + '-off') 'disconnect')
+		$null = Invoke-TestCmd $portB (New-SessionCmd ('s7-' + $pose.name + '-offb') 'disconnect')
+		Start-Sleep -Seconds 3
+
+		$traces = @(Get-ChildItem $traceDir -Filter 'proxy-conn-*.jsonl' -ErrorAction SilentlyContinue |
+			Where-Object { $existingTraceNames -notcontains $_.Name } | Sort-Object CreationTime)
+		$aTrace = $null
+		$bTrace = $null
+		if ($traces.Count -ge 1) { $aTrace = $traces[0] }
+		if ($traces.Count -ge 2) { $bTrace = $traces[1] }
+		if (-not $aTrace -or -not $bTrace) {
+			Add-Check $Result ("$($pose.name): A/B traces captured") $false ("A={0}; B={1}; B watermark={2:o}" -f $aTrace, $bTrace, $joinBAt)
+			continue
+		}
+		$aRows = Read-Trace $aTrace.FullName
+		$bAllRows = Read-Trace $bTrace.FullName
+		$bLogin = $bAllRows | Where-Object { $_.state -eq 'play' -and $_.dir -eq 'clientbound' -and $_.name -eq 'minecraft:login' } | Select-Object -First 1
+		if (-not $bLogin) {
+			Add-Check $Result ("$($pose.name): B login/play boundary found") $false 'minecraft:login not found in B trace'
+			continue
+		}
+		$bRows = @($bAllRows | Where-Object { $_.seq -gt $bLogin.seq -and $_.state -eq 'play' -and $_.dir -eq 'clientbound' })
+		$inputRows = @($aRows | Where-Object { $_.dir -eq 'serverbound' -and $_.name -eq 'minecraft:player_input' } |
+			ForEach-Object { $payload = ConvertFrom-TraceB64 $_.b64; if ($payload.Length) { '{0:x2}' -f $payload[0] } })
+		$inputSeen = if ($pose.key -eq 'shift') { $inputRows -contains '20' } else { $inputRows -contains '41' }
+		Add-Check $Result ("$($pose.name): A trace contains held player_input flag") $inputSeen `
+			("player_input flags: {0}" -f ($inputRows -join ' '))
+
+		$uuidBytes = ConvertTo-NetworkUuidBytes ([guid]::Parse($launchA.uuid))
+		$spawnMatch = Find-EntitySpawn $bRows $uuidBytes
+		if (-not $spawnMatch) {
+			Add-Check $Result ("$($pose.name): B add_entity for A captured") $false 'spawn UUID not found in B post-login play trace'
+			continue
+		}
+		$spawn = $spawnMatch.row
+		$entityId = [int]$spawnMatch.entityId
+
+		$stateRows = @($bRows | Where-Object {
+			if ($_.dir -ne 'clientbound' -or $_.state -ne 'play' -or $_.seq -le $bLogin.seq -or $_.name -ne 'minecraft:set_entity_data') { return $false }
+			$p = ConvertFrom-TraceB64 $_.b64
+			if ($p.Length -lt 2) { return $false }
+			(ConvertFrom-TraceVarInt $p 0).value -eq $entityId
+		} | ForEach-Object { $p = ConvertFrom-TraceB64 $_.b64; '{0}:{1}' -f $_.seq, ([BitConverter]::ToString($p).Replace('-', ' ').ToLowerInvariant()) })
+		$attributeRows = @($bRows | Where-Object {
+			if ($_.dir -ne 'clientbound' -or $_.state -ne 'play' -or $_.seq -le $bLogin.seq -or $_.name -ne 'minecraft:update_attributes') { return $false }
+			$p = ConvertFrom-TraceB64 $_.b64
+			if ($p.Length -lt 2) { return $false }
+			$entity = ConvertFrom-TraceVarInt $p 0
+			$count = ConvertFrom-TraceVarInt $p $entity.next
+			$entity.value -eq $entityId -and $count.value -gt 0 -and [Text.Encoding]::ASCII.GetString($p).Contains('minecraft:sprinting')
+		} | ForEach-Object { $p = ConvertFrom-TraceB64 $_.b64; '{0}:{1}' -f $_.seq, ([BitConverter]::ToString($p).Replace('-', ' ').ToLowerInvariant()) })
+		$spawnBytes = [BitConverter]::ToString((ConvertFrom-TraceB64 $spawn.b64)).Replace('-', ' ').ToLowerInvariant()
+		Add-Check $Result ("$($pose.name): B add_entity spawn payload recorded") $true "entity=$entityId seq=$($spawn.seq) $spawnBytes"
+		$fact = "B connection=$($bTrace.Name), login play records=$($bRows.Count), A spawn seq=$($spawn.seq) bytes=$spawnBytes; metadata seq/hex=[$($stateRows -join '; ')]; attribute seq/hex=[$($attributeRows -join '; ')]"
+		$script:s7Facts.Add("$($pose.name): $fact")
+		Add-Check $Result ("$($pose.name): B state packets recorded without inference") $true $fact
+		Stop-ClientByName $nickA
+		Stop-ClientByName $nickB
+		Start-Sleep -Seconds 2
+	}
+}
+
 function Invoke-S5 {
 	param($Cfg, $Result)
 	$portA = [int]$Cfg.controlPortA
@@ -443,20 +689,14 @@ function Invoke-S5 {
 
 	# Resolve A's entity id from the AddEntity UUID in B's own trace so the
 	# scenario also works against our server, whose runtime ids differ.
-	$uuidBytes = ([guid]::Parse($launchA.uuid)).ToByteArray()
-	$spawn = $bRows | Where-Object {
-		if ($_.dir -ne 'clientbound' -or $_.name -ne 'minecraft:add_entity') { return $false }
-		$payload = ConvertFrom-TraceB64 $_.b64
-		if ($payload.Length -lt 17) { return $false }
-		for ($i = 0; $i -lt 16; $i++) { if ($payload[$i + 1] -ne $uuidBytes[$i]) { return $false } }
-		return $true
-	} | Select-Object -First 1
-	$entityId = $null
-	if ($spawn) { $spawnPayload = ConvertFrom-TraceB64 $spawn.b64; if ($spawnPayload[0] -lt 0x80) { $entityId = [int]$spawnPayload[0] } }
-	if ($null -eq $entityId) {
-		Add-Check $Result 'S5 resolves A entity id from B add_entity' $false 'missing spawn or entity id is not a one-byte VarInt'
+	$uuidBytes = ConvertTo-NetworkUuidBytes ([guid]::Parse($launchA.uuid))
+	$spawnMatch = Find-EntitySpawn $bRows $uuidBytes
+	if (-not $spawnMatch) {
+		Add-Check $Result 'S5 resolves A entity id from B add_entity' $false 'spawn UUID not found in B trace'
 		return
 	}
+	$spawn = $spawnMatch.row
+	$entityId = [int]$spawnMatch.entityId
 
 	$metadata = @($bRows | Where-Object {
 		if ($_.dir -ne 'clientbound' -or $_.name -ne 'minecraft:set_entity_data') { return $false }
@@ -488,11 +728,9 @@ function Invoke-S5 {
 		$onAttribute = $attributes | Where-Object { $_.seq -gt $found[2].seq -and $_.sprint } | Select-Object -First 1
 		$offAttribute = $attributes | Where-Object { $_.seq -gt $found[3].seq -and -not $_.sprint } | Select-Object -First 1
 	}
-	# The attribute payload's head is the entity's runtime id (a one-byte
-	# VarInt here); the rest is the traced vanilla payload of the sprinting
-	# attribute (S5 trace: 21 01 1a ...).
-	$onHex = ('{0:x2} ' -f $entityId) + '01 1a 3f b9 99 99 a0 00 00 00 01 13 6d 69 6e 65 63 72 61 66 74 3a 73 70 72 69 6e 74 69 6e 67 3f d3 33 33 40 00 00 00 02'
-	$offHex = ('{0:x2} ' -f $entityId) + '01 1a 3f b9 99 99 a0 00 00 00 00'
+	$attributeSuffix = if ($entityId -lt 0x80) { '{0:x2}' -f $entityId } else { $null }
+	$onHex = $attributeSuffix + ' 01 1a 3f b9 99 99 a0 00 00 00 01 13 6d 69 6e 65 63 72 61 66 74 3a 73 70 72 69 6e 74 69 6e 67 3f d3 33 33 40 00 00 00 02'
+	$offHex = $attributeSuffix + ' 01 1a 3f b9 99 99 a0 00 00 00 00'
 	$onPass = $null -ne $onAttribute -and $onAttribute.hex -eq $onHex -and $onAttribute.seq -gt $found[2].seq
 	$offPass = $null -ne $offAttribute -and $offAttribute.hex -eq $offHex -and $offAttribute.seq -gt $found[3].seq
 	$onDetail = 'missing'
@@ -603,6 +841,7 @@ try {
 			's4' { Invoke-S4 $cfg $result }
 			's5' { Invoke-S5 $cfg $result }
 			's6' { Invoke-S6 $cfg $result }
+			's7' { Invoke-S7 $cfg $result }
 			default { throw "unknown scenario '$($cfg.id)'" }
 		}
 		Stop-ClientByName $cfg.playerA
@@ -622,6 +861,8 @@ $summary = [PSCustomObject]@{
 	scenarios = $allResults
 }
 $summary | ConvertTo-Json -Depth 6 | Set-Content $summaryPath -Encoding utf8
+$script:s7Facts | Set-Content $summaryTextPath -Encoding utf8
+Write-Host "summary: $summaryTextPath"
 Write-Host "summary: $summaryPath"
 $failedCount = @($allResults | Where-Object { $_.failed }).Count
 Write-Host ("{0} scenario(s) run, {1} with failed checks" -f $allResults.Count, $failedCount)

@@ -89,6 +89,27 @@ function ConvertFrom-TraceB64 {
 	return [Convert]::FromBase64String($B64)
 }
 
+# Decodes one VarInt from a packet payload.
+function ConvertFrom-TraceVarInt {
+	param([byte[]]$Bytes, [int]$Offset)
+	$value = 0
+	for ($part = 0; $part -lt 5; $part++) {
+		$index = $Offset + $part
+		if ($index -ge $Bytes.Length) { throw 'truncated VarInt in trace payload' }
+		$byte = [int]$Bytes[$index]
+		$value = $value -bor (($byte -band 0x7f) -shl (7 * $part))
+		if (($byte -band 0x80) -eq 0) { return [PSCustomObject]@{ value = $value; next = $index + 1 } }
+	}
+	throw 'VarInt exceeds five bytes in trace payload'
+}
+
+# .NET Guid stores the first three UUID fields little-endian internally;
+# ToByteArray returns the network byte sequence expected in Minecraft packets.
+function ConvertTo-NetworkUuidBytes {
+	param([Guid]$Uuid)
+	return ,$Uuid.ToByteArray()
+}
+
 # Finds a float32 pair (yaw, pitch) in clientbound rotation-bearing packets
 # matching the expected rotation within tolerance. Floats sit at arbitrary
 # byte offsets (varint id stripped), so the scan steps by 1 byte over pairs
@@ -180,12 +201,22 @@ function Wait-FreshJoin {
 
 # --- process control -------------------------------------------------------
 
-# Stops a test client by the gameDir marker in its command line.
+# Stops a test client by the gameDir marker in its command line and waits for
+# process exit so the next launch can safely replace locked native DLLs.
 function Stop-ClientByName {
-	param([string]$Nick)
-	Get-CimInstance Win32_Process -Filter "Name='java.exe'" |
-		Where-Object { $_.CommandLine -match "clients\\$Nick" } |
-		ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+	param([string]$Nick, [int]$TimeoutSec = 20)
+	$processes = @(Get-CimInstance Win32_Process -Filter "Name='java.exe'" |
+		Where-Object { $_.CommandLine -match "clients\\$Nick" })
+	foreach ($process in $processes) {
+		Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+		$deadline = (Get-Date).AddSeconds($TimeoutSec)
+		while ((Get-Date) -lt $deadline -and (Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue)) {
+			Start-Sleep -Milliseconds 200
+		}
+		if (Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue) {
+			throw "client '$Nick' process $($process.ProcessId) did not stop within ${TimeoutSec}s"
+		}
+	}
 }
 
 # --- command JSON building -------------------------------------------------

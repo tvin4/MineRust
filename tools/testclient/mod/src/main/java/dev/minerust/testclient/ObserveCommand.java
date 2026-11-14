@@ -4,6 +4,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.PlayerInfo;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 
@@ -86,6 +87,17 @@ final class ObserveCommand {
 		return out;
 	}
 
+	private JsonObject blockSnapshot(LocalPlayer player, BlockPos pos) {
+		var state = player.level().getBlockState(pos);
+		JsonObject block = new JsonObject();
+		block.addProperty("id", net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString());
+		block.addProperty("air", state.isAir());
+		block.addProperty("solid", state.isSolid());
+		block.addProperty("collisionShapeFullBlock", state.isCollisionShapeFullBlock(player.level(), pos));
+		block.addProperty("collisionShapeEmpty", state.getCollisionShape(player.level(), pos).isEmpty());
+		return block;
+	}
+
 	private JsonElement snapshot(JsonObject args) throws Exception {
 		JsonObject out = new JsonObject();
 		if (args != null && args.has("player")) {
@@ -103,6 +115,15 @@ final class ObserveCommand {
 		pos.addProperty("y", player.getY());
 		pos.addProperty("z", player.getZ());
 		out.add("pos", pos);
+		out.addProperty("onGround", player.onGround());
+		out.addProperty("horizontalCollision", player.horizontalCollision);
+		out.addProperty("keyShiftDown", minecraft.options.keyShift.isDown());
+		out.addProperty("keyUpDown", minecraft.options.keyUp.isDown());
+		out.addProperty("keySprintDown", minecraft.options.keySprint.isDown());
+		out.addProperty("sprinting", player.isSprinting());
+		out.add("feetBlock", blockSnapshot(player, player.blockPosition()));
+		out.add("headBlock", blockSnapshot(player, player.blockPosition().above(1)));
+		out.add("supportBlock", blockSnapshot(player, player.blockPosition().below(1)));
 
 		JsonObject rot = new JsonObject();
 		rot.addProperty("yaw", player.getYRot());

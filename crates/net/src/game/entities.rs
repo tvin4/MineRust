@@ -217,7 +217,7 @@ pub fn state_flags(sneak: bool, sprint: bool) -> u8 {
     (if sneak { 0x02 } else { 0 }) | if sprint { 0x08 } else { 0 }
 }
 
-/// A traced sneak/sprint metadata transition for a survival player.
+/// A traced sneak/sprint metadata transition for a survival or creative player.
 ///
 /// Combined flag values such as `0x0a` are the OR of confirmed bits but the
 /// combination is not confirmed by trace.
@@ -404,7 +404,7 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
             match (now_id, old_id) {
                 (Some(left), Some(right)) if left == right => {
                     let subject = now[n];
-                    if game_mode[subject] == 0 {
+                    if matches!(game_mode[subject], 0 | 1) {
                         if let Some(previous) = broadcast_state[subject] {
                             if previous != state[subject] {
                                 states.push(EntityStateUpdate {
