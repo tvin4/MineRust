@@ -59,6 +59,10 @@ Write-Host ("  gameDir : {0}" -f $launch.GameDir)
 Write-Host ("  natives : {0}" -f $launch.NativesDir)
 Write-Host ("  control : 127.0.0.1:{0}" -f $launch.ControlPort)
 Write-Host ("  memory  : -Xms512M -Xmx2048M")
+# The uuid goes to the pipeline too (Write-Host is not capturable): callers
+# capture output to map the player to its playerdata file. The java pid is
+# returned last, so "| Select-Object -Last 1" still yields the pid.
+Write-Output ("offline uuid {0}" -f $launch.Uuid)
 
 $stdout = Join-Path $launch.GameDir 'client-stdout.log'
 $stderr = Join-Path $launch.GameDir 'client-stderr.log'

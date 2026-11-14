@@ -1,0 +1,10 @@
+{
+  "id": "s4",
+  "title": "game mode changes are visible to the other client",
+  "playerA": "Alice",
+  "playerB": "Bob",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "modes": ["creative", "survival"],
+  "settleMs": 600
+}

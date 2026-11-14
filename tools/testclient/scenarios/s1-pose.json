@@ -1,0 +1,13 @@
+{
+  "id": "s1",
+  "title": "pose persistence across reconnect (owner flow)",
+  "playerA": "Alice",
+  "playerB": "Bob",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "turn": { "dx": 150, "dy": -200 },
+  "joinTimeoutSec": 90,
+  "bCheckLimitMs": 500,
+  "bCheckPollMs": 80,
+  "rotationToleranceDeg": 0.75
+}

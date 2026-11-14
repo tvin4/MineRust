@@ -1,0 +1,11 @@
+{
+  "id": "s3",
+  "title": "air swing vs hold-on-block (fact and order, never counts)",
+  "playerA": "Alice",
+  "playerB": "Bob",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "airTaps": 3,
+  "airGapMs": 600,
+  "digHoldMs": 2000
+}

@@ -1,0 +1,16 @@
+{
+  "id": "s2",
+  "title": "angle deltas reach the server and the other client",
+  "playerA": "Alice",
+  "playerB": "Bob",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "turns": [
+    { "dx": 200, "dy": 0 },
+    { "dx": 0, "dy": 150 },
+    { "dx": -100, "dy": -80 }
+  ],
+  "degPerDelta": 0.15,
+  "deltaToleranceDeg": 1.5,
+  "rotationToleranceDeg": 0.75
+}
