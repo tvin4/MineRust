@@ -56,6 +56,20 @@ final class CommandDispatcher {
 	}
 
 	/**
+	 * Registers a command handler. Called during mod initialization, before
+	 * the control socket accepts anything.
+	 *
+	 * @param name    command name ({@code "cmd"} value in requests)
+	 * @param handler runs on the client thread when the command executes
+	 */
+	void register(String name, Handler handler) {
+		Handler previous = handlers.put(name, handler);
+		if (previous != null) {
+			throw new IllegalStateException("command registered twice: " + name);
+		}
+	}
+
+	/**
 	 * Enqueues a request and waits for the client thread to answer.
 	 *
 	 * @param request the parsed command object ({@code cmd}, optional {@code id})

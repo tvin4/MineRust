@@ -2,6 +2,7 @@ package dev.minerust.testclient;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.minecraft.client.Minecraft;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -23,9 +24,16 @@ public class TestClientMod implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
 		CommandDispatcher dispatcher = new CommandDispatcher();
+		Minecraft minecraft = Minecraft.getInstance();
+		InputCommands input = new InputCommands(minecraft);
+		input.register(dispatcher);
+		new ObserveCommand(minecraft).register(dispatcher);
 		int port = Integer.getInteger("testclient.port", DEFAULT_PORT);
 		new ControlServer(port, dispatcher).start();
-		ClientTickEvents.END_CLIENT_TICK.register(client -> dispatcher.tick());
-		LOGGER.info("testclient mod loaded (stage B2: control socket)");
+		ClientTickEvents.END_CLIENT_TICK.register(client -> {
+			input.tick();
+			dispatcher.tick();
+		});
+		LOGGER.info("testclient mod loaded (stage B3: input-path commands)");
 	}
 }

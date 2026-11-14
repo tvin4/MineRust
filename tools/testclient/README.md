@@ -75,7 +75,7 @@ jar-сборка, кэш Gradle/Loom и run-каталоги — нет.
 |---|---|
 | `mod/build.gradle`, `settings.gradle`, `gradle.properties` | каркас Loom по официальным версиям Fabric (см. ниже) |
 | `mod/src/main/resources/fabric.mod.json` | манифест мода (`id=testclient`, entrypoint `client`) |
-| `mod/src/main/java/dev/minerust/testclient/` | код мода: `TestClientMod` (entrypoint), `ControlServer` (JSON-сокет 127.0.0.1), `CommandDispatcher` (команды на клиентском тике) |
+| `mod/src/main/java/dev/minerust/testclient/` | код мода: `TestClientMod` (entrypoint), `ControlServer` (JSON-сокет 127.0.0.1), `CommandDispatcher` (команды на клиентском тике), `InputCommands` (`look`/`key`), `ObserveCommand` (`observe`) |
 
 **Версии (все — официальные источники Fabric/Mojang, проверены 14.11.2026):**
 Minecraft `26.3`, fabric-loader `0.20.1` (meta.fabricmc.net/v2/versions/*),
@@ -110,12 +110,52 @@ Fabric loader + fabric-api берутся с официального maven.fabr
 Профиль клиента — официальный JSON Fabric
 (`meta.fabricmc.net/v2/versions/loader/26.3/0.20.1/profile/json`).
 
+**Команды этапа Б3** (все только через клиентский путь ввода, ни одного
+пакета вручную; имена пакетов/идентификаторы —
+`E:\MineRust-data\reports\packets.json`):
+
+- `look {dx, dy}` — дельты мыши через `Entity.turn(double,double)`.
+  Измерено: 1000 дельт по вертикали ≈ 150° (0.15°/дельта при сенсе по
+  умолчанию); точные углы после поворота читаются через `observe`.
+- `key {key, action, hold_ms}` — `action` = `down`/`up`/`tap` (по умолчанию
+  tap), `hold_ms` длительность tap (по умолчанию 100). Ключи:
+  `up/down/left/right/jump/shift/sprint` — held-клавиши через
+  `KeyMapping.setDown` (путь GLFW-состояния; сервер получает
+  `player_input`, id 43, при изменении input — подтверждено hold ≥ 2 с);
+  `attack`/`use` — клавиши-биндинги через `KeyMapping.setDown` +
+  `KeyMapping.click(getDefaultKey())` (путь GLFW-клика; сервер получает
+  `punch`, id 46, и `player_action`, id 41, при копании — подтверждено);
+  `swing` — `player.swing(MAIN_HAND, SwingAnimation.DEFAULT, broadcast)`
+  (сам по себе 46 не даёт; используется как часть сценария).
+  Для `attack`/`use` есть диагностический `path:"mouse"` — старый путь
+  `MouseHandler.onButton`, оставлен для сравнения: он не производит ни 41,
+  ни 46 (см. «Диагностика входа атаки»).
+- `observe` — снимок состояния: позиция, yaw/pitch, режим игры, версия,
+  maxMemory, `windowActive`, `mouseGrabbed`, `paused`, `keyAttackDown`,
+  `keyUseDown`, тип цели прицела (`MISS`/`BLOCK`/`ENTITY`) и блок под
+  прицелом. `screen == null` в 26.3 публичного API не имеет — факт
+  «экран открыт» заменён эквивалентом `mouseGrabbed == false`.
+
+**Диагностика входа атаки (Б3, решение владельца: сначала факты).**
+Факты `observe` до/во время/после атаки: при пустом приёме
+`MouseHandler.onButton` (все ворота открыты — окно активно, мышь
+захвачена, экранов нет, прицел на блоке) состояние `keyAttackDown`
+остаётся `false` и серверных пакетов нет. Путь через `KeyMapping`
+(`setDown` + `click`) — `keyAttackDown: true` во время удержания,
+копание начинается, трейс: `player_action` ×4 + `punch` ×19; атака в
+воздух (тип прицела `MISS`): ровно 3 `punch` на 3 тапа. Принятый путь
+атаки — KeyMapping (вариант 2); вывод «реализуемость через
+`MouseHandler.onButton`» — SOURCE: наблюдение запуском, механизм отбора
+внутри клиента не изучался (декомпиляция запрещена).
+
 ## Статус
 
 - Этап А (батники): готов, приёмка пройдена (оба клиента на ванили 25566
   через mcproxy 25565, `-Xms512M -Xmx2048M`).
-- Этап Б (Fabric-мод): B1 (каркас Loom + сборка) готов; B2 (JSON-сокет
-  127.0.0.1, команда ping) готов, приёмка пройдена (мод загрузился, сокет
-  отвечает, Alice вошла в игру); B3–B5 (команды ввода через клиентский путь
-  → serverbound id 43/46, приёмка) — в работе.
+- Этап Б (Fabric-мод): B1 (каркас Loom + сборка) готов; B2 (JSON-сокет,
+  команда ping) готов, приёмка пройдена; B3 (команды ввода) готов,
+  приёмка пройдена трейсом mcproxy: serverbound `player_input` (43) при
+  hold движения, `punch` (46) при атаке в воздух, `player_action` (41) +
+  `punch` (46) при копании блока; B4 (connect/disconnect/wait/command/
+  screenshot/observe-расширения) и B5 (полная приёмка этапа Б) — в работе.
 - Этап В (оркестратор/сценарии), Г (автотрейсы) — следуют.
