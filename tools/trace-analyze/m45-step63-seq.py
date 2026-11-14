@@ -1,6 +1,6 @@
-﻿import json, base64, sys
+import json, base64, sys
 from pathlib import Path
-T = Path(r"C:\MineRust-data\traces")
+T = Path(r"E:\MineRust-data\traces")
 B_UUID = "b3b03a00-4714-337e-8103-52c60a6c836f"
 
 MOVES = {"minecraft:move_entity_pos","minecraft:move_entity_pos_rot","minecraft:move_entity_rot",

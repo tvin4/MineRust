@@ -84,9 +84,9 @@ CI runs the same checks on every push and pull request
 
 - `tools\run-server.bat` — starts this server in release from the repo root
   (`server.toml` must be filled in; without it the script prints the fields
-  and an example for `C:\MineRust-data\`).
+  and an example for `E:\MineRust-data\`).
 - `tools\run-server-vanilla.bat` — starts the official vanilla jar from
-  `C:\MineRust-data\vanilla` (port 25566) for hand comparisons; it never
+  `E:\MineRust-data\vanilla` (port 25566) for hand comparisons; it never
   creates or copies a world.
 - Live verification checklist for the tick: `docs/LIVE-CHECK-M4.1.md`.
 

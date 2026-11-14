@@ -11,16 +11,16 @@ if not exist "server.toml" (
     echo   %CD%
     echo.
     echo Copy server.example.toml to server.toml and fill in the paths from
-    echo YOUR copy of the game. Example for a C:\MineRust-data install:
+    echo YOUR copy of the game. Example for a E:\MineRust-data install:
     echo.
     echo   listen = "0.0.0.0:25565"
-    echo   client_jar = "C:\MineRust-data\client.jar"
-    echo   packets_report = "C:\MineRust-data\reports\packets.json"
-    echo   registries_report = "C:\MineRust-data\reports\registries.json"
-    echo   blocks_report = "C:\MineRust-data\reports\blocks.json"
-    echo   world_dir = "C:\MineRust-data\world-template"
-    echo   vanilla_server_jar = "C:\MineRust-data\server.jar"
-    echo   vanilla_server_dir = "C:\MineRust-data\vanilla"
+    echo   client_jar = "E:\MineRust-data\client.jar"
+    echo   packets_report = "E:\MineRust-data\reports\packets.json"
+    echo   registries_report = "E:\MineRust-data\reports\registries.json"
+    echo   blocks_report = "E:\MineRust-data\reports\blocks.json"
+    echo   world_dir = "E:\MineRust-data\world-template"
+    echo   vanilla_server_jar = "E:\MineRust-data\server.jar"
+    echo   vanilla_server_dir = "E:\MineRust-data\vanilla"
     echo.
     echo The reports are produced from the client jar by
     echo tools\generate-reports.ps1. See server.example.toml for every field.

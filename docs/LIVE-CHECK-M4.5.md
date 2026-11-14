@@ -28,7 +28,7 @@
 ## Шаги (8 строк)
 
 1. В `server.toml` `world_dir` — рабочий шаблон (у владельца v3
-   `C:\MineRust-data\world-template-v3`); запустить `tools\run-server.bat`, ждать
+   `E:\MineRust-data\world-template-v3`); запустить `tools\run-server.bat`, ждать
    `listening` и `world warm-up finished: chunks ready to send N`.
 2. Войти **первым** клиентом 26.3 на `localhost:25565` (view distance 10) —
    Multiplayer → Add Server. Дождаться прогрузки мира.

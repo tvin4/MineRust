@@ -9,7 +9,7 @@
 HANDOFF (≤10 строк), push; большие выводы в файлы; при потере нити писать
 «нужна новая сессия»; ничего не выдумывать (не нашёл — сказать); финальный
 отчёт ОДИН (короче прошлого, без полного списка типов пакетов).
-Трейсы в `C:\MineRust-data\traces\`, в репозиторий только сводка.
+Трейсы в `E:\MineRust-data\traces\`, в репозиторий только сводка.
 
 ## Что уже сделано (все коммиты запушены)
 
@@ -42,7 +42,7 @@ abort по region SHA. Дополнительно найден и исправл
 - Живой клиент (live-session.json): ack seq 52 t=84114.5607; первый
   tick_end seq 53 t=84143.4622; `player_loaded` seq 91 t=85115.8432
   (= ack + 1001.28 мс); порядок seq 51-91 выгружен в
-  `C:\MineRust-data\traces\live-seq-51-91.txt`.
+  `E:\MineRust-data\traces\live-seq-51-91.txt`.
 - П1 прошлого раунда: 173 чанка (при view 10 ожидается 441), 42 порции,
   8 926 097 B, spawn (96.5, 145, -31.5), 0 forget_level_chunk,
   1 set_chunk_cache_center (6, -2); обрыв 10053 через ~5 мс play;
@@ -140,7 +140,7 @@ abort по region SHA. Дополнительно найден и исправл
    после 30 `move_player_pos`; 59 чанков, 13 порций. П3 по правилу
    остановки не запускался. Это ожидаемое поведение (ничего не тюнили).
 4. [ГОТОВО] ЧАСТЬ III: 173/441 разобран (см. «Ключевые факты»), замеры
-   проведены — `C:\MineRust-data\traces\preload-report.md` + 14 JSONL
+   проведены — `E:\MineRust-data\traces\preload-report.md` + 14 JSONL
    (12 измеренных + 2 warm-up). Оркестратор `tests/preload_measure.rs`
    (6b91786), метрики `src/preload.rs` (d53bf03). Все 12 прогонов
    `Completed` по 441 чанк, бюджет 30 с никто не исчерпал.
@@ -189,5 +189,5 @@ abort по region SHA. Дополнительно найден и исправл
 - `crates/protocol/src/packets/play.rs` — `LoginPlay` (game_mode).
 - `target/parity/chunk_status.py` — критерий мира (`scan`/`compare`).
 - `target/parity/live-session.json` — живой трейс.
-- `C:\MineRust-data\reports\packets.json` — идентификаторы пакетов.
-- `C:\MineRust-data\traces\` — трейсы, отчёты, `live-seq-51-91.txt`.
+- `E:\MineRust-data\reports\packets.json` — идентификаторы пакетов.
+- `E:\MineRust-data\traces\` — трейсы, отчёты, `live-seq-51-91.txt`.

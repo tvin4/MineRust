@@ -94,7 +94,7 @@ payload в `MoveSlot`, тик декодирует (`net::game::movement`) и н
 до стриминга **M4.4**.
 
 **Доставлено (M4.3, часть A).** A1: метрика и журнал опоздавших тиков,
-эксперименты Э1/Э2 (`C:\MineRust-data\traces\m43-jitter.md`) — опоздание
+эксперименты Э1/Э2 (`E:\MineRust-data\traces\m43-jitter.md`) — опоздание
 261 мс на in-process сервере **не воспроизвелось**, запись реплея оставлена
 синхронной. A2: `std::thread`-пул регионов `net::game::pool` + барьер и
 детерминированный merge по `region_id` в `net::game::scheduler`; параметр
@@ -370,7 +370,7 @@ idle; единичные выбросы до ~15 мс — планировщик
 `simulation-distance` копии и `client_information.view_distance` бота равны
 R; выход — 5 с без нового чанка (во всех прогонах, таймаут 60 с не
 срабатывал). Центр всегда (6,−2), одна смена центра, первая порция всегда
-**9** чанков (3×3). Трейсы `C:\MineRust-data\traces\join-window-r*.jsonl`.
+**9** чанков (3×3). Трейсы `E:\MineRust-data\traces\join-window-r*.jsonl`.
 
 | R | чанков | полуширина h | круг K | статус |
 |---|--------|--------------|--------|--------|
@@ -424,7 +424,7 @@ R; выход — 5 с без нового чанка (во всех прого�
 **ЧАСТЬ 2 — наш сервер in-process (`crates/parity/tests/join_window_ours.rs`).**
 Бот входит на наш сервер с реальным v2 (`server::build_world` + `net::serve`,
 `server.toml` без `view-distance` → 10) и стоит, как в ЧАСТИ 0. Трейсы
-`C:\MineRust-data\traces\join-window-ours-r{10,8}.jsonl`.
+`E:\MineRust-data\traces\join-window-ours-r{10,8}.jsonl`.
 
 | R | отправлено | в окне | вне окна | нет в v2 | порядок | `analyze.py shape-join` |
 |---|-----------|--------|----------|----------|---------|--------------------------|
@@ -571,9 +571,9 @@ R; выход — 5 с без нового чанка (во всех прого�
 
 ### Ходьба на v3 против ванили (M4.4 B, ШАГ 4, 10.11.2026)
 
-In-process сервер на замороженном v3 (`C:\MineRust-data\world-template-v3`,
+In-process сервер на замороженном v3 (`E:\MineRust-data\world-template-v3`,
 16 файлов регионов, 58.9 МБ), бот ходит теми же маршрутами П4 (+x, 600×0.2
-блока) и П5 (+x/+z). Трейсы — `C:\MineRust-data\traces\window-p{4,5}-ours.jsonl`,
+блока) и П5 (+x/+z). Трейсы — `E:\MineRust-data\traces\window-p{4,5}-ours.jsonl`,
 сравнение — `analyze.py` против ванильных `window-p{4,5}.jsonl`.
 
 - **Бюджет прогрева (ШАГ 4.1).** Release: build 237 мс, чтение 13.25 с, итого
@@ -727,7 +727,7 @@ In-process сервер на замороженном v3 (`C:\MineRust-data\worl
    Э1 (реплей выкл) late>20 мс 0 / 0 / 0, jitter max 1.052 / 1.265 /
    1.337 мс, p99 1.012 / 1.015 / 1.040; Э2 (реплей вкл) late>20 мс
    0 / 0 / 0, jitter max 1.123 / 1.188 / 1.266, p99 1.011 / 1.027 /
-   1.043. Полностью — `C:\MineRust-data\traces\m43-jitter.md`.
+   1.043. Полностью — `E:\MineRust-data\traces\m43-jitter.md`.
 4. Э3 (приоритет потока тика) **не запускался**: условие владельца — только
    если в Э1 есть опоздания; их нет. Хук не добавлен.
 5. Вывод: **источник 261 мс — не установлено**. In-process сервер + 289
@@ -853,7 +853,7 @@ assert диапазона **до отправки** каждого move; вых�
 показывается, параметры не подбираются.
 
 **Запись:** монотонное время, направление, state, id, сырые байты —
-трейсы в `C:\MineRust-data\traces\`, в репозиторий только сводка.
+трейсы в `E:\MineRust-data\traces\`, в репозиторий только сводка.
 Тайминги выдачи чанков на v2 помечать «возможно искажены догенерацией»;
 итог разделять на «решено по трейсу» и «осталось гипотезой».
 
@@ -913,7 +913,7 @@ z −14..10), спавн в чанке (6,−2), статусы остальны
 ### Итоги раунда 4 (09.11.2026): решено по трейсу/замером и гипотезы
 
 Инструмент `crates/parity`, код сервера не менялся; отчёты — в
-`C:\MineRust-data\traces\` (`part1-report.md` … `part4`-запись прокси).
+`E:\MineRust-data\traces\` (`part1-report.md` … `part4`-запись прокси).
 
 **Решено по трейсу/замером:**
 - Кик ванили `Invalid move player packet received` увязан с темпом хода:
@@ -1061,12 +1061,12 @@ z −14..10), спавн в чанке (6,−2), статусы остальны
 `tests/common/{twobot,twobot_scenarios}.rs` (коммит `88c61a7`), разбор —
 `tools/trace-analyze/analyze.py entities` (коммит `d8dd392`). Один прогон
 на сценарий (release, `--ignored`): три сценария подряд = 197.48 с,
-каждый на свежей копии `C:\MineRust-data\world-template`. Фон машины
+каждый на свежей копии `E:\MineRust-data\world-template`. Фон машины
 записан в `target/bench/m45-run-note.txt`: CPU ~14 %, свободно ~21 ГБ,
 12 логических / 6 физических ядер (на бенчах M4.6 K=12 — это деление
 6 физических ядер, не 12 полноценных воркеров).
 
-Общее по трём сценариям (отчёты `C:\MineRust-data\traces\two-c{1,2,3}`
+Общее по трём сценариям (отчёты `E:\MineRust-data\traces\two-c{1,2,3}`
 и `twobot-summary.md`):
 
 - `violations=[]` везде; SHA-256 замороженного шаблона не изменился
@@ -1301,7 +1301,7 @@ uuid `ac577536…`) и про **другого** (B, uuid `b3b03a00…`), len 36
   (`--ignored`). Фильтр по id B (получен из UUID `add_entity`, не зашит), мобы
   отфильтрованы; нормализация только трёх полей владельца (entity id, позиция
   по тику, game mode). Расхождения записаны явным списком (тип, смещение, наш
-  байт, ванильный байт) в `C:\MineRust-data\traces\entity-stream-parity.md`;
+  байт, ванильный байт) в `E:\MineRust-data\traces\entity-stream-parity.md`;
   ассерт `report.is_empty()` **красный** — см. «Известные расхождения (в)»
   ниже. Тест red by design: он и есть инструмент поиска расхождений.
 - **(г) Расстояние видимости и порядок ухода из мира (`546f538`) — пройдено.**
@@ -1389,7 +1389,7 @@ Ignored-тест `crates/parity/tests/player_info.rs` (`--ignored`) — зелё
 с числом подтверждений и исключений. Выводы: `target/bench/m45-step6-states.txt`
 (полная таблица «B-тик, промежуток, смена полей, пакет»), `m45-step6-counts.txt`,
 `m45-step6-detail.txt`, `m45-step6-attrs.txt`. Вход: ваниль `two-c{1,2,4}-A/B.jsonl`
-и наш `two-c{1,2,4}-ours-A/B.jsonl` (`C:\MineRust-data\traces`), фильтр по id B.
+и наш `two-c{1,2,4}-ours-A/B.jsonl` (`E:\MineRust-data\traces`), фильтр по id B.
 
 **Правило анализа (часы) — внесено по решению владельца:** `t_ms` каждой стороны
 отсчитывается от её собственного подключения, поэтому **кросс-трейсовые времена без
@@ -1512,7 +1512,7 @@ rot, …`. Обозначения (обе таблицы): `pos` — `move_entit
 ### M4.5 (сервер) — Шаг 6.3: сверка (в) после правки 6.2 (13.11.2026)
 
 Прогон `cargo test -p parity --release --test entity_stream_parity -- --ignored`
-после 6.2 (`241cc7b`): отчёт `C:\MineRust-data\traces\entity-stream-parity.md`,
+после 6.2 (`241cc7b`): отчёт `E:\MineRust-data\traces\entity-stream-parity.md`,
 полный вывод `target/bench/step63-run.txt`. Инструменты анализа —
 `tools/trace-analyze/m45-step63-*.py` (дампы последовательностей, выравнивание
 difflib, сведение head/body по байту yaw, мультимножества байтов, проверка
@@ -1652,7 +1652,7 @@ C1 точно определяются режимом **два**: game_mode в `
 `creative` и `force-gamemode=true`. Раннер —
 `crates/parity/tests/two_bot_gamemode.rs` (правит `server.properties` под
 `PropertiesGuard` и возвращает исходное значение), сводка —
-`C:\MineRust-data\traces\two-gamemode-summary.md`, обе записи чистые
+`E:\MineRust-data\traces\two-gamemode-summary.md`, обе записи чистые
 (`violations=[]`, 72 с на прогон). Анализ — `tools/trace-analyze/m45-step72-gamemode.py`,
 дамп пакетов о B — `tools/trace-analyze/m45-step73-about-b.py`.
 
@@ -1747,7 +1747,7 @@ survival/creative, наш тест подаёт режим в login тем же 
 порядок, v3, **20 с без единого подключения**, метрики сэмплируются раз в
 секунду. Результат: `build 0.378 s | warm-up read 8.339 s`, за 20 с — 400
 тиков, **`late_ticks = 0`, `late_max_ms = 0.000`**, jitter p99 1.05–3.27 мс.
-Отчёт `C:\MineRust-data\traces\tick-idle-after-warmup.md`.
+Отчёт `E:\MineRust-data\traces\tick-idle-after-warmup.md`.
 
 **Вывод:** на этой машине опоздания при нуле игроков **не воспроизводятся**, и
 причиной «7–9 с» прогрев быть не может. Совпадение с интервалом 7–9 с

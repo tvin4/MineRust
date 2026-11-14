@@ -150,18 +150,18 @@ Update Tags, а состав тегов проверяется парити-те
 
 ## Как проверить (команды)
 
-Отчёты генератора живут вне репозитория — в `C:\MineRust-data\reports\`
+Отчёты генератора живут вне репозитория — в `E:\MineRust-data\reports\`
 (`server.toml` указывает на них полями `packets_report`/`registries_report`;
-и `server.toml`, и `C:\MineRust-data` в Git не попадают: первый в
+и `server.toml`, и `E:\MineRust-data` в Git не попадают: первый в
 `.gitignore`, второй лежит вне репозитория).
 
 ```powershell
 # 1. Сгенерировать отчёты из вашего клиентского jar (не коммитятся):
-tools\generate-reports.ps1 -VersionJson "...\meta\<uid>\<version>.json" -Output "C:\MineRust-data"
-#    → C:\MineRust-data\reports\{packets,registries}.json
+tools\generate-reports.ps1 -VersionJson "...\meta\<uid>\<version>.json" -Output "E:\MineRust-data"
+#    → E:\MineRust-data\reports\{packets,registries}.json
 
 # 2. Сверить наши ID констант с отчётом (test игнорируется без env):
-$env:MINECRAFT_PACKETS_REPORT = "C:\MineRust-data\reports\packets.json"
+$env:MINECRAFT_PACKETS_REPORT = "E:\MineRust-data\reports\packets.json"
 cargo test -p data compiled_packet_ids_match_the_real_report -- --ignored
 
 # 3. Прогнать все тесты с реальным jar и/или отчётом:

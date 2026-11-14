@@ -139,8 +139,8 @@ protocol_version=777 / version_name="26.3" из `version.json` клиентск�
 
 - [x] Официальный `server.jar` 26.3 скачан через манифест Mojang
       (`piston-data.mojang.com`, sha1 `33680f5f…` сверен) в
-      `C:\MineRust-data\server.jar` (вне репозитория).
-- [x] `C:\MineRust-data\vanilla`: первый запуск создал `eula.txt` и
+      `E:\MineRust-data\server.jar` (вне репозитория).
+- [x] `E:\MineRust-data\vanilla`: первый запуск создал `eula.txt` и
       `server.properties`; EULA принят владельцем → `eula=true` (единственная
       правка файла). `server.properties`: `level-seed=12345`,
       `online-mode=false`, `server-port=25566`, `view-distance=10` (дефолт),
@@ -149,13 +149,13 @@ protocol_version=777 / version_name="26.3" из `version.json` клиентск�
 - [x] Мир сгенерирован с сидом 12345 — проверено разбором gzip+NBT: тег
       `seed` (long) в `world/data/minecraft/world_gen_settings.dat` = 12345
       (в `level.dat` 26.3 сида больше нет). Мир сохранён чисто (`stop`,
-      exit=0) и скопирован в шаблон `C:\MineRust-data\world-template`.
+      exit=0) и скопирован в шаблон `E:\MineRust-data\world-template`.
 - [x] `server.toml` (gitignored): добавлены `vanilla_server_jar` и
       `vanilla_server_dir` (оба пути — вне Git). `ServerConfig` получил
       опциональные `vanilla_server_jar` /
       `vanilla_server_dir` (валидация непустых, тесты парсинга);
       `server.example.toml` — закомментированные примеры.
-      `git check-ignore` подтверждён: ни `server.toml`, ни `C:\MineRust-data`
+      `git check-ignore` подтверждён: ни `server.toml`, ни `E:\MineRust-data`
       в Git не попадают. Тестов: 135 (было 132).
 
 ### M3, шаги 1–3: крейт parity и срезы status/join (выполнено)
@@ -368,7 +368,7 @@ errors» (не распарсились dimension_type/enchantment/sulfur_cube_a
       разделяет гипотезы «окно первой порции» vs «что было готово»; sb
       `chunk_batch_received` в трейсе нет — бот-клиент его не шлёт (все 8 sb
       — логин/конфигурация/keep-alive).
-- **Правки плана учтены:** `blocks.json` отсутствует в `C:\MineRust-data\
+- **Правки плана учтены:** `blocks.json` отсутствует в `E:\MineRust-data\
   reports` — блокер палитры (правка 2); chанк другой версии → явная ошибка
   (6); `set_chunk_cache_center` — две VarInt, расхождений нет (1); свет и
   `light_update` (открытые вопросы 1–2) — данные выше; отсутствующих чанков
@@ -559,8 +559,8 @@ NBT → sky 15 / block 0, временное решение (не parity), по�
 `docs/DECISIONS.md`, секция «Часть A плана M4».
 
 1. **Шаблон v1 зафиксирован**: sha256-манифест 26 файлов
-   (`C:\MineRust-data\world-template-v1.sha256.txt`, агрегат
-   `2f6c0cd4…b00d41`), копия `C:\MineRust-data\world-template-v1`,
+   (`E:\MineRust-data\world-template-v1.sha256.txt`, агрегат
+   `2f6c0cd4…b00d41`), копия `E:\MineRust-data\world-template-v1`,
    бэкап 8 старых трейсов `target/parity/*.v1diag.json`.
 2. **`world-template-v2` создала ваниль**: прогон `join_slice` на копии,
    штатный `stop`, без forceload, статусы читались из `.mca`
@@ -574,7 +574,7 @@ NBT → sky 15 / block 0, временное решение (не parity), по�
    прогонами: наборы и статусы идентичны (2209 = 2209), различаются 5
    чанков вне спавна.
 4. **Эталоны перезаписаны на v2**: run A (30 116 пакетов) и run B
-   (31 443), снапшоты `C:\MineRust-data\world-v2-run{A,B}`, эталон =
+   (31 443), снапшоты `E:\MineRust-data\world-v2-run{A,B}`, эталон =
    run B. `chunk_slice` прогон →
    `target/parity-report/chunk-diff.md`: блоки/палитры/биомы/BE-NBT/
    слова высот 9/9, non-air 5/9, порядок id карт высот 0/9 и записей BE
@@ -685,7 +685,7 @@ warnings`, `cargo test --workspace` — зелёные.
 - ЧАСТЬ III (замеры входа): `WalkMode::Preload` + `src/preload.rs` (`d53bf03`),
   оркестратор `tests/preload_measure.rs` (`6b91786`); четыре серии ×3
   прогона, все 12 — `Completed` по 441 чанк. Отчёт с таблицами
-  min/median/max: `C:\MineRust-data\traces\preload-report.md` + 14 JSONL.
+  min/median/max: `E:\MineRust-data\traces\preload-report.md` + 14 JSONL.
 - Обнаружено в трейсе: серии «наш сервер» содержат ~3000 мс
   ожидания самого бота (`PROBE_WAIT` в `steps.rs` — наш сервер не шлёт
   `select_known_packs`); у vanilla этого нет. Сжатие выключено с обеих
@@ -702,12 +702,12 @@ warnings`, `cargo test --workspace` — зелёные.
   + байт флагов 0x00, значения конечные, у спавна, шаг 0.2; формат совпадает с
   живым клиентом. Дефекта кодирования нет, по правилу владельца I.3 (П2/П3)
   не запускался, параметры не подбирались. Факты:
-  `C:\MineRust-data\traces\part1-move-bytes.md`.
+  `E:\MineRust-data\traces\part1-move-bytes.md`.
 - II.1 (`7bf19aa`): ожидание `select_known_packs` условное - `PROBE_WAIT` 3 с
   только для ванильного порта, `PROBE_WAIT_NO_PROBE` 100 мс иначе; ванильные
   серии не тронуты.
 - II.2: только наши серии пересняты (`preload2-ours-*`), отчёт
-  `C:\MineRust-data\traces\preload-report-ours-2.md`. Cold: int->441-й чанк
+  `E:\MineRust-data\traces\preload-report-ours-2.md`. Cold: int->441-й чанк
   8609.6/8613.3/8718.2 мс, warm 8585.0/8610.7/9477.8 (было 12047/13034/13434
   и 13865/13916/14410 со старым 3-с ожиданием).
 - II.3: разбор payload (`chunk_breakdown.py`, зеркало `chunk_payload.rs`,
@@ -715,18 +715,18 @@ warnings`, `cargo test --workspace` — зелёные.
   17.97 MB на 441 чанк = 19.90 лишних массивов света по 2048 B; наш сервер
   шлёт 24 sky-массива в каждом чанке, ваниль - только непустые (2..7).
   Heightmaps и section blob совпадают. Разбор:
-  `C:\MineRust-data\traces\ii3-payload-breakdown.md`.
+  `E:\MineRust-data\traces\ii3-payload-breakdown.md`.
 - III (float `chunks_per_tick`): ваниль warm и наш warm, pace
   {4.6715, 15, 50} x3, все 18 — `Completed` по 441. Число порций:
   ваниль 108/29/12, наш 87/29/9. Время до 441-го (медиана): ваниль
   5921.6/5671.1/5601.3 мс, наш 8545.5/8537.3/8660.1 мс — float задаёт
   размер порций, но время входа меняет слабо. Отчёт
-  `C:\MineRust-data\traces\preload-report-float.md`.
+  `E:\MineRust-data\traces\preload-report-float.md`.
 
 ## Часть M4.0 (а), раунд 4: ЧАСТЬ I — kick-эксперименты и правило тик/ход (выполнено)
 
 Инструмент `crates/parity`, код сервера не менялся. Полные данные —
-`C:\MineRust-data\traces\part1-report.md` (в репозиторий не кладётся).
+`E:\MineRust-data\traces\part1-report.md` (в репозиторий не кладётся).
 
 - I.0: бот старых прогонов ack'ал телепорт (`t=1157.5`), затем ходил
   `t=1186.1` — **до** `player_loaded` (`t=2160.6`); живой клиент ack
@@ -758,7 +758,7 @@ warnings`, `cargo test --workspace` — зелёные.
 ## Часть M4.0 (а), раунд 4: ЧАСТЬ II — не ограничен ли замер ботом (выполнено)
 
 Инструмент `crates/parity`, код сервера не менялся. Отчёт —
-`C:\MineRust-data\traces\part2-report.md`; прогон `part2-run.log`.
+`E:\MineRust-data\traces\part2-report.md`; прогон `part2-run.log`.
 
 - Добавлен режим бота «только метрики»: без JSONL и без base64 во время
   прогона (счётчики, размеры полезной нагрузки и монотонные метки
@@ -778,8 +778,8 @@ warnings`, `cargo test --workspace` — зелёные.
 ## Часть M4.0 (а), раунд 4: ЧАСТЬ III — шаблон мира v3 (выполнен)
 
 Инструмент `crates/parity/tests/build_template_v3.rs`, код сервера не
-менялся. Отчёт — `C:\MineRust-data\traces\part3-report.md`, прогон
-`part3-run.log`, мир — `C:\MineRust-data\world-template-v3` (в репе только
+менялся. Отчёт — `E:\MineRust-data\traces\part3-report.md`, прогон
+`part3-run.log`, мир — `E:\MineRust-data\world-template-v3` (в репе только
 скрипт и описание).
 
 - Лимит `forceload add` на команду измерен опытом: **ровно 256 чанков**
@@ -944,10 +944,10 @@ warnings`, `cargo test --workspace` — зелёные.
   проверка `server.toml`; при отсутствии печатает поля `client_jar`,
   `packets_report`, `registries_report`, `blocks_report`,
   `vanilla_server_jar`, `vanilla_server_dir` и пример для
-  `C:\MineRust-data\`, затем `pause`; иначе `cargo run -p server
+  `E:\MineRust-data\`, затем `pause`; иначе `cargo run -p server
   --release`) и `tools\run-server-vanilla.bat` (только `java -jar
-  server.jar nogui` с рабочим каталогом `C:\MineRust-data\vanilla`,
-  jar ищется в `vanilla\` затем `C:\MineRust-data\server.jar`; мира не
+  server.jar nogui` с рабочим каталогом `E:\MineRust-data\vanilla`,
+  jar ищется в `vanilla\` затем `E:\MineRust-data\server.jar`; мира не
   создаёт). Сухой запуск: `run-server.bat` поднял сервер, `listening
   0.0.0.0:25565` за ~1 с, `WARN`/`ERROR` нет, шаблон мира не изменён
   (36 файлов, 15 402 135 Б, mtime прежний). Чек-лист живой проверки —
@@ -1041,7 +1041,7 @@ warnings`, `cargo test --workspace` — зелёные.
   `Scheduler::player_count()`.
 - **A1.3 эксперименты (Э1/Э2 по 3 прогона, in-process сервер + ручной
   `parity::Client`, join → `accept_teleportation` → 289 чанков → 10 с
-  простоя, release). `C:\MineRust-data\traces\m43-jitter.md`.** Э1
+  простоя, release). `E:\MineRust-data\traces\m43-jitter.md`.** Э1
   (реплей выкл): late>20 мс 0/0/0, jitter max min/med/max 1.052/1.265/1.337,
   p99 1.012/1.015/1.040; Э2 (реплей вкл): late 0/0/0, max
   1.123/1.188/1.266, p99 1.011/1.027/1.043. **Живое опоздание 261 мс не
@@ -1211,7 +1211,7 @@ warnings`, `cargo test --workspace` — зелёные.
   снятием записи из `self_session` (`deea31c`). Сервер со `world_dir`
   стартует, живая проверка клиентом 26.3 прошла. Оставшаяся доказательная
   база блокера (для истории):
-  - реальный файл `C:\MineRust-data\world-template\data\minecraft\world_gen_settings.dat`:
+  - реальный файл `E:\MineRust-data\world-template\data\minecraft\world_gen_settings.dat`:
     корень `{DataVersion, data: {seed: 12345, bonus_chest,
     generate_structures, dimensions}}` — `seed` **в корне отсутствует**;
   - `level.dat`: корень `{Data: {...}}`, `Data.DataVersion = 5023`,
@@ -1232,7 +1232,7 @@ warnings`, `cargo test --workspace` — зелёные.
   из `world_gen_settings.dat` шаблона (seed 12345, шаг 3.3e); спавн — из
   `level.dat` `[96,145,−32]`, его байты на проводе совпали с трейсом
   ванили (шаг g).
-- Блокер палитры чанков снят: `C:\MineRust-data\reports\blocks.json`
+- Блокер палитры чанков снят: `E:\MineRust-data\reports\blocks.json`
   сгенерирован владельцем (`tools\generate-reports.ps1`) и прописан в
   `server.toml`; mapping имя+свойства → state id работает (сверено на
   всех 14 секциях шага 3.2).
@@ -1268,7 +1268,7 @@ warnings`, `cargo test --workspace` — зелёные.
   NBT — светящиеся пещеры и резкие границы по подчанкам, лечится движком
   света (отдельный этап).** Подтверждено данными 09.11.2026 по чанку
   (4,0) шаблона v2 (`python target\parity\light_detail.py
-  C:\MineRust-data\world-template 4,0`, статус `minecraft:full`), секции
+  E:\MineRust-data\world-template 4,0`, статус `minecraft:full`), секции
   Y=0..4:
   | Секция | SkyLight в NBT | BlockLight в NBT | Что отправляем |
   |---|---|---|---|
@@ -1327,7 +1327,7 @@ warnings`, `cargo test --workspace` — зелёные.
   Разбор — `tools/trace-analyze/analyze.py entities` (`d8dd392`).
 - Прогон: `cargo test -p parity --release --test two_bot_trace --
   --ignored --nocapture` = 197.48 с, С1/С2/С3 подряд, каждый на свежей
-  копии `C:\MineRust-data\world-template`. Фон: CPU ~14 %, ~21 ГБ
+  копии `E:\MineRust-data\world-template`. Фон: CPU ~14 %, ~21 ГБ
   свободно, 12 логических / 6 физических ядер
   (`target/bench/m45-run-note.txt`).
 - Итог: `violations=[]` везде, шаблон SHA-256 не изменился (0 файлов);
@@ -1342,7 +1342,7 @@ warnings`, `cargo test --workspace` — зелёные.
   вне зоны — С1: 0, С2: 47 в колонке x=30, С3: 464 в x 30..39 (ранняя
   стадия `structure_starts`, причина не установлена).
 - Агрегаты: `docs/ARCH-M4.md` §6 («M4.5 (данные)»), `docs/DECISIONS.md`;
-  сырые отчёты `C:\MineRust-data\traces\`, разборы `target/bench/`.
+  сырые отчёты `E:\MineRust-data\traces\`, разборы `target/bench/`.
   Серверные крейты (`net`/`server`/`protocol`) не тронуты — бот-код и
   инструменты.
 - Далее: решение владельца по объёму серверного M4.5 (видимость игроков)
@@ -1479,7 +1479,7 @@ warnings`, `cargo test --workspace` — зелёные.
   сокетами, два бота, С1/С2/С4; фильтр по id B из UUID `add_entity`; нормализация
   только entity id / позиция по тику / game mode. Расхождения — списком (тип,
   смещение, наш байт, ванильный байт) в
-  `C:\MineRust-data\traces\entity-stream-parity.md`. Типов: С1 11/8, С2 176/316,
+  `E:\MineRust-data\traces\entity-stream-parity.md`. Типов: С1 11/8, С2 176/316,
   С4 113/198; причины — нет нулевого `move_entity_pos`, порядок
   `update_attributes`, нет `entity_position_sync` о игроке в С2, темп/байты
   `rotate_head`/`move_entity_rot`. Gate не задевает (ignored).

@@ -26,7 +26,7 @@ import struct
 import sys
 from pathlib import Path
 
-PACKETS_JSON = Path(r"C:\MineRust-data\reports\packets.json")
+PACKETS_JSON = Path(r"E:\MineRust-data\reports\packets.json")
 
 SCENARIOS = {
     "s1": "A stands with a non-zero yaw/pitch, then B joins",
@@ -290,7 +290,7 @@ def print_rows(t_ms, name, rows):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dir", default=r"C:\MineRust-data\traces")
+    ap.add_argument("--dir", default=r"E:\MineRust-data\traces")
     ap.add_argument("--scenario", choices=sorted(SCENARIOS))
     ap.add_argument("--all", action="store_true")
     args = ap.parse_args()

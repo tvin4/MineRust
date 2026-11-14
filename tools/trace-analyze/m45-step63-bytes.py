@@ -6,7 +6,7 @@ import base64
 from pathlib import Path
 from collections import Counter
 
-T = Path(r"C:\MineRust-data\traces")
+T = Path(r"E:\MineRust-data\traces")
 B_UUID = "b3b03a00-4714-337e-8103-52c60a6c836f"
 MOVES = {
     "minecraft:move_entity_pos", "minecraft:move_entity_pos_rot", "minecraft:move_entity_rot",

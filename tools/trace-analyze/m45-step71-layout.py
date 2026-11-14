@@ -5,7 +5,7 @@ import json
 import struct
 from pathlib import Path
 
-T = Path(r"C:\MineRust-data\traces")
+T = Path(r"E:\MineRust-data\traces")
 B_UUID = "b3b03a00-4714-337e-8103-52c60a6c836f"
 
 

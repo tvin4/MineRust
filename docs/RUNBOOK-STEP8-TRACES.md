@@ -23,13 +23,13 @@ B** — второй клиент, который смотрит на игрок
 
 ## 1. Что нужно на диске
 
-- Ваниль: `C:\MineRust-data\vanilla` (jar `C:\MineRust-data\server.jar`),
+- Ваниль: `E:\MineRust-data\vanilla` (jar `E:\MineRust-data\server.jar`),
   `server.properties`: `server-port=25566`,
   `network-compression-threshold=-1`, `online-mode=false`,
   **`gamemode=survival`** (в отличие от LIVE-WALK.md — там spectator),
   `view-distance=10`. `force-gamemode=true` рекомендуется (чтобы A не
   оказался в режиме по умолчанию).
-- Шаблон v3: `C:\MineRust-data\world-template-v3` (**сам шаблон не трогаем**).
+- Шаблон v3: `E:\MineRust-data\world-template-v3` (**сам шаблон не трогаем**).
 - Прокси-бинарь: `cargo run -p parity --bin mcproxy`.
 
 **Важно про `max-tick-time`:** ватчдог (`max-tick-time`, по умолчанию 60000 мс)
@@ -40,13 +40,13 @@ B** — второй клиент, который смотрит на игрок
 
 1. Свежая копия v3 в рабочий мир ванили (сам шаблон не меняем):
    ```powershell
-   $world = 'C:\MineRust-data\vanilla\world'
+   $world = 'E:\MineRust-data\vanilla\world'
    if (Test-Path $world) { Remove-Item -Recurse -Force $world }
-   Copy-Item -Recurse 'C:\MineRust-data\world-template-v3' $world
+   Copy-Item -Recurse 'E:\MineRust-data\world-template-v3' $world
    ```
 2. Временно отключить ватчдог и выставить survival (вернуть после прогона):
    ```powershell
-   $props = 'C:\MineRust-data\vanilla\server.properties'
+   $props = 'E:\MineRust-data\vanilla\server.properties'
    Copy-Item $props "$props.bak" -Force
    (Get-Content $props) -replace '^max-tick-time=.*', 'max-tick-time=-1' `
        -replace '^gamemode=.*', 'gamemode=survival' |
@@ -54,13 +54,13 @@ B** — второй клиент, который смотрит на игрок
    ```
 3. Поднять ваниль на 25566:
    ```powershell
-   Start-Process java -WorkingDirectory 'C:\MineRust-data\vanilla' `
-       -ArgumentList '-Xmx1G','-jar','C:\MineRust-data\server.jar','--nogui'
+   Start-Process java -WorkingDirectory 'E:\MineRust-data\vanilla' `
+       -ArgumentList '-Xmx1G','-jar','E:\MineRust-data\server.jar','--nogui'
    ```
-   Дождаться в `C:\MineRust-data\vanilla\logs\latest.log` строки `Done (...)`.
+   Дождаться в `E:\MineRust-data\vanilla\logs\latest.log` строки `Done (...)`.
 4. Поднять запись-прокси 25565 → 25566:
    ```powershell
-   cargo run -p parity --bin mcproxy -- --listen 127.0.0.1:25565 --out C:\MineRust-data\traces
+   cargo run -p parity --bin mcproxy -- --listen 127.0.0.1:25565 --out E:\MineRust-data\traces
    ```
    Прокси откажется работать при включённом сжатии или `online-mode=true`.
    Каждое соединение пишет свой файл `proxy-conn-<N>.jsonl`:
@@ -95,17 +95,17 @@ yaw/pitch клиент был при выходе из прошлой сесси
 1. Остановить прокси (Ctrl+C), затем в консоли ванили `stop`.
 2. Вернуть `server.properties` из `$props.bak`.
 3. Сверить копию мира с шаблоном (манифест в формате `sha256  путь`, как
-   `C:\MineRust-data\world-template-v1.sha256.txt`):
+   `E:\MineRust-data\world-template-v1.sha256.txt`):
    ```powershell
-   Get-ChildItem -Recurse -File 'C:\MineRust-data\vanilla\world' |
+   Get-ChildItem -Recurse -File 'E:\MineRust-data\vanilla\world' |
        ForEach-Object {
-           $rel = $_.FullName.Substring('C:\MineRust-data\vanilla\world\'.Length)
+           $rel = $_.FullName.Substring('E:\MineRust-data\vanilla\world\'.Length)
            $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
            "$h  $rel"
        } | Sort-Object { ($_ -split '  ',2)[1] } |
-       Set-Content 'C:\MineRust-data\vanilla\world.sha256.txt' -Encoding ascii
+       Set-Content 'E:\MineRust-data\vanilla\world.sha256.txt' -Encoding ascii
    ```
-   Сверить с шаблоном: `fc C:\MineRust-data\vanilla\world.sha256.txt <манифест-шаблона>`
+   Сверить с шаблоном: `fc E:\MineRust-data\vanilla\world.sha256.txt <манифест-шаблона>`
    либо вручную по `Get-FileHash` нескольких ключевых файлов. **Шаблон v3
    не должен меняться.**
 
@@ -127,7 +127,7 @@ yaw/pitch клиент был при выходе из прошлой сесси
 
 Запуск (сценарий — один из s1..s4, либо `--all`):
 ```powershell
-python tools\trace-analyze\m45-step80-scenarios.py --dir C:\MineRust-data\traces --scenario s1
+python tools\trace-analyze\m45-step80-scenarios.py --dir E:\MineRust-data\traces --scenario s1
 ```
 Файлы ожидаются как `<dir>\<сценарий>-A.jsonl` и `<dir>\<сценарий>-B.jsonl`
 (переименуйте `proxy-conn-1.jsonl` → `s1-A.jsonl`, `proxy-conn-2.jsonl` →

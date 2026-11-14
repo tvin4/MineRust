@@ -4,12 +4,12 @@
 
 .DESCRIPTION
     Drives the whole scenario run so the owner does not assemble it by hand:
-      1. fresh copy of world template v3 into C:\MineRust-data\vanilla\world;
+      1. fresh copy of world template v3 into E:\MineRust-data\vanilla\world;
       2. server.properties check (survival, force-gamemode, compression off,
          online-mode false, max-tick-time -1, port 25566) - stops with a clear
          error if anything is off;
       3. vanilla server on 25566 + mcproxy on 25565, each scenario writes into
-         its own folder C:\MineRust-data\traces\<scenario>;
+         its own folder E:\MineRust-data\traces\<scenario>;
       4. prints the exact actions of the scenario and waits for Enter;
       5. stop: save-all flush + stop the vanilla, stop the proxy, sha256 the
          world copy against the template and list changed .mca files;
@@ -44,13 +44,13 @@ $ErrorActionPreference = 'Stop'
 
 # --- paths ------------------------------------------------------------------
 $repo        = Split-Path -Parent $PSScriptRoot
-$vanillaDir  = 'C:\MineRust-data\vanilla'
+$vanillaDir  = 'E:\MineRust-data\vanilla'
 $worldDir    = Join-Path $vanillaDir 'world'
-$templateDir = 'C:\MineRust-data\world-template-v3'
-$templateManifest = 'C:\MineRust-data\world-template-v3.sha256.txt'
-$serverJar   = 'C:\MineRust-data\server.jar'
+$templateDir = 'E:\MineRust-data\world-template-v3'
+$templateManifest = 'E:\MineRust-data\world-template-v3.sha256.txt'
+$serverJar   = 'E:\MineRust-data\server.jar'
 $propsPath   = Join-Path $vanillaDir 'server.properties'
-$tracesRoot  = 'C:\MineRust-data\traces'
+$tracesRoot  = 'E:\MineRust-data\traces'
 $outDir      = Join-Path $tracesRoot $Scenario.ToLower()
 $analyzePy   = Join-Path $repo 'tools\trace-analyze\m45-step80-scenarios.py'
 $scenarioKey = $Scenario.ToLower()   # s1..s4

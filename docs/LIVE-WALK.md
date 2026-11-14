@@ -10,11 +10,11 @@
 
 ## Что нужно на диске
 
-- Ваниль: `C:\MineRust-data\vanilla` (jar `C:\MineRust-data\server.jar`),
+- Ваниль: `E:\MineRust-data\vanilla` (jar `E:\MineRust-data\server.jar`),
   `server.properties`: `server-port=25566`,
   `network-compression-threshold=-1`, `online-mode=false`,
   `gamemode=spectator`, `view-distance=10`.
-- Шаблон v3: `C:\MineRust-data\world-template-v3` (копируется, **сам шаблон
+- Шаблон v3: `E:\MineRust-data\world-template-v3` (копируется, **сам шаблон
   не трогаем**).
 - Прокси-бинарь: `cargo run -p parity --bin mcproxy`.
 
@@ -22,30 +22,30 @@
 
 1. Свежая копия v3 в рабочий мир ванили:
    ```powershell
-   $world = 'C:\MineRust-data\vanilla\world'
+   $world = 'E:\MineRust-data\vanilla\world'
    if (Test-Path $world) { Remove-Item -Recurse -Force $world }
-   Copy-Item -Recurse 'C:\MineRust-data\world-template-v3' $world
+   Copy-Item -Recurse 'E:\MineRust-data\world-template-v3' $world
    ```
 2. Отключить ватчдог только на время прогона (потом вернуть):
    ```powershell
-   $props = 'C:\MineRust-data\vanilla\server.properties'
+   $props = 'E:\MineRust-data\vanilla\server.properties'
    Copy-Item $props "$props.bak" -Force
    (Get-Content $props) -replace '^max-tick-time=.*', 'max-tick-time=-1' |
        Set-Content $props -Encoding ascii
    ```
 3. Поднять ваниль на 25566:
    ```powershell
-   Start-Process java -WorkingDirectory 'C:\MineRust-data\vanilla' `
-       -ArgumentList '-Xmx1G','-jar','C:\MineRust-data\server.jar','--nogui'
+   Start-Process java -WorkingDirectory 'E:\MineRust-data\vanilla' `
+       -ArgumentList '-Xmx1G','-jar','E:\MineRust-data\server.jar','--nogui'
    ```
-   Дождаться в `C:\MineRust-data\vanilla\logs\latest.log` строки `Done (...)`.
+   Дождаться в `E:\MineRust-data\vanilla\logs\latest.log` строки `Done (...)`.
 4. Поднять запись-прокси 25565 → 25566:
    ```powershell
-   cargo run -p parity --bin mcproxy -- --listen 127.0.0.1:25565 --out C:\MineRust-data\traces
+   cargo run -p parity --bin mcproxy -- --listen 127.0.0.1:25565 --out E:\MineRust-data\traces
    ```
    Прокси откажется работать при включённом сжатии или `online-mode=true`.
    Подключение — `127.0.0.1:25565`. JSONL ляжет как
-   `C:\MineRust-data\traces\proxy-conn-*.jsonl`.
+   `E:\MineRust-data\traces\proxy-conn-*.jsonl`.
 5. Зайти живым клиентом на `127.0.0.1:25565` и пройтись пешком по зоне ниже.
 6. Остановить прокси (Ctrl+C), затем в консоли ванили `stop`, вернуть
    `server.properties` из `$props.bak`.

@@ -19,7 +19,7 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
-TRACES = Path(r"C:\MineRust-data\traces")
+TRACES = Path(r"E:\MineRust-data\traces")
 
 # Offline UUIDs of the bots (protocol::offline_uuid).
 B_UUID = bytes.fromhex("b3b03a004714337e810352c60a6c836f")
