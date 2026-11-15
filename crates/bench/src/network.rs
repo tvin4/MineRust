@@ -69,7 +69,7 @@ pub async fn start_server(
     // Warm-up: the reply is the Arc the pool cached; building the world was
     // the whole cost, the read itself is a clone.
     let reply = loader.load_batch().await?;
-    let _warmed: Arc<net::chunks::ReadyChunks> = match reply.await {
+    let _warmed: Arc<net::ChunkStore> = match reply.await {
         Ok(Ok(ready)) => ready,
         Ok(Err(error)) => anyhow::bail!("the synthetic world cannot be read: {error}"),
         Err(_) => anyhow::bail!("the loader worker did not answer the warm-up"),

@@ -1987,6 +1987,48 @@ Ours-прогоны этого не наследуют (П.1c), но до `5eede
 Реестр механик — `docs/MECHANICS.md`; план ломания — `docs/BLOCK-BREAKING.md`;
 план плавания — `docs/SWIMMING.md`.
 
+## Шаг 13a: общее хранилище блоков `ChunkStore` (15.11.2026)
+
+Код: `net::store::ChunkStore` — единственный владелец текущего снимка
+wire-мира; схема владения/конкурентности — `docs/DECISIONS.md`, «Шаг 13a».
+
+- `ReadyChunks` теперь держит `Vec<Arc<LevelChunkWithLight>>`; новый
+  `ReadyChunks::with_chunk` подменяет один payload, остальные — те же `Arc`.
+- `ChunkStore { current: RwLock<Arc<ReadyChunks>>, blocks: Arc<BlockStates> }`:
+  `snapshot()` — клон указателя под коротким чтением; `block`/`set_block`
+  читают/пишут блок по координате. `set_block` пересобирает **только**
+  затронутый чанк (распаковка/перепаковка одной секции, палитра только
+  растёт, заголовки `non_air`/`fluid` правятся) и публикует новый снимок.
+- `ChunkSource::load_batch` отдаёт `Arc<ChunkStore>`; `TemplateWorld.ready`
+  — `OnceLock<Arc<ChunkStore>>`. `PendingBatch` берёт `snapshot()` на каждый
+  подпакет, поэтому вошедший позже видит изменённый блок.
+- `data::BlockStates`: добавлены `properties` и `is_air`/`is_fluid` (правило
+  дублирует `world::wire_section::counts_as_fluid`, SOURCE — `parity/a2_findings`).
+  `WireTables.blocks` стал `Arc<BlockStates>` (общий с хранилищем).
+
+**Замеры (release, v3, `cargo test -p parity --release --test store_rebuild
+-- --ignored --nocapture`):**
+
+| Величина | Значение |
+|---|---|
+| warm-up (сборка + чтение 4481 чанка) | 8424 мс |
+| вход второго клиента (сторона store: кэш + snapshot), p50 | 15.1 мкс |
+| пересборка одного чанка, первый write (`Single` → packed) | 182.5 мкс |
+| пересборка одного чанка, установившееся p50 | 134.9 мкс |
+
+Второй клиент меряется на стороне store — то, что изменил 13a; сетевой вход
+не включается.
+
+**Тесты.** `net::store`: чтение/запись, адресная инвалидация (соседний чанк —
+тот же `Arc`), заголовки секции, палитра, ошибки; `net::chunks::with_chunk`;
+`net::connection::play::tests::a_sender_after_a_block_change_reads_the_new_block`
+— sender после записи отдаёт изменённые байты чанка.
+
+**Не установлено / границы.** Block entity изменённого блока не правится;
+палитра секции не чистится; свет не пересчитывается; на диск не пишется
+(только память). Игровой поток пока не получает `Arc<ChunkStore>` — это
+подключит Шаг 13b.
+
 ## Остаточные факты и блокеры
 
 - **Шаг 10 C:** punch→swing не детерминирован один-к-одному на S3 (22 punch, 11 swing); правила drain/aggregation и удержания на блоке не установлены. Нужны новые подтверждённые трейсы/семантика перед реализацией.

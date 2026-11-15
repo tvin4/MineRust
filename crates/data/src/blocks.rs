@@ -29,6 +29,8 @@ pub struct BlockStates {
     default: BTreeMap<String, i32>,
     /// State id → block name of that state.
     names: BTreeMap<i32, String>,
+    /// State id → the property values that select that state.
+    properties: BTreeMap<i32, Properties>,
     /// Block name → every state of that block (id + accepted values).
     states: BTreeMap<String, Vec<(i32, Properties)>>,
 }
@@ -72,6 +74,10 @@ impl BlockStates {
                 };
                 let id = id as i32;
                 report.names.entry(id).or_insert_with(|| name.clone());
+                report
+                    .properties
+                    .entry(id)
+                    .or_insert_with(|| property_values(state));
                 if state["default"] == Value::Bool(true) {
                     report.default.insert(name.clone(), id);
                 }
@@ -107,6 +113,47 @@ impl BlockStates {
     /// Block name of a state id, if the report knows the id.
     pub fn block_name(&self, state_id: i32) -> Option<&str> {
         self.names.get(&state_id).map(String::as_str)
+    }
+
+    /// Whether a state id is one of the three air blocks.
+    ///
+    /// Air is what a section header counts as "not solid" and what a break
+    /// leaves behind: `minecraft:air`, `minecraft:cave_air` and
+    /// `minecraft:void_air` — the same three names `world::wire_section`
+    /// excludes from the `non_air` header while converting the stored chunk.
+    pub fn is_air(&self, state_id: i32) -> bool {
+        matches!(
+            self.block_name(state_id),
+            Some("minecraft:air" | "minecraft:cave_air" | "minecraft:void_air")
+        )
+    }
+
+    /// Whether a state id counts toward the fluid header of its section.
+    ///
+    /// SOURCE: the very rule `world::wire_section::counts_as_fluid` applies
+    /// on block names, confirmed on 1944/1944 sections of two vanilla
+    /// recordings (`parity/a2_findings`) — `water`/`lava`, any state with
+    /// `waterlogged=true`, and the five water-shaped names. It lives here
+    /// because the wire palette, the only thing a chunk store over the wire
+    /// sees, carries state ids rather than names.
+    pub fn is_fluid(&self, state_id: i32) -> bool {
+        const AQUATIC: [&str; 5] = [
+            "minecraft:seagrass",
+            "minecraft:tall_seagrass",
+            "minecraft:kelp",
+            "minecraft:kelp_plant",
+            "minecraft:bubble_column",
+        ];
+        let Some(name) = self.block_name(state_id) else {
+            return false;
+        };
+        if name.ends_with(":water") || name.ends_with(":lava") || AQUATIC.contains(&name) {
+            return true;
+        }
+        self.properties
+            .get(&state_id)
+            .and_then(|props| props.get("waterlogged"))
+            .is_some_and(|value| value == "true")
     }
 
     /// Number of blocks the report describes.
@@ -177,6 +224,33 @@ mod tests {
         let states = BlockStates::parse(report(), "test".to_owned()).expect("valid report");
         assert_eq!(states.block_name(43), Some("minecraft:oak_slab"));
         assert_eq!(states.block_name(999), None);
+    }
+
+    /// The two section-header classifications a wire chunk store needs:
+    /// air and fluid, both by state id (the wire palette carries no names).
+    #[test]
+    fn air_and_fluid_states_are_classified_from_the_report() {
+        let text = r#"{
+          "minecraft:air": {"states": [{"id": 0, "default": true}]},
+          "minecraft:water": {"states": [
+            {"id": 1, "default": true, "properties": {"level": "0"}}
+          ]},
+          "minecraft:oak_slab": {"states": [
+            {"id": 41, "default": true},
+            {"id": 42, "default": false,
+             "properties": {"type": "top", "waterlogged": "true"}}
+          ]},
+          "minecraft:stone": {"states": [{"id": 2, "default": true}]}
+        }"#;
+        let states = BlockStates::parse(text, "test".to_owned()).expect("valid report");
+        assert!(states.is_air(0), "air is air");
+        assert!(!states.is_air(2), "stone is not air");
+        assert!(!states.is_air(999), "an unknown id is not air");
+        assert!(states.is_fluid(1), "water flows");
+        assert!(states.is_fluid(42), "a waterlogged slab flows");
+        assert!(!states.is_fluid(41), "a dry slab does not");
+        assert!(!states.is_fluid(2), "stone does not");
+        assert!(!states.is_fluid(999), "an unknown id does not");
     }
 
     #[test]

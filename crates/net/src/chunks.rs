@@ -11,6 +11,7 @@
 //! scanning the whole batch.
 
 use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
 
 use protocol::LevelChunkWithLight;
 
@@ -149,10 +150,15 @@ pub fn window_difference(old: (i32, i32), new: (i32, i32), radius: i32) -> Windo
 ///
 /// The index is built once, when the batch is built (the warm-up), and is
 /// never written again: a join only reads it. There is no lock on any path
-/// — the whole value sits behind one [`std::sync::Arc`].
+/// — the whole value sits behind one [`std::sync::Arc`], and so does every
+/// payload: replacing one chunk ([`Self::with_chunk`]) clones the vector of
+/// pointers and swaps a single element, never the payloads of the others
+/// (Шаг 13a).
 pub struct ReadyChunks {
-    /// Wire payloads, in the source's build order.
-    chunks: Vec<LevelChunkWithLight>,
+    /// Wire payloads, in the source's build order. Each sits behind its own
+    /// `Arc`, so one changed chunk is a pointer swap, not a copy of the
+    /// whole batch.
+    chunks: Vec<Arc<LevelChunkWithLight>>,
     /// `(chunk_x, chunk_z)` → position in `chunks`. A duplicate coordinate
     /// would overwrite an earlier one, which no world this server reads
     /// produces.
@@ -167,11 +173,37 @@ impl ReadyChunks {
             .enumerate()
             .map(|(position, chunk)| ((chunk.chunk_x, chunk.chunk_z), position))
             .collect();
+        let chunks = chunks.into_iter().map(Arc::new).collect();
         Self { chunks, index }
     }
 
+    /// A copy of this snapshot with the payload at `position` swapped for
+    /// `chunk` — the one-chunk invalidation of Шаг 13a.
+    ///
+    /// Only the vector of pointers is cloned; every other payload is the
+    /// same `Arc` it already was. The coordinate index is unchanged (the
+    /// chunk that changed keeps its coordinates), so the caller's position
+    /// stays valid. `position` must come from [`Self::position`] for the
+    /// coordinates `chunk` carries — asserted in debug builds.
+    pub fn with_chunk(&self, position: usize, chunk: Arc<LevelChunkWithLight>) -> Self {
+        debug_assert!(
+            self.chunks
+                .get(position)
+                .is_some_and(|old| (old.chunk_x, old.chunk_z) == (chunk.chunk_x, chunk.chunk_z)),
+            "the swapped payload keeps the coordinates of its position"
+        );
+        let mut chunks = self.chunks.clone();
+        if let Some(slot) = chunks.get_mut(position) {
+            *slot = chunk;
+        }
+        Self {
+            chunks,
+            index: self.index.clone(),
+        }
+    }
+
     /// Every ready payload, in build order.
-    pub fn chunks(&self) -> &[LevelChunkWithLight] {
+    pub fn chunks(&self) -> &[Arc<LevelChunkWithLight>] {
         &self.chunks
     }
 
@@ -400,5 +432,36 @@ mod tests {
         assert_eq!(ready.position(0, 1), None, "a chunk the world lacks");
         assert_eq!(ready.position(-1, -1), None);
         assert_eq!(ready.chunks().len(), 3);
+    }
+
+    /// Шаг 13a: replacing one chunk swaps exactly that payload and keeps
+    /// every other pointer and the whole coordinate index — the rebuild is
+    /// one chunk, not the batch.
+    #[test]
+    fn replacing_one_chunk_keeps_every_other_payload() {
+        let before = ReadyChunks::new(vec![test_chunk(0, 0), test_chunk(1, 0), test_chunk(2, -2)]);
+        let mut changed = test_chunk(1, 0);
+        changed.sections.clear(); // a visibly different payload
+        let position = before.position(1, 0).expect("the changed chunk is indexed");
+        let after = before.with_chunk(position, Arc::new(changed));
+        assert_eq!(after.len(), before.len(), "the batch keeps its size");
+        assert_eq!(after.position(0, 0), Some(0), "the index is unchanged");
+        assert_eq!(after.position(2, -2), Some(2));
+        assert!(
+            Arc::ptr_eq(&after.chunks()[0], &before.chunks()[0]),
+            "chunk 0 is the very same payload"
+        );
+        assert!(
+            Arc::ptr_eq(&after.chunks()[2], &before.chunks()[2]),
+            "chunk 2 is the very same payload"
+        );
+        assert!(
+            !Arc::ptr_eq(&after.chunks()[1], &before.chunks()[1]),
+            "only chunk 1 was swapped"
+        );
+        assert!(
+            after.chunks()[1].sections.is_empty(),
+            "the new payload is in place"
+        );
     }
 }

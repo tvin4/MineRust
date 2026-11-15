@@ -29,7 +29,6 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 use tracing::{debug, info, trace, warn};
 
-use crate::chunks::ReadyChunks;
 use crate::error::ConnectionError;
 use crate::frame::{read_tracked, write_tracked};
 use crate::game::{
@@ -37,6 +36,7 @@ use crate::game::{
     PlayerId, PlayerJoin, ServerMessage, ToGame, OUTBOUND_CAPACITY,
 };
 use crate::loader::{LoadError, Loader};
+use crate::store::ChunkStore;
 
 use super::Client;
 
@@ -591,12 +591,12 @@ fn store_move(
     Ok(())
 }
 
-/// The one-shot answer of the loader pool: the shared ready world of a
+/// The one-shot answer of the loader pool: the shared world store of a
 /// connection or the error of its read. Both sides of the pool move the
-/// same `Arc<ReadyChunks>` (part A 2 — a connection clones the pointer,
-/// never the payloads), so the branches name one type instead of the full
-/// nesting.
-type BatchReply = Result<Arc<ReadyChunks>, LoadError>;
+/// same `Arc<ChunkStore>` (Шаг 13a — a connection takes a snapshot and
+/// borrows the payloads, never copying them), so the branches name one
+/// type instead of the full nesting.
+type BatchReply = Result<Arc<ChunkStore>, LoadError>;
 /// Waits for the loader's reply on its one-shot channel.
 ///
 /// While nothing is queued the receiver is `None` and this future never

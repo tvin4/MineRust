@@ -24,7 +24,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use tracing::debug;
 
-use crate::chunks::ReadyChunks;
+use crate::store::ChunkStore;
 
 /// What a pool read fails with; sources box their own error type.
 pub type LoadError = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -32,14 +32,14 @@ pub type LoadError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// The world behind a [`Loader`]: reads happen on the blocking pool, one
 /// call per batch, never on a connection task.
 pub trait ChunkSource: Send + Sync + 'static {
-    /// The ready world of this source right now, behind a shared `Arc`:
-    /// the batch of a template world is built once and every join receives
-    /// the same immutable value, so a connection only ever clones the
-    /// pointer (part A 2, the cache), not the payloads. The value carries
+    /// The shared block store of this source right now, behind a shared
+    /// `Arc`: the batch of a template world is built once and every join
+    /// receives the same [`ChunkStore`], so a connection only ever clones
+    /// the pointer (part A 2, the cache), not the payloads. The store holds
     /// the `(x, z) -> position` index a join filters its window with
-    /// (M4.4 A). A failing read reports the data problem instead of a
-    /// default.
-    fn load_batch(&self) -> Result<Arc<ReadyChunks>, LoadError>;
+    /// (M4.4 A) and is what a block change mutates in place (Шаг 13a). A
+    /// failing read reports the data problem instead of a default.
+    fn load_batch(&self) -> Result<Arc<ChunkStore>, LoadError>;
 }
 
 /// The whole loader pool has gone away (shut down or panicked earlier).
@@ -50,7 +50,7 @@ pub struct LoaderShutDown;
 /// One unit of world work: the reply channel a batch arrives on.
 struct Job {
     /// Where the built batch (or its error) is delivered.
-    reply: oneshot::Sender<Result<Arc<ReadyChunks>, LoadError>>,
+    reply: oneshot::Sender<Result<Arc<ChunkStore>, LoadError>>,
 }
 
 /// Blocking workers in the pool (spawn_blocking threads, one queue each).
@@ -118,7 +118,7 @@ impl Loader {
     /// backpressure the pool exists for.
     pub async fn load_batch(
         &self,
-    ) -> Result<oneshot::Receiver<Result<Arc<ReadyChunks>, LoadError>>, LoaderShutDown> {
+    ) -> Result<oneshot::Receiver<Result<Arc<ChunkStore>, LoadError>>, LoaderShutDown> {
         let index = self.inner.next.fetch_add(1, Ordering::Relaxed) % self.inner.queues.len();
         let (reply, received) = oneshot::channel();
         self.inner.queues[index]
@@ -148,12 +148,13 @@ mod tests {
     }
 
     impl ChunkSource for EchoSource {
-        fn load_batch(&self) -> Result<Arc<ReadyChunks>, LoadError> {
+        fn load_batch(&self) -> Result<Arc<ChunkStore>, LoadError> {
             let thread = std::thread::current();
             let name = thread.name().unwrap_or("<unnamed>").to_owned();
             self.seen.lock().expect("test lock uncontended").push(name);
-            Ok(Arc::new(ReadyChunks::new(
-                (0..self.count).map(test_chunk).collect(),
+            Ok(Arc::new(ChunkStore::new(
+                crate::chunks::ReadyChunks::new((0..self.count).map(test_chunk).collect()),
+                Arc::new(data::BlockStates::default()),
             )))
         }
     }
@@ -250,9 +251,9 @@ mod tests {
             Loader::spawn(Arc::clone(&source) as Arc<dyn ChunkSource>).expect("worker threads");
 
         let received = loader.load_batch().await.expect("pool alive");
-        let chunks = received.await.expect("reply").expect("read ok");
-        assert_eq!(chunks.len(), 3, "the source's whole batch");
-        assert_eq!(chunks.chunks()[0].chunk_x, 0);
+        let store = received.await.expect("reply").expect("read ok");
+        assert_eq!(store.len(), 3, "the source's whole batch");
+        assert_eq!(store.snapshot().chunks()[0].chunk_x, 0);
 
         let seen = source.seen.lock().expect("test lock uncontended");
         assert_eq!(seen.len(), 1, "one worker picked the job up");

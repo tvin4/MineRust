@@ -121,7 +121,8 @@ async fn window_v3_warmup_is_within_budget() {
 
     // Cache bytes: the encoded payload sizes of every ready chunk.
     let mut cache_bytes = 0_u64;
-    for chunk in ready.chunks() {
+    let snapshot = ready.snapshot();
+    for chunk in snapshot.chunks() {
         cache_bytes += chunk.encode_payload().expect("encodable chunk").len() as u64;
     }
     let ready_chunks = ready.len();

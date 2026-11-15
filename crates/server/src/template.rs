@@ -13,6 +13,7 @@ use std::sync::{Arc, OnceLock};
 use data::{BlockStates, GameData, RegistryIds};
 use net::chunks::ReadyChunks;
 use net::loader::LoadError;
+use net::store::ChunkStore;
 use protocol::LevelChunkWithLight;
 use tracing::{debug, info, warn};
 use world::{Chunk, ChunkNotReady, StoredChunk};
@@ -32,8 +33,10 @@ const BIOME_REGISTRY: &str = "minecraft:worldgen/biome";
 /// `minecraft:worldgen/biome` registry of the loaded game data (the
 /// Registry Data packet numbers entries by their position).
 pub struct WireTables {
-    /// Block name (+properties) → state id (`blocks.json`).
-    blocks: BlockStates,
+    /// Block name (+properties) → state id (`blocks.json`), shared with the
+    /// [`net::ChunkStore`] so a block write can classify air and fluid by
+    /// state id (Шаг 13a).
+    blocks: Arc<BlockStates>,
     /// Built-in registry ids (`registries.json`).
     registries: RegistryIds,
     /// Loaded game data: synchronized registries and tags.
@@ -46,7 +49,7 @@ impl WireTables {
     /// (`WireError::UnknownBlock`, no invented id).
     pub fn new(blocks: BlockStates, registries: RegistryIds, game_data: Arc<GameData>) -> Self {
         Self {
-            blocks,
+            blocks: Arc::new(blocks),
             registries,
             game_data,
         }
@@ -85,16 +88,17 @@ pub struct TemplateWorld {
     /// connection (`Arc`, first build wins the `OnceLock` slot). It carries
     /// the payloads and the `(x, z) -> position` index (M4.4 A), both built
     /// together at warm-up so a join resolves its window in O(1) and never
-    /// scans the batch.
+    /// scans the batch. Since Шаг 13a it is a [`ChunkStore`] rather than a
+    /// bare [`ReadyChunks`]: the game thread changes blocks in it and every
+    /// connection reads the newest snapshot.
     ///
     /// The reader used to re-read every region file and re-encode every
     /// chunk on each job: the owner's log showed `world batch built
     /// sent=729` once at the warm-up and again on every join (~2.4 s of
-    /// work). The cache turns every later job into an `Arc` clone: an
-    /// immutable value with no `Mutex` anywhere on the join path or in the
-    /// tick (docs/DECISIONS.md rule: a new lock needs a written reason —
-    /// this is the lock-free side of the answer instead).
-    ready: OnceLock<Arc<ReadyChunks>>,
+    /// work). The cache turns every later job into an `Arc` clone: a value
+    /// whose snapshot pointer is swapped by the single writer and read by
+    /// connections (docs/DECISIONS.md «Шаг 13a»).
+    ready: OnceLock<Arc<ChunkStore>>,
 }
 
 impl TemplateWorld {
@@ -146,16 +150,19 @@ impl TemplateWorld {
     }
 
     /// The shared ready world: the first caller reads the world and stores
-    /// it, every later caller only clones the `Arc`. No `Mutex` stands
-    /// between a connection and a payload — the hand-over is `OnceLock`,
-    /// and two racing first readers cost one wasted build at most, only
-    /// while the cache is still empty (the warm-up fills it before any
-    /// port binds).
-    fn ready_batch(&self) -> Result<Arc<ReadyChunks>, LoadError> {
+    /// it, every later caller only clones the `Arc`. The hand-over is
+    /// `OnceLock`; the only lock on the path is the store's own snapshot
+    /// lock (docs/DECISIONS.md «Шаг 13a»), and two racing first readers
+    /// cost one wasted build at most, only while the cache is still empty
+    /// (the warm-up fills it before any port binds).
+    fn ready_batch(&self) -> Result<Arc<ChunkStore>, LoadError> {
         if let Some(cached) = self.ready.get() {
             return Ok(Arc::clone(cached));
         }
-        let built = Arc::new(ReadyChunks::new(self.build_batch()?));
+        let built = Arc::new(ChunkStore::new(
+            ReadyChunks::new(self.build_batch()?),
+            Arc::clone(&self.refs.blocks),
+        ));
         Ok(Arc::clone(self.ready.get_or_init(|| built)))
     }
 
@@ -190,10 +197,10 @@ impl TemplateWorld {
 impl net::ChunkSource for TemplateWorld {
     /// Every ready chunk of the save as a wire payload behind the shared
     /// `Arc`: the first call builds the batch and its index (the warm-up
-    /// owns it), later calls return the same immutable value out of
+    /// owns it), later calls return the same [`ChunkStore`] out of
     /// [`Self::ready_batch`]. A join clones the pointer — never the
-    /// payloads.
-    fn load_batch(&self) -> Result<Arc<ReadyChunks>, LoadError> {
+    /// payloads — and the game thread writes blocks into the same store.
+    fn load_batch(&self) -> Result<Arc<ChunkStore>, LoadError> {
         self.ready_batch()
     }
 }

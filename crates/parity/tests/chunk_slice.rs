@@ -31,7 +31,7 @@ use std::sync::Arc;
 
 use chunk_compare::compare_pair;
 use net::ChunkSource as _;
-use net::ReadyChunks;
+use net::ChunkStore;
 use parity::{load_parity_env, ParityEnv};
 use protocol::LevelChunkWithLight;
 use server::{TemplateWorld, WireTables};
@@ -231,7 +231,7 @@ fn report_path(field: &str, value: Option<&str>) -> Option<PathBuf> {
 /// The payloads this server would send for the template world, built by
 /// the production conversion path. `None` with a printed reason when a
 /// report or the world itself is unavailable on this machine.
-fn our_payloads(env: &ParityEnv) -> Option<Arc<ReadyChunks>> {
+fn our_payloads(env: &ParityEnv) -> Option<Arc<ChunkStore>> {
     let region = env
         .world_template
         .join("dimensions/minecraft/overworld/region");
@@ -388,10 +388,11 @@ fn the_chunk_slice_writes_the_diff_table() {
         None => return,
     };
 
-    let by_coord: BTreeMap<(i32, i32), &LevelChunkWithLight> = ours
+    let ours_snapshot = ours.snapshot();
+    let by_coord: BTreeMap<(i32, i32), &LevelChunkWithLight> = ours_snapshot
         .chunks()
         .iter()
-        .map(|chunk| ((chunk.chunk_x, chunk.chunk_z), chunk))
+        .map(|chunk| ((chunk.chunk_x, chunk.chunk_z), chunk.as_ref()))
         .collect();
     let mut summary = Summary {
         trace: trace_file,
@@ -457,7 +458,8 @@ fn the_ready_index_resolves_every_template_chunk() {
         729,
         "the v2 ready batch: 625 full + 104 initialize_light chunks"
     );
-    for (position, chunk) in ready.chunks().iter().enumerate() {
+    let snapshot = ready.snapshot();
+    for (position, chunk) in snapshot.chunks().iter().enumerate() {
         assert_eq!(
             ready.position(chunk.chunk_x, chunk.chunk_z),
             Some(position),

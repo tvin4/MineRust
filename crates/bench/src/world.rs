@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use net::chunks::ReadyChunks;
 use net::loader::{ChunkSource, LoadError};
+use net::store::ChunkStore;
 use protocol::{ChunkSection, HeightmapRecord, LevelChunkWithLight, LightData, PaletteContainer};
 
 /// Chunks along one axis of the synthetic world.
@@ -27,15 +28,15 @@ use protocol::{ChunkSection, HeightmapRecord, LevelChunkWithLight, LightData, Pa
 /// edge chunks as "outside the window" (they simply do not exist).
 pub const WORLD_SIDE: i32 = 288;
 
-/// A chunk source over a pre-built ready batch.
+/// A chunk source over a pre-built ready store.
 struct FlatSource {
     /// The whole world, built once at construction.
-    ready: Arc<ReadyChunks>,
+    store: Arc<ChunkStore>,
 }
 
 impl ChunkSource for FlatSource {
-    fn load_batch(&self) -> Result<Arc<ReadyChunks>, LoadError> {
-        Ok(Arc::clone(&self.ready))
+    fn load_batch(&self) -> Result<Arc<ChunkStore>, LoadError> {
+        Ok(Arc::clone(&self.store))
     }
 }
 
@@ -55,8 +56,11 @@ pub fn build(side: i32) -> (Arc<dyn ChunkSource>, MemoryEstimate) {
         // guessed: see the printed estimate.
         bytes: chunks.len() as u64 * std::mem::size_of::<LevelChunkWithLight>() as u64,
     };
-    let ready = Arc::new(ReadyChunks::new(chunks));
-    let source = Arc::new(FlatSource { ready });
+    let store = Arc::new(ChunkStore::new(
+        ReadyChunks::new(chunks),
+        Arc::new(data::BlockStates::default()),
+    ));
+    let source = Arc::new(FlatSource { store });
     (source as Arc<dyn ChunkSource>, est)
 }
 

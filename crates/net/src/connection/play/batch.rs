@@ -22,9 +22,10 @@ use tokio::io::AsyncWrite;
 use tokio::time::Instant;
 use tracing::{debug, info};
 
-use crate::chunks::{window, ReadyChunks};
+use crate::chunks::window;
 use crate::error::ConnectionError;
 use crate::frame::write_tracked;
+use crate::store::ChunkStore;
 
 use super::chunk_pace::{ChunkPace, TICK};
 
@@ -88,9 +89,10 @@ pub(super) enum Stage {
 /// a sub-batch that has not gone out yet: a chunk that left the window while
 /// still queued is dropped without a `forget_level_chunk`.
 pub(super) struct PendingBatch {
-    /// The shared ready world (part A 2); payloads are borrowed on send,
-    /// never copied. Coordinates are resolved through its index.
-    chunks: Arc<ReadyChunks>,
+    /// The shared world store (Шаг 13a); a snapshot is taken per sub-batch
+    /// and the payloads borrowed from it on send, never copied. Coordinates
+    /// are resolved through the snapshot's index.
+    chunks: Arc<ChunkStore>,
     /// Coordinates waiting to be written, in send order (front first).
     queue: VecDeque<(i32, i32)>,
     /// Coordinates already written as `level_chunk_with_light`.
@@ -122,7 +124,8 @@ impl PendingBatch {
     /// skipped (a join at a world edge sends what exists, never a hole).
     /// The order then puts the player's chunk first and the rest by growing
     /// squared distance.
-    pub(super) fn new(ready: Arc<ReadyChunks>, center_x: i32, center_z: i32, radius: i32) -> Self {
+    pub(super) fn new(store: Arc<ChunkStore>, center_x: i32, center_z: i32, radius: i32) -> Self {
+        let ready = store.snapshot();
         let wanted = window(center_x, center_z, radius);
         let mut queue: VecDeque<(i32, i32)> = wanted
             .iter()
@@ -145,7 +148,7 @@ impl PendingBatch {
                 order_key(chunk_x, chunk_z, center_x, center_z)
             });
         Self {
-            chunks: ready,
+            chunks: store,
             queue,
             sent: BTreeSet::new(),
             written: 0,
@@ -229,11 +232,12 @@ impl PendingBatch {
         }
         let was_idle = self.queue.is_empty();
         let mut misses = 0_u64;
+        let ready = self.chunks.snapshot();
         for &cell in add {
             if self.sent.contains(&cell) || self.queue.contains(&cell) {
                 continue;
             }
-            if self.chunks.position(cell.0, cell.1).is_some() {
+            if ready.position(cell.0, cell.1).is_some() {
                 self.queue.push_back(cell);
             } else {
                 misses += 1;
@@ -314,12 +318,15 @@ impl PendingBatch {
         };
         let mut group: Vec<&LevelChunkWithLight> = Vec::with_capacity(size);
         let mut sent_coords: Vec<(i32, i32)> = Vec::with_capacity(size);
+        // One snapshot for this sub-batch: a block changed between two
+        // sub-batches lands in the next one (Шаг 13a).
+        let ready = self.chunks.snapshot();
         for _ in 0..size.min(left) {
             let Some((chunk_x, chunk_z)) = self.queue.pop_front() else {
                 break;
             };
-            if let Some(index) = self.chunks.position(chunk_x, chunk_z) {
-                group.push(&self.chunks.chunks()[index]);
+            if let Some(index) = ready.position(chunk_x, chunk_z) {
+                group.push(&ready.chunks()[index]);
                 sent_coords.push((chunk_x, chunk_z));
             }
         }
@@ -378,7 +385,7 @@ pub(super) async fn wait_turn(stage: Option<Stage>) -> Option<()> {
 pub(super) async fn write_chunk_batch<W>(
     writer: &mut W,
     ids: &PacketIds,
-    ready: Arc<ReadyChunks>,
+    ready: Arc<ChunkStore>,
     pace: &ChunkPace,
     center_x: i32,
     center_z: i32,

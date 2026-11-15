@@ -15,6 +15,7 @@ use tokio::io::{AsyncWriteExt, BufReader};
 use super::*;
 use crate::chunks::ReadyChunks;
 use crate::frame::read_frame;
+use crate::store::ChunkStore;
 
 /// A game thread for a test. The thread is detached and ends when its
 /// handle is dropped at the end of the test.
@@ -32,11 +33,112 @@ struct GatedSource {
 }
 
 impl crate::loader::ChunkSource for GatedSource {
-    fn load_batch(&self) -> Result<Arc<ReadyChunks>, LoadError> {
+    fn load_batch(&self) -> Result<Arc<ChunkStore>, LoadError> {
         // This is the whole point of the pool: the slow world read
         // parks on a pool worker thread, not on the connection.
         self.release.wait();
-        Ok(Arc::new(ReadyChunks::new(vec![one_payload()])))
+        Ok(store_of(vec![one_payload()]))
+    }
+}
+
+/// A store over a fixture batch: the play loop only reads it, so an empty
+/// block report (no air/fluid classification) is enough here.
+fn store_of(chunks: Vec<LevelChunkWithLight>) -> Arc<ChunkStore> {
+    Arc::new(ChunkStore::new(
+        ReadyChunks::new(chunks),
+        Arc::new(data::BlockStates::default()),
+    ))
+}
+
+/// A fixture chunk whose section slot 8 (y 64..79) is one solid state, so a
+/// write into it shows up in the encoded payload.
+fn solid_chunk(chunk_x: i32, chunk_z: i32) -> LevelChunkWithLight {
+    let mut chunk = one_payload();
+    chunk.chunk_x = chunk_x;
+    chunk.chunk_z = chunk_z;
+    chunk.sections = (0..24)
+        .map(|index| protocol::ChunkSection {
+            non_air: if index == 8 { 4096 } else { 0 },
+            fluid: 0,
+            blocks: protocol::PaletteContainer::Single(if index == 8 { 1 } else { 0 }),
+            biomes: protocol::PaletteContainer::Single(1),
+        })
+        .collect();
+    chunk
+}
+
+/// Drives the sender exactly as a join's opening does — [`write_chunk_batch`]
+/// is the flush the play loop writes — and returns the decoded payloads of
+/// that one sub-batch.
+async fn flush_payloads(store: &Arc<ChunkStore>, ids: &PacketIds) -> Vec<LevelChunkWithLight> {
+    let (client, mut server) = tokio::io::duplex(1 << 20);
+    write_chunk_batch(
+        &mut server,
+        ids,
+        Arc::clone(store),
+        &ChunkPace::default(),
+        6,
+        -2,
+        10,
+    )
+    .await
+    .expect("the join flush is written");
+    let mut reader = BufReader::new(client);
+    let (id, _) = next_packet(&mut reader).await;
+    assert_eq!(id, ids.id(ChunkBatchStart::KEY), "the flush opens");
+    let mut chunks = Vec::new();
+    loop {
+        let (id, payload) = next_packet(&mut reader).await;
+        if id == ids.id(LevelChunkWithLight::KEY) {
+            chunks.push(
+                LevelChunkWithLight::decode_payload(&mut protocol::PacketReader::new(&payload))
+                    .expect("decodable chunk"),
+            );
+            continue;
+        }
+        assert_eq!(id, ids.id(ChunkBatchFinished::KEY), "the flush closes");
+        return chunks;
+    }
+}
+
+/// Шаг 13a: a sender that runs after a block changed reads the newest
+/// snapshot — the very wire bytes of the chunk carry the new state, which is
+/// what "a player who joins later sees the block" means on the send path (the
+/// join's opening flush is the call below).
+#[tokio::test]
+async fn a_sender_after_a_block_change_reads_the_new_block() {
+    let ids = PacketIds::compiled();
+    let store = store_of(vec![solid_chunk(6, -2)]);
+
+    let before = flush_payloads(&store, &ids).await;
+    assert_eq!(before.len(), 1, "the join sends its one chunk");
+    assert_eq!(
+        before[0].sections[8].blocks,
+        protocol::PaletteContainer::Single(1),
+        "the section is one solid state before the write"
+    );
+
+    // The game thread breaks the block at (98, 64, -29): chunk (6, -2).
+    assert_eq!(
+        store
+            .set_block(98, 64, -29, 2)
+            .expect("the block is writable"),
+        1,
+        "the old state comes back"
+    );
+
+    let after = flush_payloads(&store, &ids).await;
+    assert_eq!(after.len(), 1);
+    assert_ne!(
+        before[0].encode_payload().expect("encodable"),
+        after[0].encode_payload().expect("encodable"),
+        "the later join gets the changed bytes"
+    );
+    match &after[0].sections[8].blocks {
+        protocol::PaletteContainer::Packed { palette, .. } => {
+            assert!(palette.contains(&2), "the new state is on the wire");
+        }
+        other => panic!("expected the changed container, got {other:?}"),
     }
 }
 
@@ -70,12 +172,12 @@ fn one_payload() -> LevelChunkWithLight {
 /// World source serving one fixed fixture batch: the play loop gets the
 /// same chunks on every read without touching a disk.
 struct FixedSource {
-    /// The ready world, shared between the pool worker and the test.
-    chunks: Arc<ReadyChunks>,
+    /// The store, shared between the pool worker and the test.
+    chunks: Arc<ChunkStore>,
 }
 
 impl crate::loader::ChunkSource for FixedSource {
-    fn load_batch(&self) -> Result<Arc<ReadyChunks>, LoadError> {
+    fn load_batch(&self) -> Result<Arc<ChunkStore>, LoadError> {
         Ok(Arc::clone(&self.chunks))
     }
 }
@@ -282,7 +384,7 @@ async fn a_confirmed_pace_splits_a_burst_into_tick_sized_sub_batches() {
         write_chunk_batch(
             &mut server_write,
             &ids_in_task,
-            Arc::new(ReadyChunks::new(chunks)),
+            store_of(chunks),
             &pace,
             0,
             0,
@@ -353,7 +455,7 @@ async fn chunks_outside_the_send_radius_are_not_sent() {
         write_chunk_batch(
             &mut server_write,
             &ids_in_task,
-            Arc::new(ReadyChunks::new(chunks)),
+            store_of(chunks),
             &pace,
             0,
             0,
@@ -551,7 +653,7 @@ async fn the_first_flush_is_nine_then_the_vanilla_paced_tail() {
         .collect();
     assert_eq!(chunks.len(), 20, "the fixture batch");
     let loader = Loader::spawn(Arc::new(FixedSource {
-        chunks: Arc::new(ReadyChunks::new(chunks)),
+        chunks: store_of(chunks),
     }))
     .expect("pool threads");
 
@@ -653,7 +755,7 @@ async fn the_first_flush_is_nine_then_the_vanilla_paced_tail() {
 /// The ready world of the ШАГ 3 fixtures: a full square big enough for every
 /// window a walk from centre (0, 0) east to (5, 0) touches at radius 8
 /// (x −10..=14, z −10..=10), so nothing the walk needs is ever a hole.
-fn walk_world() -> Arc<ReadyChunks> {
+fn walk_world() -> Arc<ChunkStore> {
     let chunks: Vec<LevelChunkWithLight> = (-10..=14)
         .flat_map(|chunk_x| {
             (-10..=10).map(move |chunk_z| LevelChunkWithLight {
@@ -663,7 +765,7 @@ fn walk_world() -> Arc<ReadyChunks> {
             })
         })
         .collect();
-    Arc::new(ReadyChunks::new(chunks))
+    store_of(chunks)
 }
 
 /// Reads one whole sub-batch (`chunk_batch_start` ... `finished`) and returns
