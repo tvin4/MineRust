@@ -1658,7 +1658,7 @@ warnings`, `cargo test --workspace` — зелёные.
 |---|---|---|
 | S1b — углы при входе наблюдателя (A) | `add_entity` использовал нулевые углы | Vanilla B payload завершает spawn хвостом `00 40 45 45 00` (data/pitch/yaw/head-yaw/trailing); encoder A берёт сохранённые углы. Побайтный тест есть; vanilla S1b `2026-11-14_1831` (`… 00 40 45 45 00`), локальный S1b `2026-11-14_s1b-ours-final` (`… 00 10 f5 f5 00`, yaw/pitch A на момент входа) — оба зелёные. |
 | S5 — sneak/sprint (B) | Ввод применялся в состоянии игрока, observer metadata не отправлялась; сценарий проверял только наличие | Ванильные окна подтверждают отдельные flags и pose metadata; encoder и unit-тесты это проверяют. Ours live `2026-11-15_step10-live-ours-s5-observe`: wire checks PASS (`player_input` `20 00 01 41 01 00`, metadata flags `02 → 00 → 08 → 00`, pose `05 → 00`, sprint attributes); B observe подтвердил sneak `CROUCHING/true`, sprint `STANDING/false` (одна попытка на состояние). |
-| S3 — swing (C) | `drain_swings` не подключён | B получил 11 пакетов `swing_animation` (id 123, clientbound), все побайтно `8a 08 00 01 06` — VarInt entity id A = `8a 08` (1034), затем `00 01 06` (смысл трёх хвостовых байт **не установлен**). A послал 22 `punch` (46) и 2 `player_action` (41); A получил 0 swing (рассылка идёт только наблюдателям). Сетевая задержка read→write и независимый clock offset проверены: greedy правило `>=150 ms` по A `read_ms` принимает 8 из 22 (seq `27042, 27432, 27918, 28683, 28789, 28954, 29069, 29162`), но B содержит 11 swings. Совпадающие интервалы первых одиночных событий расходятся на `−2.49`, `−0.80`, `+7.53 ms` после offset; B имеет две тройки интервалами `<150 ms` сразу после `block_destruction` (seq 4920–4922 и 5094–5096). Правило не объясняет число/тайминг, C остановлен без encoder. |
+| S3 — swing (C) | `drain_swings` не подключён | B получил 11 пакетов `swing_animation` (id 123, clientbound), все побайтно `8a 08 00 01 06` — VarInt entity id A = `8a 08` (1034), затем `00 01 06` (смысл трёх хвостовых байт **не установлен**). A послал 22 `punch` (46) и 2 `player_action` (41); A получил 0 swing (рассылка идёт только наблюдателям). Сетевая задержка read→write и независимый clock offset проверены: greedy правило `>=150 ms` по A `read_ms` принимает 8 из 22 (seq `27042, 27432, 27918, 28683, 28789, 28954, 29069, 29162`), но B содержит 11 swings. Совпадающие интервалы первых одиночных событий расходятся на `−2.49`, `−0.80`, `+7.53 ms` после offset; B имеет две тройки интервалами `<150 ms` сразу после `block_destruction` (seq 4920–4922 и 5094–5096). Правило не объясняет число/тайминг, C остановлен без encoder. Сведение часов A/B и сырые интервалы — в разделе «S3: сведение часов A/B» ниже. |
 | S6 — `player_action` 41 | Причина отсутствия пакета неизвестна | Vanilla S6: miss, survival; клиент не видел блок под прицелом, потому 41 не послал. |
 | S5 creative — проверка B gate | Проверен только survival; gate `game_mode == 0` оставлен до отдельной записи | Vanilla stand запущен с `gamemode=creative`, `force-gamemode=true`; лог подтверждает `Default game type: CREATIVE`. A послал held-input flags `20`, `00`, `01`, `41`, `01`, `00`; B для A(entity `0x4f`) прислал sneak `02` (4263) → clear `00` (5926) → sprint `08` (6907) + sprint attribute (6908). Creative transition gate подтверждён для `game_mode == 1`; adventure/spectator не проверялись. Spawn flags/pose добавляются только для подтверждённого S7 survival режима (`game_mode == 0`); creative spawn не выводим из transition-трейса. Run `E:\MineRust-data\autotests\2026-11-14_s5-creative-retry`. |
 | S7 — observer joins while A holds state | spawn-state для уже приседающего/бегущего игрока неизвестен | Harness для каждого pose: A входит → stdin `tp Alice 96.5 145 -31.5` → клиент подтверждает позицию → ожидание ≥2 с → runtime-проверка безопасной позиции/блоков → удержание → B входит → анализ только post-login play. Первый прогон `E:\MineRust-data\autotests\2026-11-14_s7-validated` остановлен до ввода/B: клиент остался на исходной unsafe позиции. Второй прогон `E:\MineRust-data\autotests\2026-11-14_s7-rcon-retry` доказал sneak ввод, но завершился на harness false-negative: GUID bytes сравнивались неверно, хотя Alice `add_entity` присутствовал после B login. Конверсия UUID исправлена (`Guid.ToByteArray()` — фактический wire order), spawn matcher ограничен play. Валидный held-sprint trace `E:\MineRust-data\autotests\2026-11-14_s7-sprint-retry`: телепорт ровно в `(96.5,145,-31.5)`, `onGround=true`, feet/head air, support `dark_oak_leaves`, после ожидания ≥2 с; observe подтвердил `up=true`, `sprintKey=true`, `sprinting=true`, `horizontalCollision=false`; A serverbound `player_input` flags `40`→`41`; B после login seq 46 увидел A `add_entity` seq 135 (entity 58, UUID `10 92 05 08 d5 d8 3e ed 93 d2 92 f1 93 af e7 d7`), затем metadata seq 136 (`3a 09 03 41 7a aa ab 10 00 7f ff`) и `update_attributes` seq 137 (полный initial payload сохранён в trace; конкретная sprint-атрибуция для этого пакета не установлена). Эти initial-state пакеты зафиксированы как факты, без предположения, что они вызваны sprint input. Прогон PASS 5/5; `summary.json`/`summary.txt` и обе трассы сохранены. Отдельный held-sneak `E:\MineRust-data\autotests\2026-11-14_s7-sneak-final` также PASS 5/5: та же подтверждённая безопасная позиция; `shift=true`; A flags `20`; B после login увидел A `add_entity` seq 175 (entity 47), metadata seq 176=`2f 00 00 02 06 14 05 09 03 41 7a aa ab 10 00 7f ff`, initial update_attributes seq 177. Metadata содержит флаг `02`; атрибуты сохранены как наблюдаемый initial packet без вывода о причине. Оба S7 трейса отдельные и валидные. `scenario-lib.ps1` теперь ждёт выхода Java после stop, а S7 останавливает оба клиента между позами, устраняя гонку JNA native DLL.
@@ -1669,9 +1669,115 @@ Packet IDs (все — из пользовательского `E:\MineRust-data
 
 Для B в S5 есть отдельные sneak и sprint переходы; sneak flags/pose пакеты идут отдельно, проверяются оба значения. Формула flags — OR подтверждённых битов `0x02` и `0x08`; комбинация `0x0a` помечена «комбинация не подтверждена трейсом». Не обобщать переходы на другие game modes. S7 held-sneak trace `E:\\MineRust-data\\autotests\\2026-11-14_s7-sneak-final`, B seq 176, содержит initial metadata Alice entity `0x2f`: `2f 00 00 02 06 14 05 09 03 41 7a aa ab 10 00 7f ff`; в одном пакете зафиксированы sneak flags `02`, pose metadata `06 14 05` и исходные snapshot entries. Encoder передаёт текущий sneak state в spawn snapshot только survival (`game_mode == 0`), единственный подтверждённый режим S7; creative spawn и другие режимы не выводятся. Sprint spawn не добавляется, так как единичный sprint trace не доказывает его кодирование. Обычные movement packets остаются в своём потоке. В S7 initial metadata Alice также содержит health `15.67` (float bytes `41 7a aa ab`); найденный `damage_event` адресован entity `0x71`, не Alice `0x2f`, поэтому источник initial health и snapshot attribute values остаётся не установлен. Порядок подтверждён только для sprint и только относительно движения той же сущности: `entity_position_sync` (4028) → metadata (4029) → attribute (4030), и `move_entity_pos` (6957) → metadata (6958) → attribute (6959). У sneak соседние пакеты принадлежат другим сущностям (`set_entity_motion` 2218 и `move_entity_pos_rot` 2219 — entity `0x40`; `move_entity_pos` 3327 — entity 129), поэтому **порядок sneak относительно собственного движения трейсом не установлен**; encoder применяет подтверждённый sprint-порядок (движение перед metadata) ко всем переходам. Live run на нашем сервере подтвердил тот же порядок: sprint-off move 1229 → metadata 1230 → attribute 1231. См. ванильный S5 `E:\\MineRust-data\\autotests\\stage10-s5-vanilla-sprint-forward-2026-11-14\\mcproxy\\proxy-conn-2.jsonl`.
 
-Источники A: `E:\\MineRust-data\\autotests\\2026-11-14_1831\\mcproxy\\proxy-conn-2.jsonl` (vanilla) и `E:\\MineRust-data\\autotests\\2026-11-14_s1b-ours-final\\mcproxy\\proxy-conn-2.jsonl` (ours). Источники C: S3 `E:\\MineRust-data\\autotests\\2026-11-14_1644\\mcproxy\\proxy-conn-6.jsonl` (A) и `proxy-conn-7.jsonl` (B). Перекрёстное сопоставление времён A/B не делается: отсчёты connection независимы.
+Источники A: `E:\\MineRust-data\\autotests\\2026-11-14_1831\\mcproxy\\proxy-conn-2.jsonl` (vanilla) и `E:\\MineRust-data\\autotests\\2026-11-14_s1b-ours-final\\mcproxy\\proxy-conn-2.jsonl` (ours). Источники C: S3 `E:\\MineRust-data\\autotests\\2026-11-14_1644\\mcproxy\\proxy-conn-6.jsonl` (A) и `proxy-conn-7.jsonl` (B). Отсчёты `read_ms` внутри одного connection независимы от другого; способ их сведения описан ниже и применим только к сохранённым прогонам.
 
 Gate шага 10: `cargo fmt --all`, `cargo clippy --workspace -- -D warnings`, `cargo test --workspace` — зелёные; `run-scenario.ps1` проходит PowerShell parser, `git diff --check` чист. Ours live S5 `2026-11-15_step10-live-ours-s5-observe` прошёл wire и remote-pose checks; S7 `2026-11-15_step10-live-ours-s7-retry2` подтвердил обе удалённые позы; S1b `2026-11-14_s1b-ours-final` PASS.
+
+### Сведение часов A/B (метод и границы)
+
+`read_ms` в `proxy-conn-N.jsonl` считается `Instant::now()` от старта **своего**
+соединения (`crates/parity/src/proxy.rs`, `serve` → `started`), поэтому два
+connection несравнимы напрямую. Для сохранённых прогонов доступна внешняя
+привязка: строка `INFO parity::proxy: recording …proxy-conn-N.jsonl` пишется
+в `mcproxy-err.log` непосредственно перед `Instant::now()`, так что её
+wall-clock метка даёт начало отсчёта connection с точностью до задержки
+записи лога (единицы мс). Сведение: `t_abs(p) = anchor[N] + read_ms(p)`;
+межсоединительная дельта — разность `t_abs` двух пакетов. Метод валиден
+только для этих прогонов, требует `mcproxy-err.log` рядом с трейсами и не
+является частью протокольного сравнения; в отчётах он всегда помечается как
+внешняя привязка, а не как «общие часы».
+
+Привязки сохранённых прогонов (мс, unix-время): S3 `2026-11-14_1644`
+conn6 = `…13:48:05.893`, conn7 = `…13:48:38.295` → сдвиг **32401.66**;
+S5 `2026-11-15_step10-live-ours-s5-observe` conn1/conn2 → **36921.50**;
+S7 `2026-11-15_step10-live-ours-s7-retry2` conn1 `09:56:50.754`, conn2
+`09:57:28.977`, conn3 `09:58:06.393`, conn4 `09:58:39.074`.
+
+### S3: сырые последовательности A и B
+
+Ниже — всё, что есть в трейсах: A (`punch` serverbound 46,
+`player_action` serverbound 41) и B (`swing_animation` clientbound 123,
+`block_destruction` clientbound 5). Время — мс от первого `punch` A
+(`read_ms` A первый = 38694.9654); B пересчитан по привязке выше
+(сдвиг 32401.66). Помечено: `P` — `punch`, `A` — `player_action`,
+`S` — `swing_animation`, `D` — `block_destruction`; перед каждым — `seq`.
+
+A (22 `punch`, 2 `player_action`):
+
+```text
+27042:P:0.000 27432:P:653.309 27918:P:1301.664 28682:A:2398.632
+28683:P:2398.840 28684:P:2399.985 28707:P:2429.955 28741:P:2505.792
+28743:P:2506.046 28789:P:2656.473 28791:P:2657.170 28869:P:2665.197
+28871:P:2699.553 28889:P:2750.719 28915:P:2804.784 28954:P:2851.424
+28980:P:2902.285 29011:P:2947.890 29047:P:3001.111 29069:P:3045.768
+29097:P:3099.188 29137:P:3153.391 29161:A:3201.955 29162:P:3202.312
+```
+
+B (11 `swing_animation`, 11 `block_destruction`):
+
+```text
+3130:S:48.055 3594:S:698.871 4142:S:1346.426 4919:D:2450.775
+4920:S:2451.131 4921:S:2451.227 4922:S:2451.323 4952:D:2470.944
+5027:D:2686.761 5092:D:2709.355 5094:S:2709.626 5095:S:2709.732
+5096:S:2709.836 5142:D:2765.887 5185:D:2819.623 5213:S:2897.254
+5241:D:2918.398 5307:D:3015.345 5386:D:3125.134 5393:S:3146.834
+5444:D:3217.387 5452:D:3246.890
+```
+
+Payload `block_destruction` (все 11): `8a 08` (entity A = 1034) + packed
+block pos `00 00 17 7f ff fe a0 7b` (x=93, y=123, z=−22) + stage `00..09`,
+затем `ff` (сброс). `swing_animation` во всех 11 пакетах — `8a 08 00 01 06`.
+
+Что видно из этих чисел (только факты, причина не выводится): одиночные
+`S` идут через ~48/45/45 мс после ближайшего `P`; две тройки `S` (4920–4922,
+5094–5096) идут с шагом 0.10 мс внутри тройки сразу после `D` (4919, 5092);
+между `D` идут серии 21–106 мс. Связь «`P` → `S`» и правило агрегации
+(11 против 22) из данных не следуют; C по-прежнему не кодируется.
+
+### S7: аудит здоровья A до входа B
+
+Трейс `E:\\MineRust-data\\autotests\\2026-11-14_s7-sneak-final\\mcproxy\\proxy-conn-1.jsonl`
+(ваниль). Окно — всё до `player_info_update` с UUID Bob (seq 23607,
+`read_ms` 38617.702):
+
+- `entity_event` seq 51 (`read_ms` 1769.665) — `00 00 00 2f 18` (entity 0x2f,
+  status 0x18); других `entity_event` для `0x2f` до входа нет.
+- `player_position` (clientbound) ровно два: seq 55 (`read_ms` 1770.413,
+  flags 1, `y = 128.0`) и seq 3808 (`read_ms` 6997.654, flags 2,
+  `y = 145.0`); падения Y между ними нет.
+- `set_health` ровно один: seq 160 (`read_ms` 1863.106),
+  `41 7a aa ab 11 00 00 00 00` = health 15.666667, food 17, saturation 0.
+- `damage_event` до входа B — **0**; единственный `damage_event` прогона
+  seq 27142 (`71 06 00 00 00`) приходит позже и адресован entity `0x71`,
+  не Alice `0x2f`.
+
+Отсюда: видимое падение здоровья фиксируется только пакетом `set_health`;
+пакета, который бы его вызвал, в трейсе нет. Источник значения 15.67
+**не установлен**, спавн-код его не воспроизводит (в live-трейсах `ours`
+`set_health` и `damage_event` = 0 во всех connection).
+
+### Live-задержки S5/S7 (внутри и между connection)
+
+S5 `2026-11-15_step10-live-ours-s5-observe` — от serverbound `player_input`
+A до clientbound пакета B (привязка conn1/conn2, сдвиг 36921.50):
+
+| Переход | A seq (flags) | B flags | Δ, мс | B pose | Δ, мс |
+|---|---|---|---|---|---|
+| sneak-on | 2127 (`20`) | 640 | 60.08 | 641 | 60.19 |
+| sneak-off | 2163 (`00`) | 814 | 50.41 | 815 | 50.49 |
+| sprint-on | 2184 (`41`) | 904 | 16.18 | 905 | 16.34 |
+| sprint-off | 2296 (`01`) | 1211 | 33.81 | 1212 | 33.87 |
+
+S7 `2026-11-15_step10-live-ours-s7-retry2` — тот же вход B (клиент принят,
+`add_entity` A уже в потоке):
+
+| Сценарий | accept → `add_entity` | +metadata seq 61 | +metadata seq 63 | +`update_attributes` seq 64 |
+|---|---|---|---|---|
+| held-sneak | 869.704 | 0.060 | 0.195 | 0.279 |
+| held-sprint | 882.333 | 0.095 | 0.273 | 0.352 |
+
+Числа получены одной и той же внешней привязкой по `mcproxy-err.log`; это
+не «задержка сервера», а верхняя граница наблюдения на проводе.
 
 ### Сценарии до/после
 
@@ -1686,9 +1792,9 @@ Gate шага 10: `cargo fmt --all`, `cargo clippy --workspace -- -D warnings`, 
 
 - **Шаг 10 C:** punch→swing не детерминирован один-к-одному на S3 (22 punch, 11 swing); правила drain/aggregation и удержания на блоке не установлены. Нужны новые подтверждённые трейсы/семантика перед реализацией.
 - **Шаг 10 live acceptance (закрыт):** S5 `2026-11-15_step10-live-ours-s5-observe` — wire и клиентские checks PASS: `player_input` `20 00 01 41 01 00`, metadata `02 → 00 → 08 → 00`, отдельные pose metadata `05 → 00`, sprint-on/off attributes; B observe подтвердил sneak `CROUCHING/true` и sprint `STANDING/false` (по одной попытке). S7 `2026-11-15_step10-live-ours-s7-retry2` — PASS: B действительно наблюдал A как `CROUCHING`, `isCrouching=true` при held-sneak; для held-sprint — `STANDING`, `false`; обе A/B пары трассированы. Оба S7 pose-наблюдения теперь имеют двухпопыточную клиентскую проверку.
-- Spawn sprint не подтверждён: S7 held-sprint join содержит initial `update_attributes`, но причину значений из пакетов установить нельзя; spawn-код не утверждает sprint snapshot. В vanilla traces порядок атрибутов различается между C1/C2/C4 (26,13,8 / 8,26,13 / 26,8,13); решения о нормализации parity-теста нет.
-- S7 A-trace: `entity_event` seq 51 (`00 00 00 2f 18`), `player_position` seq 55 (`01 40 58 20 … c0 24 99 99 9a …`), до `set_health` seq 160 (`41 7a aa ab 11 00 00 00 00`, health 15.666667, food 17, saturation 0). Пакеты не объясняют причину health; она остаётся неустановленной. S3 остаётся только диагностикой: 22 A `punch`, 11 B `swing_animation`; серии 4920–4922 и 5094–5096 следуют за `block_destruction`, но связи и правила агрегации не установлены, поэтому C не реализуется.
-- **Остатки сверки (в) Шага 6.3:** решение о нормализации порядка `update_attributes` в parity-тесте не принято. Остаются также: принять ли эвристику `entity_position_sync`; какое правило `rotate_head` (C2 и C4 противоречат); как учитывать джиттер сэмплинга. До решений точное побайтовое совпадение C2/C4 недостижимо. Шаг 7.3 список не сузил (только вывел из него game mode).
+- Spawn sprint не подтверждён: S7 held-sprint join содержит initial `update_attributes`, но причину значений из пакетов установить нельзя; spawn-код не утверждает sprint snapshot. В vanilla traces порядок атрибутов различается между C1/C2/C4 (26,13,8 / 8,26,13 / 26,8,13); сравнение по порядку снято — см. `update_attributes` ниже.
+- S7 A-trace: `entity_event` seq 51 (`00 00 00 2f 18`), `player_position` seq 55 (`01 40 58 20 … c0 24 99 99 9a …`), до `set_health` seq 160 (`41 7a aa ab 11 00 00 00 00`, health 15.666667, food 17, saturation 0); `damage_event` до входа B нет (подробный аудит — раздел «S7: аудит здоровья A» выше). Пакеты не объясняют причину health; она остаётся неустановленной. S3 остаётся только диагностикой: 22 A `punch`, 11 B `swing_animation`; серии 4920–4922 и 5094–5096 следуют за `block_destruction`, но связи и правила агрегации не установлены, поэтому C не реализуется.
+- **Остатки сверки (в) Шага 6.3:** вопрос порядка `update_attributes` **закрыт** — сравнение идёт как набор записей `(key, value, modifiers)` и в unit-тестах, и в parity (`crates/protocol/src/packets/entity_meta.rs::records_match`, `crates/parity/src/diff.rs`; решение — `docs/DECISIONS.md`, «Порядок записей `update_attributes` не является критерием parity»). Остаются: принять ли эвристику `entity_position_sync`; какое правило `rotate_head` (C2 и C4 противоречат); как учитывать джиттер сэмплинга. До решений точное побайтовое совпадение C2/C4 недостижимо по этим классам, но не из-за порядка атрибутов. Шаг 7.3 список не сузил (только вывел из него game mode).
 - **Долг: три `player_info_update` на входе (Шаг 6.1, п. 8).** Шаг 7.3 закрыл
   запись о самом игроке; вопрос про self-записи (`ff00` пустой + запись 36 Б +
   латентностная) требует отдельного трейса с обеих сторон и не закрыт.
