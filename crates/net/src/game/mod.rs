@@ -36,6 +36,8 @@ mod state_tests;
 #[cfg(test)]
 mod step4_tests;
 #[cfg(test)]
+mod swing_live_tests;
+#[cfg(test)]
 mod test_support;
 #[cfg(test)]
 mod tests;
