@@ -134,8 +134,9 @@ pub struct Player {
     /// Whether the player is sprinting (M4.5 step 8). Same source as `sneak`.
     sprint: bool,
     /// The sneak/sprint state currently represented in each viewer's metadata.
-    /// `None` means no observer state has been sent yet; whether an already
-    /// sneaking/sprinting spawn carries these flags is not established by trace.
+    /// `None` means no observer state has been sent yet; an initial sneaking
+    /// spawn carries the trace-confirmed flags and pose (S7), while sprint
+    /// spawn encoding is not established.
     broadcast_state: Option<(bool, bool)>,
     /// `punch` (swing) events not yet consumed by a broadcast (M4.5 step 8).
     /// The encoders that will send `animate` come with the vanilla traces;

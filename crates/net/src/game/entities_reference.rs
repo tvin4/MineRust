@@ -142,6 +142,7 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
                     uuid: uuid[&id],
                     position: position[&id],
                     game_mode: game_mode[&id],
+                    sneaking: state[&id].0,
                 });
                 next_baseline.insert(id, Some(position[&id]));
                 next_broadcast_state.insert(id, Some(state[&id]));

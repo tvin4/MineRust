@@ -114,6 +114,8 @@ pub struct EntitySpawn {
     /// Game mode of the spawned player (M4.5 Шаг 7.3): the tab-list entry's
     /// game mode and the mode-dependent metadata bytes come from it.
     pub game_mode: i32,
+    /// Whether the player was sneaking when it became visible.
+    pub sneaking: bool,
 }
 
 /// An entity a viewer stops seeing this tick.
@@ -279,13 +281,14 @@ fn motion_from(previous: &PlayerPos, now: &PlayerPos) -> EntityMotion {
 fn spawn_of(region: &Region, id: PlayerId, position: PlayerPos) -> EntitySpawn {
     // The id is in this tick's snapshot, so the player exists; the fallback is
     // defensive only and is never hit.
-    let (name, uuid, game_mode) = match region.get(id) {
+    let (name, uuid, game_mode, sneaking) = match region.get(id) {
         Some(player) => (
             player.name().to_owned(),
             offline_uuid(player.name()),
             player.game_mode(),
+            player.sneak(),
         ),
-        None => (String::new(), Uuid::default(), 0),
+        None => (String::new(), Uuid::default(), 0, false),
     };
     EntitySpawn {
         id,
@@ -293,6 +296,7 @@ fn spawn_of(region: &Region, id: PlayerId, position: PlayerPos) -> EntitySpawn {
         uuid,
         position,
         game_mode,
+        sneaking,
     }
 }
 

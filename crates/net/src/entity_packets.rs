@@ -57,6 +57,20 @@ fn metadata_second(game_mode: i32) -> &'static [u8] {
     }
 }
 
+/// Builds the confirmed survival sneak spawn snapshot; other modes remain
+/// unchanged because their held-sneak spawn state was not traced.
+// SOURCE: S7 held-sneak trace, B seq 176: flags `02`, pose `05`, then snapshot.
+fn spawn_metadata(sneaking: bool, game_mode: i32) -> Vec<u8> {
+    let include_sneak = sneaking && game_mode == 0;
+    let extra_len = if include_sneak { 6 } else { 0 };
+    let mut metadata = Vec::with_capacity(METADATA_SNAPSHOT.len() + extra_len);
+    if include_sneak {
+        metadata.extend_from_slice(&[0x00, 0x00, 0x02, 0x06, 0x14, 0x05]);
+    }
+    metadata.extend_from_slice(METADATA_SNAPSHOT);
+    metadata
+}
+
 /// The three attributes the recorded join sends (`update_attributes`).
 ///
 /// The wire order differs between vanilla runs (C1: 26, 13, 8; C2: 8, 26, 13),
@@ -126,7 +140,7 @@ pub fn push_spawn(
 
     let snapshot = SetEntityData {
         entity_id: entity.id,
-        metadata: METADATA_SNAPSHOT.to_vec(),
+        metadata: spawn_metadata(entity.sneaking, entity.game_mode),
     };
     out.push((SetEntityData::KEY, snapshot.encode_payload()?));
 
