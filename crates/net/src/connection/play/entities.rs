@@ -21,12 +21,13 @@ use tokio::io::AsyncWrite;
 use crate::entity_packets::push_entity_stream;
 use crate::error::ConnectionError;
 use crate::frame::write_tracked;
-use crate::game::{EntityMove, EntityRemove, EntitySpawn, EntityStateUpdate};
+use crate::game::{EntityMove, EntityRemove, EntitySpawn, EntityStateUpdate, PlayerId};
 
 /// Writes every packet of one entity-stream event, in send order.
 pub(super) async fn write_entity_stream<W>(
     writer: &mut W,
     ids: &PacketIds,
+    swings: &[PlayerId],
     spawn: &[EntitySpawn],
     states: &[EntityStateUpdate],
     remove: &[EntityRemove],
@@ -38,7 +39,7 @@ where
     // The builder pushes `(key, payload)` in send order; the ids are resolved
     // here because only the connection knows its `PacketIds`.
     let mut packets = Vec::new();
-    push_entity_stream(spawn, states, remove, moves, &mut packets)?;
+    push_entity_stream(swings, spawn, states, remove, moves, &mut packets)?;
     for (key, payload) in packets {
         write_tracked(writer, ProtocolState::Play, ids.id(key), &payload).await?;
     }

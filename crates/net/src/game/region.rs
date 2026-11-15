@@ -23,6 +23,21 @@ use crate::chunks::window_difference;
 /// Id of a region. M4.1 has exactly one, with the id in [`SINGLE_REGION`].
 pub type RegionId = i32;
 
+/// Ticks one swing lasts (M4.5 Шаг 11).
+///
+/// A vanilla-memory hypothesis the S3 trace is consistent with (the tick
+/// model reproduces its cluster structure); the trace itself does not pin
+/// the duration.
+pub const SWING_DURATION_TICKS: i32 = 6;
+
+/// Ticks the swing timer must run before the next punch is accepted
+/// (M4.5 Шаг 11): the punch rule accepts when `swing_time >= ` this value.
+///
+/// **Не определено трейсом**: the S3 trace fits a threshold of 3 and of 4
+/// ticks equally well (the model finds matches for both). 3 — half the
+/// 6-tick duration — is the implemented choice.
+pub const SWING_THRESHOLD_TICKS: i32 = 3;
+
 /// The only region of M4.1. M4.3 replaces it with a chunk → region map.
 pub const SINGLE_REGION: RegionId = 0;
 
@@ -138,10 +153,19 @@ pub struct Player {
     /// spawn carries the trace-confirmed flags and pose (S7), while sprint
     /// spawn encoding is not established.
     broadcast_state: Option<(bool, bool)>,
-    /// `punch` (swing) events not yet consumed by a broadcast (M4.5 step 8).
-    /// The encoders that will send `animate` come with the vanilla traces;
-    /// until then the count is state only.
-    swings: u32,
+    /// Swing animation state (M4.5 Шаг 11): whether a swing is in progress
+    /// and how many ticks it has run. The rule and the constants are a
+    /// vanilla-memory hypothesis confirmed by the tick model against the S3
+    /// trace (`tools/trace-analyze/m45-step11-swing-model.py`).
+    swinging: bool,
+    /// Ticks the current swing has run; `-1` marks the tick it started in,
+    /// so a punch in the same tick still counts as "just started".
+    swing_time: i32,
+    /// Swings accepted this tick, awaiting the visibility pass broadcast:
+    /// one `swing_animation` packet per entry, to every observer (M4.5
+    /// Шаг 11). The packet itself goes only to observers, never to the
+    /// player (the S3 trace shows A receiving none).
+    pending_swings: u32,
     connection: PlayerConnection,
 }
 
@@ -165,7 +189,9 @@ impl Player {
             sneak: false,
             sprint: false,
             broadcast_state: None,
-            swings: 0,
+            swinging: false,
+            swing_time: 0,
+            pending_swings: 0,
             connection: join.connection,
         }
     }
@@ -284,11 +310,66 @@ impl Player {
         self.broadcast_state = state;
     }
 
-    /// Swing events not yet consumed by a broadcast (M4.5 step 8).
-    pub fn swings(&self) -> u32 {
-        self.swings
+    /// Swings accepted this tick, not yet broadcast (M4.5 Шаг 11); the
+    /// visibility pass owns it.
+    pub fn pending_swings(&self) -> u32 {
+        self.pending_swings
     }
 
+    /// Replaces the pending swing broadcast count (the visibility pass owns
+    /// it).
+    pub(crate) fn set_pending_swings(&mut self, count: u32) {
+        self.pending_swings = count;
+    }
+
+    /// Applies `count` new `punch` packets (M4.5 Шаг 11) and returns how
+    /// many produced a swing this tick.
+    ///
+    /// Rule (a vanilla-memory hypothesis, confirmed by the tick model
+    /// against the S3 trace, `tools/trace-analyze/m45-step11-swing-model.py`):
+    /// a punch is accepted when the player is not swinging, or the swing
+    /// just started (`swing_time < 0`), or the previous swing is old enough
+    /// ([`SWING_THRESHOLD_TICKS`]). An accepted punch starts a new swing;
+    /// punches during a young swing are dropped — that is why 22 punches
+    /// produced only 11 swings in the trace.
+    pub fn apply_punches(&mut self, count: u32) -> u32 {
+        let mut accepted = 0;
+        for _ in 0..count {
+            if !self.swinging || self.swing_time >= SWING_THRESHOLD_TICKS || self.swing_time < 0 {
+                self.swinging = true;
+                self.swing_time = -1;
+                accepted += 1;
+            }
+        }
+        self.pending_swings = self.pending_swings.saturating_add(accepted);
+        accepted
+    }
+
+    /// Advances the swing timer at the end of a tick (M4.5 Шаг 11).
+    ///
+    /// The packets of the tick are processed before this runs. At
+    /// [`SWING_DURATION_TICKS`] the swing ends and the timer resets; the
+    /// duration is a vanilla-memory hypothesis the trace is consistent with.
+    pub fn advance_swing(&mut self) {
+        if !self.swinging {
+            return;
+        }
+        self.swing_time += 1;
+        if self.swing_time >= SWING_DURATION_TICKS {
+            self.swinging = false;
+            self.swing_time = 0;
+        }
+    }
+
+    /// Whether a swing is in progress (M4.5 Шаг 11).
+    pub fn swinging(&self) -> bool {
+        self.swinging
+    }
+
+    /// Ticks the current swing has run (`-1` in its first tick).
+    pub fn swing_time(&self) -> i32 {
+        self.swing_time
+    }
     /// Applies the newest `player_input` flags byte (M4.5 step 8).
     ///
     /// Sneak (`0x20`) and sprint (`0x40`) are the bits the step-8 report
@@ -297,18 +378,6 @@ impl Player {
     pub fn apply_input(&mut self, flags: u8) {
         self.sneak = flags & protocol::PlayerInput::SNEAK != 0;
         self.sprint = flags & protocol::PlayerInput::SPRINT != 0;
-    }
-
-    /// Records `count` swing events (M4.5 step 8).
-    pub fn record_swings(&mut self, count: u32) {
-        self.swings = self.swings.saturating_add(count);
-    }
-
-    /// Takes and resets the pending swing count (M4.5 step 8). The future
-    /// `animate` broadcast drains it; the encoders come with the vanilla
-    /// traces, so nothing consumes it yet.
-    pub fn drain_swings(&mut self) -> u32 {
-        std::mem::take(&mut self.swings)
     }
 
     /// The connection's outbound queue.
@@ -647,17 +716,20 @@ impl Region {
         // `BTreeMap` iterates keyed by id; the borrow ends before the transfer
         // is pushed, so the region stays the sole owner of the players.
         for (&id, player) in self.players.iter_mut() {
-            // Input flags and swings are independent of movement (M4.5 step
-            // 8): a tick with no movement packet still applies them. The
-            // connection's slot is the queue; the player's fields are the
-            // applied state.
+            // Input flags and punches are independent of movement (M4.5
+            // step 8): a tick with no movement packet still applies them.
+            // The connection's slot is the queue; the player's fields are
+            // the applied state. The punch packets of the tick are
+            // processed BEFORE the swing timer advances (M4.5 Шаг 11); the
+            // accepted swings queue for the visibility pass broadcast.
             if let Some(flags) = player.take_input() {
                 player.apply_input(flags);
             }
-            let swings = player.take_swings();
-            if swings > 0 {
-                player.record_swings(swings);
+            let punches = player.take_swings();
+            if punches > 0 {
+                player.apply_punches(punches);
             }
+            player.advance_swing();
             let Some(state) = player.take_move() else {
                 continue;
             };

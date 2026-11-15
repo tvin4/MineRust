@@ -18,7 +18,7 @@
 use protocol::{
     AddEntity, AttributeEntry, CodecError, EntityPositionSync, MoveEntityPos, MoveEntityPosRot,
     MoveEntityRot, MoveHeader, PacketKey, PacketWriter, PlayerInfoEntry, PlayerInfoRemove,
-    PlayerInfoUpdate, RemoveEntities, RotateHead, SetEntityData, UpdateAttributes,
+    PlayerInfoUpdate, RemoveEntities, RotateHead, SetEntityData, SwingAnimation, UpdateAttributes,
 };
 
 use crate::game::{
@@ -352,14 +352,38 @@ fn push_state_update(
     Ok(())
 }
 
+/// Pushes the swing packets of one entity-stream event (M4.5 Шаг 11): one
+/// `swing_animation` per entry, entity id plus the constant traced tail.
+///
+/// The swings come first in the event — the punch is processed at the start
+/// of the tick, the movement broadcast runs later (hypothesis; the S3 trace
+/// has no move packets around the swings to pin the relative order).
+// SOURCE: vanilla S3 trace (2026-11-14_1644, B): `8a 08 00 01 06` for
+// entity 1034, eleven identical payloads.
+pub fn push_swings(
+    swings: &[PlayerId],
+    out: &mut Vec<(PacketKey, Vec<u8>)>,
+) -> Result<(), CodecError> {
+    for &entity_id in swings {
+        let packet = SwingAnimation {
+            entity_id,
+            tail: SwingAnimation::TRACED_TAIL,
+        };
+        out.push((SwingAnimation::KEY, packet.encode_payload()?));
+    }
+    Ok(())
+}
+
 /// Pushes every packet of one entity-stream event, in send order.
 pub fn push_entity_stream(
+    swings: &[PlayerId],
     spawn: &[EntitySpawn],
     states: &[EntityStateUpdate],
     remove: &[EntityRemove],
     moves: &[EntityMove],
     out: &mut Vec<(PacketKey, Vec<u8>)>,
 ) -> Result<(), CodecError> {
+    push_swings(swings, out)?;
     for entity in spawn {
         push_spawn(entity, out)?;
     }
@@ -386,8 +410,34 @@ pub fn push_entity_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::{relative_delta, PlayerPos};
+    use crate::game::{relative_delta, PlayerId, PlayerPos};
     use protocol::PacketReader;
+
+    /// The swing packet of the S3 vanilla trace, byte for byte: entity 1034
+    /// (`8a 08` as the VarInt) plus the constant tail `00 01 06`.
+    // SOURCE: vanilla S3 trace (2026-11-14_1644, B seq 3130), all 11 payloads
+    // identical.
+    #[test]
+    fn the_swing_animation_matches_the_s3_payload() {
+        let mut out = Vec::new();
+        push_swings(&[1034 as PlayerId], &mut out).expect("encodable");
+        assert_eq!(out.len(), 1, "one packet per swing entry");
+        assert_eq!(out[0].0, SwingAnimation::KEY);
+        assert_eq!(out[0].1, vec![0x8a, 0x08, 0x00, 0x01, 0x06]);
+    }
+
+    /// Three swings in one tick produce three identical packets (the S3
+    /// trace shows triples 0.1 ms apart on the wire).
+    #[test]
+    fn three_swing_entries_produce_three_packets() {
+        let mut out = Vec::new();
+        push_swings(&[7, 7, 7], &mut out).expect("encodable");
+        assert_eq!(out.len(), 3);
+        for (key, payload) in &out {
+            assert_eq!(*key, SwingAnimation::KEY);
+            assert_eq!(payload, &vec![0x07, 0x00, 0x01, 0x06]);
+        }
+    }
 
     /// The spawn of an already-posed player must match the vanilla S1b
     /// trace byte for byte: the angles come from the stored pose and the

@@ -229,6 +229,7 @@ pub fn measure_phases(
         packets.clear();
         for event in &events {
             push_entity_stream(
+                &event.swings,
                 &event.spawn,
                 &event.states,
                 &event.remove,
@@ -245,6 +246,7 @@ pub fn measure_phases(
                 states: event.states,
                 remove: event.remove,
                 moves: event.moves,
+                swings: event.swings,
             };
             scheduler.deliver(event.player, message);
         }

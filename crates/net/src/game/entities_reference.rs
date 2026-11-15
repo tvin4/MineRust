@@ -56,6 +56,7 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
     let mut visible_before: BTreeMap<PlayerId, BTreeMap<PlayerId, Uuid>> = BTreeMap::new();
     let mut baseline: BTreeMap<PlayerId, Option<PlayerPos>> = BTreeMap::new();
     let mut ticks: BTreeMap<PlayerId, u32> = BTreeMap::new();
+    let mut swings: BTreeMap<PlayerId, u32> = BTreeMap::new();
     for region in regions.iter() {
         for id in region.player_ids() {
             let Some(player) = region.get(id) else {
@@ -73,6 +74,7 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
             visible_before.insert(id, player.visible().clone());
             baseline.insert(id, player.last_broadcast());
             ticks.insert(id, player.ticks_since_broadcast());
+            swings.insert(id, player.pending_swings());
         }
     }
     if ids.is_empty() {
@@ -174,6 +176,16 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
         let mut viewer_moves = moves.remove(&viewer).unwrap_or_default();
         viewer_moves.sort_by_key(|entity| entity.id);
 
+        // This tick's accepted swings of the subjects the viewer still sees
+        // (M4.5 Шаг 11): one packet per accepted punch, in ascending subject
+        // id — the same order the optimized pass emits.
+        let mut viewer_swings = Vec::new();
+        for &subject in &target[&viewer] {
+            for _ in 0..swings[&subject] {
+                viewer_swings.push(subject);
+            }
+        }
+
         let mut record = BTreeMap::new();
         for &id in now {
             record.insert(id, uuid[&id]);
@@ -188,6 +200,7 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
             states,
             remove,
             moves: viewer_moves,
+            swings: viewer_swings,
         };
         if !event.is_empty() {
             events.push(event);
@@ -212,6 +225,9 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
             if let Some(state) = next_broadcast_state.get(&id) {
                 player.set_broadcast_state(*state);
             }
+            // The swings were snapshotted above; consumed whether or not a
+            // viewer heard them (M4.5 Шаг 11).
+            player.set_pending_swings(0);
         }
     }
     events

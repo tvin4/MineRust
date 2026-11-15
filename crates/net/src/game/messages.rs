@@ -111,6 +111,9 @@ pub enum ServerMessage {
         remove: Vec<EntityRemove>,
         /// Movement updates, in ascending id.
         moves: Vec<EntityMove>,
+        /// This tick's swing broadcasts (M4.5 Шаг 11): one entry per packet,
+        /// in ascending subject id.
+        swings: Vec<PlayerId>,
     },
 }
 
@@ -201,8 +204,8 @@ pub struct MoveState {
 /// events are independent slots, so a `player_input` arriving between two
 /// movement packets cannot swallow the movement (and vice versa). `swings`
 /// counts the `punch` packets since the last [`MoveSlot::take_swings`]; the
-/// tick drains it and the count is the source for the future `animate`
-/// broadcast (not written before the vanilla traces establish its bytes).
+/// tick drains it and the count feeds the swing rule (M4.5 Шаг 11), whose
+/// accepted punches become `swing_animation` broadcasts to the observers.
 #[derive(Debug, Default)]
 struct SlotValue {
     /// The newest movement packet, if any.

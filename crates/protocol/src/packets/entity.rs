@@ -155,6 +155,47 @@ impl PlayerInfoRemove {
 
 play_packet!(PlayerInfoRemove, 0x46, "minecraft:player_info_remove");
 
+/// Swing Animation: replays the arm-swing animation of an entity for its
+/// observers.
+///
+/// Observed payload (len 5): `VarInt` entity id, then three constant bytes
+/// `00 01 06`. The meaning of the tail is «не установлено»; no other hand or
+/// animation was observed, so only these bytes are reproduced.
+// SOURCE: vanilla S3 trace (2026-11-14_1644, B seq 3130..5393): all 11
+// payloads are identical, `8a 08 00 01 06` for entity 1034.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SwingAnimation {
+    /// Entity id.
+    pub entity_id: i32,
+    /// The constant tail `00 01 06`, carried as recorded («не установлено»).
+    pub tail: [u8; 3],
+}
+
+impl SwingAnimation {
+    /// The tail bytes every observed payload carries.
+    pub const TRACED_TAIL: [u8; 3] = [0x00, 0x01, 0x06];
+
+    /// Encodes the payload (packet id excluded).
+    pub fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.entity_id);
+        writer.write_bytes(&self.tail);
+        Ok(writer.into_bytes())
+    }
+
+    /// Decodes the payload; the packet id must already be consumed.
+    pub fn decode_payload(reader: &mut PacketReader<'_>) -> Result<Self, CodecError> {
+        let entity_id = reader.read_varint()?;
+        let bytes = reader.read_bytes(3)?;
+        Ok(Self {
+            entity_id,
+            tail: [bytes[0], bytes[1], bytes[2]],
+        })
+    }
+}
+
+play_packet!(SwingAnimation, 0x7B, "minecraft:swing_animation");
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,6 +274,23 @@ mod tests {
             "01b3b03a004714337e810352c60a6c836f",
             PlayerInfoRemove::encode_payload,
             PlayerInfoRemove::decode_payload,
+        );
+    }
+
+    /// The S3 vanilla swing payload, byte for byte: entity 1034 (`8a 08`)
+    /// plus the constant tail `00 01 06`.
+    // SOURCE: vanilla S3 trace (2026-11-14_1644, B seq 3130), all 11 payloads
+    // identical.
+    #[test]
+    fn swing_animation_matches_the_recorded_s3_payload() {
+        check(
+            SwingAnimation {
+                entity_id: 1034,
+                tail: SwingAnimation::TRACED_TAIL,
+            },
+            "8a08000106",
+            SwingAnimation::encode_payload,
+            SwingAnimation::decode_payload,
         );
     }
 

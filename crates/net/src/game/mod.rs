@@ -54,7 +54,7 @@ pub use metrics::{TickMetrics, TickMetricsHandle};
 pub use movement::MoveUpdate;
 pub use region::{
     AppliedMove, Kick, Player, PlayerPos, Region, RegionId, StreamChunks, TickOutcome, Transfer,
-    SINGLE_REGION,
+    SINGLE_REGION, SWING_DURATION_TICKS, SWING_THRESHOLD_TICKS,
 };
 pub use replay::{Replay, ReplayRecord};
 pub use scheduler::Scheduler;
@@ -681,6 +681,7 @@ fn deliver_entities(scheduler: &mut Scheduler, events: &[StreamEntities]) {
             states: event.states.clone(),
             remove: event.remove.clone(),
             moves: event.moves.clone(),
+            swings: event.swings.clone(),
         };
         if let Some(kick) = scheduler.deliver(event.player, message) {
             warn!(

@@ -35,7 +35,7 @@ pub use configuration::{
     CONFIGURATION_PLUGIN_MESSAGE, SELECT_KNOWN_PACKS, SELECT_KNOWN_PACKS_SERVERBOUND,
     UPDATE_ENABLED_FEATURES,
 };
-pub use entity::{AddEntity, PlayerInfoRemove, RemoveEntities};
+pub use entity::{AddEntity, PlayerInfoRemove, RemoveEntities, SwingAnimation};
 pub use entity_meta::{
     AttributeEntry, AttributeModifier, EntityPositionSync, SetEntityData, UpdateAttributes,
 };
@@ -117,6 +117,7 @@ pub fn used_packet_keys() -> &'static [PacketKey] {
         SetEntityData::KEY,
         UpdateAttributes::KEY,
         EntityPositionSync::KEY,
+        SwingAnimation::KEY,
         // play, serverbound
         ChunkBatchReceived::KEY,
         ConfirmTeleportation::KEY,

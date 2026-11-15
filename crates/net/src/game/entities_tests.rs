@@ -605,3 +605,60 @@ fn no_player_sees_itself_even_in_a_crowd() {
         assert_eq!(seen.len(), 3, "player {id} sees the other three");
     }
 }
+
+/// A swing reaches every current observer of the subject and never the
+/// subject itself (the S3 trace: A received 0 swing, B received 11).
+// SOURCE: vanilla S3 trace (2026-11-14_1644): B got `swing_animation` for
+// entity A, A got none.
+#[test]
+fn a_swing_reaches_the_observers_but_not_the_swinging_player() {
+    let mut regions = vec![region_with(&[(1, (0, 64, 0)), (2, (50, 64, 0))])];
+    visibility_pass(&mut regions); // the initial spawn pair
+
+    // Player 1 punches three times in one tick (the S3 triple).
+    regions[0].get_mut(1).expect("subject").apply_punches(3);
+    let events = visibility_pass(&mut regions);
+
+    let observer = event_of(&events, 2).expect("the observer hears the swing");
+    assert_eq!(observer.swings, vec![1, 1, 1], "one packet per punch");
+    assert!(event_of(&events, 1).is_none(), "the player hears nothing");
+
+    // The broadcast consumed the pending swings.
+    assert_eq!(
+        regions[0].get(1).expect("subject").pending_swings(),
+        0,
+        "pending swings are cleared by the pass"
+    );
+}
+
+/// A swing-only event is still emitted even when nothing else changed
+/// (no spawn, no move, no metadata transition).
+#[test]
+fn a_swing_alone_is_enough_for_an_event() {
+    let mut regions = vec![region_with(&[(1, (0, 64, 0)), (2, (50, 64, 0))])];
+    visibility_pass(&mut regions);
+
+    regions[0].get_mut(1).expect("subject").apply_punches(1);
+    let events = visibility_pass(&mut regions);
+    let observer = event_of(&events, 2).expect("the swing still streams");
+    assert!(observer.spawn.is_empty());
+    assert!(observer.moves.is_empty());
+    assert!(observer.states.is_empty());
+    assert!(observer.remove.is_empty());
+    assert_eq!(observer.swings, vec![1]);
+}
+
+/// A swing with no observers is dropped: nobody hears it, the state moves
+/// on.
+#[test]
+fn a_swing_without_observers_is_not_queued() {
+    let mut regions = vec![region_with(&[(1, (0, 64, 0))])];
+    regions[0].get_mut(1).expect("lone player").apply_punches(1);
+    let events = visibility_pass(&mut regions);
+    assert!(events.is_empty(), "nobody to hear the swing");
+    assert_eq!(
+        regions[0].get(1).expect("lone player").pending_swings(),
+        0,
+        "consumed by the pass either way"
+    );
+}

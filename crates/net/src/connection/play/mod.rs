@@ -401,6 +401,7 @@ where
                     // (M4.5 Шаг 3): the connection turns the event into the
                     // entity packets, in the order the trace records.
                     Some(ServerMessage::StreamEntities {
+                        swings,
                         spawn,
                         states,
                         remove,
@@ -409,6 +410,7 @@ where
                         entities::write_entity_stream(
                             &mut writer,
                             ids,
+                            &swings,
                             &spawn,
                             &states,
                             &remove,

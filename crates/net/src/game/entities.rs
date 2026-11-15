@@ -207,6 +207,10 @@ pub struct StreamEntities {
     pub remove: Vec<EntityRemove>,
     /// Movement updates, in ascending id.
     pub moves: Vec<EntityMove>,
+    /// This tick's swing broadcasts (M4.5 Шаг 11): one entry per packet, in
+    /// ascending subject id — a subject with three accepted swings appears
+    /// three times. Every current viewer of the subject receives each entry.
+    pub swings: Vec<PlayerId>,
 }
 
 /// Entity metadata flags of a confirmed sneak/sprint state.
@@ -252,6 +256,7 @@ impl StreamEntities {
             && self.states.is_empty()
             && self.remove.is_empty()
             && self.moves.is_empty()
+            && self.swings.is_empty()
     }
 }
 
@@ -328,6 +333,7 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
     let mut game_mode: Vec<i32> = Vec::new();
     let mut state: Vec<(bool, bool)> = Vec::new();
     let mut broadcast_state: Vec<Option<(bool, bool)>> = Vec::new();
+    let mut swings: Vec<u32> = Vec::new();
     let mut before: Vec<Vec<PlayerId>> = Vec::new();
     let mut index: BTreeMap<PlayerId, usize> = BTreeMap::new();
     for (region_index, region) in regions.iter().enumerate() {
@@ -346,6 +352,7 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
             game_mode.push(player.game_mode());
             state.push((player.sneak(), player.sprint()));
             broadcast_state.push(player.broadcast_state());
+            swings.push(player.pending_swings());
             before.push(player.visible().keys().copied().collect());
         }
     }
@@ -411,6 +418,18 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
         let mut states = Vec::new();
         let mut remove = Vec::new();
         let mut moves = Vec::new();
+        // This tick's accepted swings of the subjects the viewer still sees
+        // (M4.5 Шаг 11): one packet per accepted punch, in ascending subject
+        // id. They are encoded before the movement packets — the punch is
+        // processed at the start of the tick, the movement broadcast runs
+        // later (hypothesis; the S3 trace has no move packets around the
+        // swings to pin the order).
+        let mut swings_now = Vec::new();
+        for &subject in now {
+            for _ in 0..swings[subject] {
+                swings_now.push(ids[subject]);
+            }
+        }
         let (mut n, mut o) = (0usize, 0usize);
         while n < now.len() || o < old.len() {
             let now_id = now.get(n).map(|&j| ids[j]);
@@ -497,7 +516,10 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
             }
         }
         if spawn.is_empty() && states.is_empty() && remove.is_empty() && moves.is_empty() {
-            continue;
+            // A swing-only event still goes out (M4.5 Шаг 11).
+            if swings_now.is_empty() {
+                continue;
+            }
         }
         events.push(StreamEntities {
             region: owner[i],
@@ -509,6 +531,7 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
             states,
             remove,
             moves,
+            swings: swings_now,
         });
     }
 
@@ -534,6 +557,10 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
             player.set_last_broadcast(next_baseline[i]);
             player.set_ticks_since_broadcast(next_ticks[i]);
             player.set_broadcast_state(next_broadcast_state[i]);
+            // The swings were snapshotted above; consumed whether or not a
+            // viewer heard them — a swing without observers is simply not
+            // broadcast (M4.5 Шаг 11).
+            player.set_pending_swings(0);
         }
     }
     events
