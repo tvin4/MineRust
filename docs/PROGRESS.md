@@ -3,7 +3,9 @@
 Полный план: `ARCHITECTURE.md` (раздел 8 — этапы M0–M10).
 Правила для агента: `AGENTS.md`.
 
-**Текущий этап: M3, шаг 3.3 — 6-пунктовка владельца выполнена (отчёт live-vs-vanilla, матрица chunk-diff, причина block entities (7,−2) найдена и записана в `docs/DECISIONS.md`, guard флейка, SOURCES/PROGRESS). Живая проверка 08.11.2026: M1/M2/3.3 подтверждены настоящим клиентом 26.3. Следующий шаг — план M4 (тик-цикл, позиция игрока, стриминг чанков, регионы/планировщик) показан владельцу, ждём «план принят»; до него никакого кода M4. Движок света не трогаем. Шаг 3.3 (коммиты `504de49..192a806` + этот docs):** a) кодеки `level_chunk_with_light`/`chunk_batch`/`set_chunk_cache_center` с round-trip к записанным байтам; b) правило готовности чанка с именованной причиной отказа («жди генерации M6»); c1) конвертация сохранённого чанка в payload (heightmaps под id трейса, палитры через `blocks.json`, свет §141); c2) актор-загрузчик — пул 2 `std::thread`, `net` зависит от мира только через трейт `net::loader::ChunkSource`, без Mutex в тике; e) play-поля из сохранения — спавн `[96,145,−32]` из `level.dat` (байты позиции сошлись с трейсом ванили), `hashed_seed` из `world_gen_settings.dat` (seed 12345), центр кэша и позиция спавна; d) пейсинг подбатчей по `chunk_batch_received` (KEY из отчёта, ID 0x0B, 50 мс на подбатч); f) парити-срез `chunk_slice` → `target/parity-report/chunk-diff.md` (9/9 чанков сопоставлено, свет 0/9 — таблица показана владельцу, ничего не «чинится»); g) `SOURCES`/`DECISIONS`/`PROGRESS`. Между ними: рефакторинг `connection.rs` на модули (лимит длины файла) и стабилизация keep-alive-теста. Ранее в M3/части 2: parity-каркас, срезы status/join прогнаны, **32 реестра / 432 записи registry_data = ванили**, часть 2 п.2.1–2.5 принята владельцем. Часть A2 (лог server: порядок чанков, кэш бата, уровни лога, дистанции из `server.toml`, пейсинг порций) закрыта — коммиты `d271317`, `da8d2ee`, `e8376a5`, `4917d09`, `6d113a8`, см. раздел «Часть A2». **Следующий шаг: реакция владельца на план M4 («план принят»).**
+**Текущий этап: M4.5, Шаг 10 закрыт.** Live-проверки S5/S7 на `ours`, parity-аудит и документация шага завершены; новые задачи требуют отдельного выбора владельца. Исторические результаты M0–M3 описаны ниже.
+
+Историческая запись M3/Шаг 3.3: коммиты `504de49..192a806` закрыли owner 6-point checklist (live-vs-vanilla отчёт, chunk-diff матрица, причина block entities (7,−2) в `docs/DECISIONS.md`, flake guard и SOURCES/PROGRESS); live проверка 08.11.2026 подтвердила M1/M2/3.3 настоящим клиентом 26.3. Следующий этап M4 был затем принят и выполнен; движок света оставался вне scope этого исторического шага.
 
 ## Что сделано
 
@@ -1519,8 +1521,9 @@ warnings`, `cargo test --workspace` — зелёные.
   последней отправленной позы (pos+rot → `move_entity_pos_rot`+`rotate_head`,
   pos → `move_entity_pos`, rot → `move_entity_rot`+`rotate_head`, нет смены
   ≥60 тиков → нулевой `move_entity_pos`); байт угла = `floor(deg·256/360)` в f64;
-  порядок `update_attributes` — не правило; триггер `entity_position_sync` —
-  «не установлено»; инструменты `tools/trace-analyze/step6*.py`.
+  порядок `update_attributes` нестабилен между прогонами; триггер
+  `entity_position_sync` — «не установлено»; инструменты
+  `tools/trace-analyze/step6*.py`.
 - **6.2 — перенос правил в код** (`crates/net`): счётчик
   `ticks_since_broadcast`, `UPDATE_INTERVAL=2`, `BROADCAST_PERIOD_TICKS=60`,
   `EntityMotion::ZeroDelta`, f64 floor-углы; наивный эталон повторяет каденс.
@@ -1654,7 +1657,7 @@ warnings`, `cargo test --workspace` — зелёные.
 | Сценарий | До | После / факты |
 |---|---|---|
 | S1b — углы при входе наблюдателя (A) | `add_entity` использовал нулевые углы | Vanilla B payload завершает spawn хвостом `00 40 45 45 00` (data/pitch/yaw/head-yaw/trailing); encoder A берёт сохранённые углы. Побайтный тест есть; vanilla S1b `2026-11-14_1831` (`… 00 40 45 45 00`), локальный S1b `2026-11-14_s1b-ours-final` (`… 00 10 f5 f5 00`, yaw/pitch A на момент входа) — оба зелёные. |
-| S5 — sneak/sprint (B) | Ввод применялся в состоянии игрока, observer metadata не отправлялась; сценарий проверял только наличие | Два набора полных окон ±10 вокруг каждой sneak-пары подтверждают отдельные пакеты для entity `0x21` (vanilla-forward) и `0x4f` (creative): flags on/off `id 00 00 02 ff` / `id 00 00 00 ff`, pose on/off `id 06 14 05 ff` / `id 06 14 00 ff`. В creative между flags-on (4263) и pose-on (4361) 97 пакетов, и между flags-off (5926) и pose-off (5997) 70 пакетов; они не смежные. Vanilla-forward seqs 2217/2259 и 3326/3355 также отделены другими пакетами. Sprint flags on/off `21 00 00 08 ff` / `21 00 00 00 ff`; атрибуты on `21 01 1a 3f b9 99 99 a0 00 00 00 01 13 6d 69 6e 65 63 72 61 66 74 3a 73 70 72 69 6e 74 69 6e 67 3f d3 33 33 40 00 00 00 02`, off `21 01 1a 3f b9 99 99 a0 00 00 00 00`. Encoder и тесты проверяют оба sneak metadata вида; S5 harness также проверяет их упорядоченное наличие. Live run `2026-11-14_s5-ours3` ранее подтвердил flags и sprint attributes; live проверка новых pose-пакетов не выполнялась. |
+| S5 — sneak/sprint (B) | Ввод применялся в состоянии игрока, observer metadata не отправлялась; сценарий проверял только наличие | Ванильные окна подтверждают отдельные flags и pose metadata; encoder и unit-тесты это проверяют. Ours live `2026-11-15_step10-live-ours-s5-observe`: wire checks PASS (`player_input` `20 00 01 41 01 00`, metadata flags `02 → 00 → 08 → 00`, pose `05 → 00`, sprint attributes); B observe подтвердил sneak `CROUCHING/true`, sprint `STANDING/false` (одна попытка на состояние). |
 | S3 — swing (C) | `drain_swings` не подключён | B получил 11 пакетов `swing_animation` (id 123, clientbound), все побайтно `8a 08 00 01 06` — VarInt entity id A = `8a 08` (1034), затем `00 01 06` (смысл трёх хвостовых байт **не установлен**). A послал 22 `punch` (46) и 2 `player_action` (41); A получил 0 swing (рассылка идёт только наблюдателям). Сетевая задержка read→write и независимый clock offset проверены: greedy правило `>=150 ms` по A `read_ms` принимает 8 из 22 (seq `27042, 27432, 27918, 28683, 28789, 28954, 29069, 29162`), но B содержит 11 swings. Совпадающие интервалы первых одиночных событий расходятся на `−2.49`, `−0.80`, `+7.53 ms` после offset; B имеет две тройки интервалами `<150 ms` сразу после `block_destruction` (seq 4920–4922 и 5094–5096). Правило не объясняет число/тайминг, C остановлен без encoder. |
 | S6 — `player_action` 41 | Причина отсутствия пакета неизвестна | Vanilla S6: miss, survival; клиент не видел блок под прицелом, потому 41 не послал. |
 | S5 creative — проверка B gate | Проверен только survival; gate `game_mode == 0` оставлен до отдельной записи | Vanilla stand запущен с `gamemode=creative`, `force-gamemode=true`; лог подтверждает `Default game type: CREATIVE`. A послал held-input flags `20`, `00`, `01`, `41`, `01`, `00`; B для A(entity `0x4f`) прислал sneak `02` (4263) → clear `00` (5926) → sprint `08` (6907) + sprint attribute (6908). Creative transition gate подтверждён для `game_mode == 1`; adventure/spectator не проверялись. Spawn flags/pose добавляются только для подтверждённого S7 survival режима (`game_mode == 0`); creative spawn не выводим из transition-трейса. Run `E:\MineRust-data\autotests\2026-11-14_s5-creative-retry`. |
@@ -1668,26 +1671,24 @@ Packet IDs (все — из пользовательского `E:\MineRust-data
 
 Источники A: `E:\\MineRust-data\\autotests\\2026-11-14_1831\\mcproxy\\proxy-conn-2.jsonl` (vanilla) и `E:\\MineRust-data\\autotests\\2026-11-14_s1b-ours-final\\mcproxy\\proxy-conn-2.jsonl` (ours). Источники C: S3 `E:\\MineRust-data\\autotests\\2026-11-14_1644\\mcproxy\\proxy-conn-6.jsonl` (A) и `proxy-conn-7.jsonl` (B). Перекрёстное сопоставление времён A/B не делается: отсчёты connection независимы.
 
-Gate шага 10: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` — зелёные (net 129 passed/4 ignored; protocol 131 passed). PowerShell parser для `run-scenario.ps1` прошёл. Live: S5 `2026-11-14_s5-ours3` 4/4 PASS до добавления проверки pose; новая live-проверка pose ещё не выполнялась. S1b `2026-11-14_s1b-ours-final` PASS.
+Gate шага 10: `cargo fmt --all`, `cargo clippy --workspace -- -D warnings`, `cargo test --workspace` — зелёные; `run-scenario.ps1` проходит PowerShell parser, `git diff --check` чист. Ours live S5 `2026-11-15_step10-live-ours-s5-observe` прошёл wire и remote-pose checks; S7 `2026-11-15_step10-live-ours-s7-retry2` подтвердил обе удалённые позы; S1b `2026-11-14_s1b-ours-final` PASS.
 
 ### Сценарии до/после
 
 | Сценарий | До | После изменений |
 |---|---|---|
 | S1b | углы AddEntity не передавались | A закодирован; побайтный unit test и сохранённые vanilla/ours traces зелёные |
-| S5 | факт наличия общих metadata пакетов | точные sneak flags `02 → 00`, отдельные pose `05 → 00`, sprint flags и attribute payloads проверяются; live run `2026-11-14_s5-ours3` проверял прежние flags/attributes (4/4), новые pose-пакеты ещё без live acceptance |
+| S5 | факт наличия общих metadata пакетов | точные sneak flags `02 → 00`, отдельные pose `05 → 00`, sprint flags и attribute payloads проверяются; ours live `2026-11-15_step10-live-ours-s5-observe` также проверил wire последовательность и B remote pose через observe |
 | S3 | vanilla swings были только диагностикой, ours не передавал их | факты дополнены; C не кодируется из-за неоднозначности частоты/связи |
 | S6 | диагностика причины отсутствующего 41 | confirmed: crosshair miss в survival |
 
-## Блокеры
+## Остаточные факты и блокеры
 
 - **Шаг 10 C:** punch→swing не детерминирован один-к-одному на S3 (22 punch, 11 swing); правила drain/aggregation и удержания на блоке не установлены. Нужны новые подтверждённые трейсы/семантика перед реализацией.
-- **Шаг 10 B live acceptance:** закрыт. Усиленный S5 (`-Target ours`, run `2026-11-14_s5-ours3`) дал 4/4 PASS: `player_input` `20 00 01 41 01 00`, metadata `02 → 00 → 08 → 00`, sprint-on/off attribute payloads. Попутно исправлен сам сценарий: ожидаемые attribute payloads теперь строятся от runtime entity id (раньше были жёстко с ванильным `21`), а сообщение проверки не использовало неподдерживаемый в PS 5.1 `if`-expression.
-- **Решения владельца по остаткам (в) Шага 6.3** (п. 1–4 выше): нормализовать
-  ли порядок `update_attributes`; принять ли эвристику `entity_position_sync`;
-  какое правило `rotate_head` (C2 и C4 противоречат); мириться ли с джиттером
-  сэмплинга. До решения точное побайтовое совпадение C2/C4 недостижимо.
-  Шаг 7.3 список не сузил (только вывел из него game mode).
+- **Шаг 10 live acceptance (закрыт):** S5 `2026-11-15_step10-live-ours-s5-observe` — wire и клиентские checks PASS: `player_input` `20 00 01 41 01 00`, metadata `02 → 00 → 08 → 00`, отдельные pose metadata `05 → 00`, sprint-on/off attributes; B observe подтвердил sneak `CROUCHING/true` и sprint `STANDING/false` (по одной попытке). S7 `2026-11-15_step10-live-ours-s7-retry2` — PASS: B действительно наблюдал A как `CROUCHING`, `isCrouching=true` при held-sneak; для held-sprint — `STANDING`, `false`; обе A/B пары трассированы. Оба S7 pose-наблюдения теперь имеют двухпопыточную клиентскую проверку.
+- Spawn sprint не подтверждён: S7 held-sprint join содержит initial `update_attributes`, но причину значений из пакетов установить нельзя; spawn-код не утверждает sprint snapshot. В vanilla traces порядок атрибутов различается между C1/C2/C4 (26,13,8 / 8,26,13 / 26,8,13); решения о нормализации parity-теста нет.
+- S7 A-trace: `entity_event` seq 51 (`00 00 00 2f 18`), `player_position` seq 55 (`01 40 58 20 … c0 24 99 99 9a …`), до `set_health` seq 160 (`41 7a aa ab 11 00 00 00 00`, health 15.666667, food 17, saturation 0). Пакеты не объясняют причину health; она остаётся неустановленной. S3 остаётся только диагностикой: 22 A `punch`, 11 B `swing_animation`; серии 4920–4922 и 5094–5096 следуют за `block_destruction`, но связи и правила агрегации не установлены, поэтому C не реализуется.
+- **Остатки сверки (в) Шага 6.3:** решение о нормализации порядка `update_attributes` в parity-тесте не принято. Остаются также: принять ли эвристику `entity_position_sync`; какое правило `rotate_head` (C2 и C4 противоречат); как учитывать джиттер сэмплинга. До решений точное побайтовое совпадение C2/C4 недостижимо. Шаг 7.3 список не сузил (только вывел из него game mode).
 - **Долг: три `player_info_update` на входе (Шаг 6.1, п. 8).** Шаг 7.3 закрыл
   запись о самом игроке; вопрос про self-записи (`ff00` пустой + запись 36 Б +
   латентностная) требует отдельного трейса с обеих сторон и не закрыт.
