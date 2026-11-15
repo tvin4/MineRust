@@ -30,6 +30,8 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 # --- paths -----------------------------------------------------------------
 $vanillaDir = 'E:\MineRust-data\vanilla'
+$templateWorldDir = 'E:\MineRust-data\world-template-v3'
+$script:activeWorldDir = $null
 $serverJar = 'E:\MineRust-data\server.jar'
 $mcproxyExe = 'E:\projects\MineRust\target\debug\mcproxy.exe'
 # Stage G target: our own Rust server (workspace server.toml, listen patched
@@ -42,6 +44,7 @@ if (-not $RunDir) { $RunDir = Join-Path 'E:\MineRust-data\autotests' (Get-Date -
 New-Item -ItemType Directory -Path $RunDir -Force | Out-Null
 $traceDir = Join-Path $RunDir 'mcproxy'
 New-Item -ItemType Directory -Path $traceDir -Force | Out-Null
+$script:runStartedAt = Get-Date
 $script:consoleReady = $false
 
 function Find-EntitySpawn {
@@ -82,6 +85,81 @@ $script:vanillaProcess = $null
 $script:vanillaPid = $null
 $script:oursPid = $null
 $script:mcproxyPid = $null
+
+function Get-WorldSnapshot {
+	param([string]$WorldDir)
+	$files = @(Get-ChildItem -LiteralPath $WorldDir -File -Recurse -Force | ForEach-Object {
+		$relative = $_.FullName.Substring($WorldDir.Length).TrimStart('\')
+		[PSCustomObject]@{
+			path = $relative
+			length = $_.Length
+			lastWriteTime = $_.LastWriteTime.ToString('o')
+			sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+		}
+	})
+	$playerDataDir = Join-Path $WorldDir 'players\data'
+	$playerData = @()
+	if (Test-Path -LiteralPath $playerDataDir) {
+		$playerData = @(Get-ChildItem -LiteralPath $playerDataDir -File -Filter '*.dat' -Force |
+			ForEach-Object { $_.Name } | Sort-Object)
+	}
+	return [PSCustomObject]@{ files = $files; playerData = $playerData }
+}
+
+function Assert-WorldPlayerData {
+	param([string[]]$WorldPlayerData, [string[]]$TemplatePlayerData)
+	$unexpected = @($WorldPlayerData | Where-Object { $_ -notin $TemplatePlayerData })
+	if ($unexpected.Count -gt 0) {
+		throw ("world contains playerdata absent from template; refusing client launch: {0}" -f ($unexpected -join ', '))
+	}
+	return $true
+}
+
+function Prepare-RunWorld {
+	if (-not (Test-Path -LiteralPath $templateWorldDir -PathType Container)) {
+		throw "world template does not exist: $templateWorldDir"
+	}
+	$script:activeWorldDir = if ($isVanilla) {
+		Join-Path $vanillaDir 'world'
+	} else {
+		Join-Path (Split-Path -Parent $templateWorldDir) 'world'
+	}
+	if ([string]::Equals($script:activeWorldDir, $templateWorldDir, [StringComparison]::OrdinalIgnoreCase)) {
+		throw 'refusing to replace the source world template'
+	}
+
+	if (Test-Path -LiteralPath $script:activeWorldDir) {
+		$stamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
+		$staleDir = "$($script:activeWorldDir).stale-$stamp"
+		if (Test-Path -LiteralPath $staleDir) { throw "stale world destination already exists: $staleDir" }
+		Rename-Item -LiteralPath $script:activeWorldDir -NewName (Split-Path -Leaf $staleDir)
+	}
+	New-Item -ItemType Directory -Path $script:activeWorldDir | Out-Null
+	Get-ChildItem -LiteralPath $templateWorldDir -Force | Copy-Item -Destination $script:activeWorldDir -Recurse -Force
+
+	$snapshot = Get-WorldSnapshot $script:activeWorldDir
+	$templatePlayerDataDir = Join-Path $templateWorldDir 'players\data'
+	$templatePlayerData = @()
+	if (Test-Path -LiteralPath $templatePlayerDataDir) {
+		$templatePlayerData = @(Get-ChildItem -LiteralPath $templatePlayerDataDir -File -Filter '*.dat' -Force |
+			ForEach-Object { $_.Name } | Sort-Object)
+	}
+	$unexpected = @($snapshot.playerData | Where-Object { $_ -notin $templatePlayerData })
+	$audit = [PSCustomObject]@{
+		capturedAt = (Get-Date).ToString('o')
+		target = $Target
+		worldPath = $script:activeWorldDir
+		templatePath = $templateWorldDir
+		files = $snapshot.files
+		playerData = $snapshot.playerData
+		templatePlayerData = $templatePlayerData
+		unexpectedPlayerData = $unexpected
+	}
+	$auditPath = Join-Path $RunDir 'world-audit.json'
+	$audit | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $auditPath -Encoding utf8
+	Write-Host "world audit: $auditPath"
+	Assert-WorldPlayerData $snapshot.playerData $templatePlayerData | Out-Null
+}
 
 function Start-Stand {
 	if ($isVanilla) {
@@ -127,8 +205,9 @@ function Start-Stand {
 		# the workspace server.toml with only the listen address changed:
 		# real values (client jar, protocol version) never enter the repo.
 		$oursConfig = Join-Path $RunDir 'server-ours.toml'
-		(Get-Content $repoServerToml -Raw) -replace 'listen\s*=\s*"[^"]*"', 'listen = "127.0.0.1:25566"' |
-			Set-Content $oursConfig -Encoding utf8
+		$config = (Get-Content $repoServerToml -Raw) -replace 'listen\s*=\s*"[^"]*"', 'listen = "127.0.0.1:25566"'
+		$config = $config -replace "world_dir\s*=\s*'[^']*'", "world_dir = '$($script:activeWorldDir)'"
+		$config | Set-Content $oursConfig -Encoding utf8
 		Start-Process -FilePath $serverExe -ArgumentList '--config', $oursConfig `
 			-WorkingDirectory (Split-Path -Parent $repoServerToml) `
 			-RedirectStandardOutput $oursLog `
@@ -412,6 +491,23 @@ function Invoke-S3 {
 	$null = Start-Client $nickA $portA $watermark
 	$null = Start-Client $nickB $portB $watermark
 
+	# Wait for the observer's initial chunk stream before generating events.
+	# Otherwise the test may disconnect B while it is still receiving chunks,
+	# truncating the proxy trace before the swing broadcasts are recorded.
+	$expectedChunks = 473
+	$loadedChunks = 0
+	$chunkDeadline = (Get-Date).AddSeconds(120)
+	while ((Get-Date) -lt $chunkDeadline) {
+		$observation = Invoke-TestCmd $portB (New-ObserveCmd 's3-chunk-load' $nickA)
+		if ($observation.ok -and $observation.result.loadedChunks) {
+			$loadedChunks = [int]$observation.result.loadedChunks
+			if ($loadedChunks -ge $expectedChunks) { break }
+		}
+		Start-Sleep -Milliseconds 500
+	}
+	Add-Check $Result 'B finishes initial chunk loading before S3' ($loadedChunks -ge $expectedChunks) `
+		("loaded chunks={0}; expected at least {1}" -f $loadedChunks, $expectedChunks)
+
 	# Air phase: look straight up (crosshair can only hit sky) and tap
 	# attack - a swing in air must be punch (46) without player_action (41).
 	$null = Invoke-TestCmd $portA (New-LookCmd 's3-up' 0 -4000)
@@ -422,12 +518,19 @@ function Invoke-S3 {
 
 	# Dig phase: look straight down (at the block underfoot) and hold
 	# attack - holding on a block keeps punching and adds player_action.
-	$null = Invoke-TestCmd $portA (New-LookCmd 's3-down' 0 4000)
-	Start-Sleep -Milliseconds 300
-	$null = Invoke-TestCmd $portA (New-KeyCmd 's3-dig-on' 'attack' 'down')
-	Start-Sleep -Milliseconds $digMs
-	$null = Invoke-TestCmd $portA (New-KeyCmd 's3-dig-off' 'attack' 'up')
-	Start-Sleep -Milliseconds 500
+	# Stage 11: on our server the client does not see blocks yet (S6), so
+	# the dig phase is not run there - recorded as a fact, never red.
+	if ($isVanilla) {
+		$null = Invoke-TestCmd $portA (New-LookCmd 's3-down' 0 4000)
+		Start-Sleep -Milliseconds 300
+		$null = Invoke-TestCmd $portA (New-KeyCmd 's3-dig-on' 'attack' 'down')
+		Start-Sleep -Milliseconds $digMs
+		$null = Invoke-TestCmd $portA (New-KeyCmd 's3-dig-off' 'attack' 'up')
+		Start-Sleep -Milliseconds 500
+	} else {
+		Add-Check $Result 'dig phase: skipped on ours (client does not see blocks, S6)' $true `
+			'not run; only the air segment is the S3 acceptance for ours'
+	}
 
 	$null = Invoke-TestCmd $portA (New-SessionCmd 's3-off' 'disconnect')
 	$null = Invoke-TestCmd $portB (New-SessionCmd 's3-offb' 'disconnect')
@@ -453,26 +556,64 @@ function Invoke-S3 {
 	Add-Check $Result 'air swings: punch packets with no player_action before them' `
 		($airPunches.Count -ge 1) `
 		("punch seqs before first action: [{0}]; action seqs: [{1}]" -f ($airPunches -join ','), ($actionSeqs -join ','))
-	$digPunches = @($punchSeqs | Where-Object { $_ -gt $firstAction })
-	Add-Check $Result 'hold on block: player_action present and punch continues after it' `
-		($actionSeqs.Count -ge 1 -and $digPunches.Count -ge 1) `
-		("action seqs: [{0}]; punch seqs after first action: [{1}]" -f ($actionSeqs -join ','), ($digPunches -join ','))
+	if ($isVanilla) {
+		$digPunches = @($punchSeqs | Where-Object { $_ -gt $firstAction })
+		Add-Check $Result 'hold on block: player_action present and punch continues after it' `
+			($actionSeqs.Count -ge 1 -and $digPunches.Count -ge 1) `
+			("action seqs: [{0}]; punch seqs after first action: [{1}]" -f ($actionSeqs -join ','), ($digPunches -join ','))
+	}
 
 	# A->B visibility: the swing broadcast (clientbound swing_animation)
 	# reaches B; A's own trace never carries it (broadcast excludes self).
-	$bSwings = 0
+	# Stage 11: the air segment must carry exactly one swing per tap, and
+	# every payload must be the traced bytes: VarInt entity id + 00 01 06.
+	# The air segment of B ends at the first block_destruction (dig phase
+	# output); a trace without destructions is all air.
+	$bSwingRows = @()
+	$firstDestructionSeq = [int]::MaxValue
+	$payloadOk = $true
+	$payloadFact = ''
 	if ($bTrace) {
-		$bSwings = @(Read-Trace $bTrace.FullName |
-			Where-Object { $_.dir -eq 'clientbound' -and $_.name -match 'swing_animation|animate' }).Count
+		$bRows = Read-Trace $bTrace.FullName
+		foreach ($row in $bRows) {
+			if ($row.dir -ne 'clientbound') { continue }
+			if ($row.name -eq 'minecraft:block_destruction') {
+				if ([int]$row.seq -lt $firstDestructionSeq) { $firstDestructionSeq = [int]$row.seq }
+				continue
+			}
+			if ($row.name -match 'swing_animation|animate') {
+				$bSwingRows += $row
+				$payload = ConvertFrom-TraceB64 $row.b64
+				# Decode the leading VarInt entity id, then expect 00 01 06.
+				$varInt = ConvertFrom-TraceVarInt $payload 0
+				$offset = $varInt.next
+				$tail = if ($payload.Length -eq $offset + 3) {
+					@($payload[$offset], $payload[$offset + 1], $payload[$offset + 2])
+				} else { @() }
+				$rowHex = [BitConverter]::ToString($payload).Replace('-', ' ').ToLowerInvariant()
+				if (-not ($tail.Count -eq 3 -and $tail[0] -eq 0 -and $tail[1] -eq 1 -and $tail[2] -eq 6)) {
+					$payloadOk = $false
+					$payloadFact = "$payloadFact ; seq $($row.seq): $rowHex"
+				}
+			}
+		}
 	}
-	Add-Check $Result 'B receives swing broadcast while A swings' ($bSwings -ge 1) `
-		("clientbound swing_animation/animate rows in B's trace ({0}): {1}" -f $bTrace.Name, $bSwings)
+	$airSwingRows = @($bSwingRows | Where-Object { [int]$_.seq -lt $firstDestructionSeq })
+	Add-Check $Result 'B receives swing broadcast while A swings' ($airSwingRows.Count -ge 1) `
+		("clientbound swing_animation/animate rows in B's trace ({0}): {1}" -f $bTrace.Name, $airSwingRows.Count)
+	Add-Check $Result 'air swings reach B exactly once per tap' `
+		($airSwingRows.Count -eq $airTaps) `
+		("air swing rows before first block_destruction (seq {0}): {1}, taps {2}" -f `
+			$(if ($firstDestructionSeq -ne [int]::MaxValue) { $firstDestructionSeq } else { 'none' }), `
+			$airSwingRows.Count, $airTaps)
+	Add-Check $Result 'every swing payload is VarInt id + 00 01 06' $payloadOk `
+		$(if ($payloadFact) { "mismatching payloads:$payloadFact" } else { "all $($bSwingRows.Count) payloads match the traced bytes" })
 }
 
 # Reads the observer's actual remote-player pose. Retry one time so a snapshot
 # taken during the entity's initial client-side load does not become a false negative.
 function Invoke-RemotePoseObservation {
-	param($Port, $Player, $ExpectedPose, [bool]$ExpectedCrouching)
+	param($Port, $Player, $ExpectedPose, [bool]$ExpectedCrouching, [object]$ExpectedSprinting)
 	$response = $null
 	$observed = $null
 	$pass = $false
@@ -484,14 +625,22 @@ function Invoke-RemotePoseObservation {
 		$response = Invoke-TestCmd $Port (New-ObserveCmd $observeId $Player)
 		$observed = if ($response.ok) { $response.result } else { $null }
 		$pass = $observed -and $observed.found -eq $true -and $observed.pose -eq $ExpectedPose -and $observed.isCrouching -eq $ExpectedCrouching
+		# The sprint bit is only asserted when the caller passes a value;
+		# older traces carry no isSprinting field at all.
+		if ($null -ne $ExpectedSprinting) {
+			$pass = $pass -and $observed.isSprinting -eq [bool]$ExpectedSprinting
+		}
 		if ($pass -or $attempt -eq 2) { break }
 		Start-Sleep -Milliseconds 250
 	}
-	$fact = 'attempts={0}; found={1} pose={2} isCrouching={3}; expected pose={4} isCrouching={5}' -f `
+	$fact = 'attempts={0}; found={1} pose={2} isCrouching={3} isSprinting={4}; expected pose={5} isCrouching={6} isSprinting={7}' -f `
 		$attempts, `
 		$(if ($observed) { $observed.found } else { $false }), `
 		$(if ($observed) { $observed.pose } else { 'unavailable' }), `
-		$(if ($observed) { $observed.isCrouching } else { 'unavailable' }), $ExpectedPose, $ExpectedCrouching
+		$(if ($observed) { $observed.isCrouching } else { 'unavailable' }), `
+		$(if ($observed -and $observed.PSObject.Properties['isSprinting']) { $observed.isSprinting } else { 'unavailable' }), `
+		$ExpectedPose, $ExpectedCrouching, `
+		$(if ($null -ne $ExpectedSprinting) { $ExpectedSprinting } else { 'unasserted' })
 	return [PSCustomObject]@{ pass=[bool]$pass; fact=$fact }
 }
 
@@ -690,6 +839,7 @@ function Invoke-S5 {
 	$null = Start-Client $nickB $portB $watermark
 	$script:s5ObservationIndex = 0
 	$script:s5PoseChecks = [System.Collections.ArrayList]::new()
+	$script:s5ReleaseObservations = [System.Collections.ArrayList]::new()
 	foreach ($pose in $Cfg.poses) {
 		if ($pose.alsoKey) {
 			$null = Invoke-TestCmd $portA (New-KeyCmd ('s5-' + $pose.name + '-also-on') $pose.alsoKey 'down')
@@ -698,11 +848,35 @@ function Invoke-S5 {
 		Start-Sleep -Milliseconds ([int]$pose.holdMs)
 		$expectedPose = if ($pose.key -eq 'shift') { 'CROUCHING' } else { 'STANDING' }
 		$expectedCrouching = ($pose.key -eq 'shift')
-		$poseObservation = Invoke-RemotePoseObservation $portB $nickA $expectedPose $expectedCrouching
+		# Stage 11: the observer's sprint bit is asserted as well - the
+		# sprint pose must report isSprinting=true, the sneak one false.
+		$expectedSprinting = if ($pose.key -eq 'shift') { $false } else { $true }
+		$poseObservation = Invoke-RemotePoseObservation $portB $nickA $expectedPose $expectedCrouching $expectedSprinting
 		$script:s5PoseChecks.Add([PSCustomObject]@{ name=$pose.name; pass=$poseObservation.pass; fact=$poseObservation.fact }) | Out-Null
 		$null = Invoke-TestCmd $portA (New-KeyCmd ('s5-' + $pose.name + '-off') $pose.key 'up')
 		if ($pose.alsoKey) {
 			$null = Invoke-TestCmd $portA (New-KeyCmd ('s5-' + $pose.name + '-also-off') $pose.alsoKey 'up')
+		}
+		if ($pose.key -eq 'sprint') {
+			$releaseAt = Get-Date
+			$previousSampleMs = 0
+			foreach ($sampleAfterReleaseMs in @(0, 100, 300, 700)) {
+				$waitMs = $sampleAfterReleaseMs - $previousSampleMs
+				if ($waitMs -gt 0) { Start-Sleep -Milliseconds $waitMs }
+				$releaseResponse = Invoke-TestCmd $portB (New-ObserveCmd "s5-sprint-release-$sampleAfterReleaseMs" $nickA)
+				$releaseObservation = if ($releaseResponse.ok) { $releaseResponse.result } else { $null }
+				$observedAt = Get-Date
+				$script:s5ReleaseObservations.Add([PSCustomObject]@{
+					targetAfterReleaseMs = $sampleAfterReleaseMs
+					actualAfterReleaseMs = [Math]::Round(($observedAt - $releaseAt).TotalMilliseconds, 1)
+					observedAt = $observedAt.ToString('o')
+					found = [bool]($releaseObservation -and $releaseObservation.found)
+					isSprinting = if ($releaseObservation -and $releaseObservation.PSObject.Properties['isSprinting']) { $releaseObservation.isSprinting } else { $null }
+					pose = if ($releaseObservation) { $releaseObservation.pose } else { $null }
+					isCrouching = if ($releaseObservation) { $releaseObservation.isCrouching } else { $null }
+				}) | Out-Null
+				$previousSampleMs = $sampleAfterReleaseMs
+			}
 		}
 		Start-Sleep -Milliseconds 800
 	}
@@ -763,6 +937,28 @@ function Invoke-S5 {
 	$stateMatch = $found.Count -eq 4 -and @($found | Where-Object { $null -eq $_ }).Count -eq 0
 	Add-Check $Result 'B receives exact metadata flags 02 00 08 00 in order' $stateMatch `
 		("entity={0}; seq/hex: {1}" -f $entityId, (($found | ForEach-Object { if ($_){ "$($_.seq)/$($_.hex)" } }) -join ', '))
+	$releaseRow = if ($found.Count -ge 4) { $found[3] } else { $null }
+	if ($null -ne $releaseRow) {
+		$windowStart = [Math]::Max(0, $releaseRow.seq - 30)
+		$windowEnd = [Math]::Min($bRows.Count - 1, $releaseRow.seq + 30)
+		$releaseWindow = @($bRows | Where-Object { [int]$_.seq -ge $windowStart -and [int]$_.seq -le $windowEnd })
+		$entityWindowRows = @($releaseWindow | Where-Object {
+			if ($_.dir -ne 'clientbound' -or $_.name -notin @('minecraft:set_entity_data', 'minecraft:update_attributes')) { return $false }
+			$p = ConvertFrom-TraceB64 $_.b64
+			$p.Length -gt 0 -and [int]$p[0] -eq $entityId
+		}) | ForEach-Object {
+			$payload = ConvertFrom-TraceB64 $_.b64
+			[PSCustomObject]@{ seq=[int]$_.seq; read_ms=$_.read_ms; name=$_.name; hex=[BitConverter]::ToString($payload).Replace('-', ' ').ToLowerInvariant() }
+		}
+		$windowFact = ($entityWindowRows | ForEach-Object { "{0}@{1} {2} {3}" -f $_.seq, $_.read_ms, $_.name, $_.hex }) -join '; '
+		$Result | Add-Member -NotePropertyName sprintOffTrace -NotePropertyValue ([PSCustomObject]@{
+			entityId = $entityId; releaseSeq = $releaseRow.seq; windowStart = $windowStart; windowEnd = $windowEnd; packets = $entityWindowRows
+		}) -Force
+		Add-Check $Result 'S5 sprint-off B trace window (+/-30 packets around release)' ($entityWindowRows.Count -gt 0) `
+			("entity={0}; window={1}..{2}; {3}" -f $entityId, $windowStart, $windowEnd, $windowFact)
+	} else {
+		Add-Check $Result 'S5 sprint-off B trace window (+/-30 packets around release)' $false 'sprint-off metadata was absent; no release anchor to center the requested trace window'
+	}
 
 	$poseRows = @($bRows | Where-Object {
 		if ($_.dir -ne 'clientbound' -or $_.name -ne 'minecraft:set_entity_data') { return $false }
@@ -785,6 +981,11 @@ function Invoke-S5 {
 
 	foreach ($poseCheck in $script:s5PoseChecks) {
 		Add-Check $Result ("S5 $($poseCheck.name): B observe reports expected pose") $poseCheck.pass $poseCheck.fact
+	}
+	foreach ($releaseObservation in $script:s5ReleaseObservations) {
+		$releasePass = $releaseObservation.found -and $releaseObservation.isSprinting -eq $false
+		Add-Check $Result ("B observe sees sprint-off at target +{0} ms" -f $releaseObservation.targetAfterReleaseMs) $releasePass `
+			("targetAfterReleaseMs={0}; actualAfterReleaseMs={1}; observedAt={2}; found={3}; isSprinting={4}; pose={5}" -f $releaseObservation.targetAfterReleaseMs, $releaseObservation.actualAfterReleaseMs, $releaseObservation.observedAt, $releaseObservation.found, $releaseObservation.isSprinting, $releaseObservation.pose)
 	}
 
 	$attributes = @($bRows | Where-Object {
@@ -883,6 +1084,7 @@ function Invoke-S4 {
 $scenarioDir = Join-Path $here 'scenarios'
 $allResults = @()
 try {
+	Prepare-RunWorld
 	Start-Stand
 	foreach ($id in $Scenarios) {
 		$file = Get-ChildItem $scenarioDir -Filter "$id-*.json" | Select-Object -First 1
@@ -928,6 +1130,8 @@ $summary = [PSCustomObject]@{
 	runDir    = $RunDir
 	target    = $Target
 	generated = (Get-Date).ToString('s')
+	runStartedAt = $script:runStartedAt.ToString('o')
+	worldAudit = Join-Path $RunDir 'world-audit.json'
 	scenarios = $allResults
 }
 $summary | ConvertTo-Json -Depth 6 | Set-Content $summaryPath -Encoding utf8
