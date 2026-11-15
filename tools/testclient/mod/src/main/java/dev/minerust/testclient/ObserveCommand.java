@@ -84,6 +84,8 @@ final class ObserveCommand {
 		PlayerInfo info = minecraft.getConnection() == null ? null
 				: minecraft.getConnection().getPlayerInfoIgnoreCase(name);
 		out.addProperty("gameMode", info == null ? "unknown" : info.getGameMode().getSerializedName());
+		out.addProperty("pose", target.getPose().name());
+		out.addProperty("isCrouching", target.isCrouching());
 		return out;
 	}
 
@@ -121,6 +123,8 @@ final class ObserveCommand {
 		out.addProperty("keyUpDown", minecraft.options.keyUp.isDown());
 		out.addProperty("keySprintDown", minecraft.options.keySprint.isDown());
 		out.addProperty("sprinting", player.isSprinting());
+		out.addProperty("pose", player.getPose().name());
+		out.addProperty("isCrouching", player.isCrouching());
 		out.add("feetBlock", blockSnapshot(player, player.blockPosition()));
 		out.add("headBlock", blockSnapshot(player, player.blockPosition().above(1)));
 		out.add("supportBlock", blockSnapshot(player, player.blockPosition().below(1)));

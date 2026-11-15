@@ -469,11 +469,37 @@ function Invoke-S3 {
 		("clientbound swing_animation/animate rows in B's trace ({0}): {1}" -f $bTrace.Name, $bSwings)
 }
 
+# Reads the observer's actual remote-player pose. Retry one time so a snapshot
+# taken during the entity's initial client-side load does not become a false negative.
+function Invoke-RemotePoseObservation {
+	param($Port, $Player, $ExpectedPose, [bool]$ExpectedCrouching)
+	$response = $null
+	$observed = $null
+	$pass = $false
+	$attempts = 0
+	for ($attempt = 1; $attempt -le 2; $attempt++) {
+		$attempts = $attempt
+		$script:s5ObservationIndex++
+		$observeId = "pose-observe-$($script:s5ObservationIndex)-$attempt"
+		$response = Invoke-TestCmd $Port (New-ObserveCmd $observeId $Player)
+		$observed = if ($response.ok) { $response.result } else { $null }
+		$pass = $observed -and $observed.found -eq $true -and $observed.pose -eq $ExpectedPose -and $observed.isCrouching -eq $ExpectedCrouching
+		if ($pass -or $attempt -eq 2) { break }
+		Start-Sleep -Milliseconds 250
+	}
+	$fact = 'attempts={0}; found={1} pose={2} isCrouching={3}; expected pose={4} isCrouching={5}' -f `
+		$attempts, `
+		$(if ($observed) { $observed.found } else { $false }), `
+		$(if ($observed) { $observed.pose } else { 'unavailable' }), `
+		$(if ($observed) { $observed.isCrouching } else { 'unavailable' }), $ExpectedPose, $ExpectedCrouching
+	return [PSCustomObject]@{ pass=[bool]$pass; fact=$fact }
+}
+
 # --- S5: sneak and sprint flags seen by B (stage 10, encoder B reference) ---
 # A holds shift / sprint, then releases. Facts come from the traces: the
 # serverbound player_input flags in A's trace vs the clientbound
 # set_entity_data rows for A's entity id in B's trace (index, type, value).
-# S5 asserts the trace-confirmed state payloads and the sprint attribute order.
+# S5 also checks the actual remote-player pose on B via observe.
 function Invoke-S7 {
 	param($Cfg, $Result)
 	$portA = [int]$Cfg.controlPortA
@@ -491,8 +517,12 @@ function Invoke-S7 {
 		$spawnY = [double]$Cfg.safeSpawn.y
 		$spawnZ = [double]$Cfg.safeSpawn.z
 		$tpCommand = "tp $nickA $spawnX $spawnY $spawnZ"
-		Invoke-VanillaConsole $tpCommand | Out-Null
-		$script:s7Facts.Add("$($pose.name): teleport command sent via vanilla stdin: $tpCommand")
+		if ($isVanilla) {
+			Invoke-VanillaConsole $tpCommand | Out-Null
+			$script:s7Facts.Add("$($pose.name): teleport command sent via vanilla stdin: $tpCommand")
+		} else {
+			$script:s7Facts.Add("$($pose.name): ours target uses configured spawn; no teleport command is available")
+		}
 		# A fixed delay is not proof of teleport application: keep observing until
 		# the client reports the exact destination, then enforce at least 2 s there.
 		# If stdin was accepted but the client never moves, retry once over loopback
@@ -511,6 +541,7 @@ function Invoke-S7 {
 			$positionError = [Math]::Sqrt([Math]::Pow($targetPos.x - $spawnX, 2) + [Math]::Pow($targetPos.y - $spawnY, 2) + [Math]::Pow($targetPos.z - $spawnZ, 2))
 			if ($positionError -le 0.1) { break }
 			$readyError = "client has not reached target; pos=($($targetPos.x),$($targetPos.y),$($targetPos.z)) error=$positionError"
+			if (-not $isVanilla) { break }
 			if (-not $rconFallbackUsed -and (Get-Date) -ge $rconFallbackAt) {
 				$rconResult = Invoke-StandRcon $tpCommand
 				$rconFallbackUsed = $true
@@ -528,6 +559,9 @@ function Invoke-S7 {
 			$positionError = [Math]::Sqrt([Math]::Pow($targetPos.x - $spawnX, 2) + [Math]::Pow($targetPos.y - $spawnY, 2) + [Math]::Pow($targetPos.z - $spawnZ, 2))
 			$atTarget = $positionError -le 0.1
 			if (-not $atTarget) { $readyError = "client left target during 2 s wait; pos=($($targetPos.x),$($targetPos.y),$($targetPos.z)) error=$positionError" }
+		} elseif (-not $isVanilla) {
+			$atTarget = $true
+			$readyError = "using actual server spawn pos=($($ready.pos.x),$($ready.pos.y),$($ready.pos.z)); distance from vanilla safeSpawn=$positionError"
 		}
 		if (-not $atTarget) {
 			$script:s7Facts.Add("$($pose.name): teleport fact: stdin command='$tpCommand'; client did not confirm target and 2 s stable wait; $readyError")
@@ -576,7 +610,11 @@ function Invoke-S7 {
 		$joinBAt = Get-Date
 		$null = Start-Client $nickB $portB $joinBAt
 		# Restrict B facts to its post-login play stream; earlier config packets are irrelevant.
-		$null = Invoke-TestCmd $portB (New-ObserveCmd ('s7-' + $pose.name + '-observe') $nickA)
+		$expectedPose = if ($pose.key -eq 'shift') { 'CROUCHING' } else { 'STANDING' }
+		$expectedCrouching = ($pose.key -eq 'shift')
+		$poseObservation = Invoke-RemotePoseObservation $portB $nickA $expectedPose $expectedCrouching
+		$script:s7Facts.Add("$($pose.name): B client observe: $($poseObservation.fact)")
+		Add-Check $Result ("$($pose.name): B client observes expected pose") $poseObservation.pass $poseObservation.fact
 		Start-Sleep -Milliseconds 500
 		$null = Invoke-TestCmd $portA (New-SessionCmd ('s7-' + $pose.name + '-off') 'disconnect')
 		$null = Invoke-TestCmd $portB (New-SessionCmd ('s7-' + $pose.name + '-offb') 'disconnect')
@@ -650,12 +688,18 @@ function Invoke-S5 {
 	$watermark = Get-Date
 	$launchA = Start-Client $nickA $portA $watermark
 	$null = Start-Client $nickB $portB $watermark
+	$script:s5ObservationIndex = 0
+	$script:s5PoseChecks = [System.Collections.ArrayList]::new()
 	foreach ($pose in $Cfg.poses) {
 		if ($pose.alsoKey) {
 			$null = Invoke-TestCmd $portA (New-KeyCmd ('s5-' + $pose.name + '-also-on') $pose.alsoKey 'down')
 		}
 		$null = Invoke-TestCmd $portA (New-KeyCmd ('s5-' + $pose.name + '-on') $pose.key 'down')
 		Start-Sleep -Milliseconds ([int]$pose.holdMs)
+		$expectedPose = if ($pose.key -eq 'shift') { 'CROUCHING' } else { 'STANDING' }
+		$expectedCrouching = ($pose.key -eq 'shift')
+		$poseObservation = Invoke-RemotePoseObservation $portB $nickA $expectedPose $expectedCrouching
+		$script:s5PoseChecks.Add([PSCustomObject]@{ name=$pose.name; pass=$poseObservation.pass; fact=$poseObservation.fact }) | Out-Null
 		$null = Invoke-TestCmd $portA (New-KeyCmd ('s5-' + $pose.name + '-off') $pose.key 'up')
 		if ($pose.alsoKey) {
 			$null = Invoke-TestCmd $portA (New-KeyCmd ('s5-' + $pose.name + '-also-off') $pose.alsoKey 'up')
@@ -671,6 +715,9 @@ function Invoke-S5 {
 	$bTrace = $traces | Select-Object -Skip 1 | Select-Object -First 1
 	if (-not $aTrace -or -not $bTrace) {
 		Add-Check $Result 'S5 has A and B traces' $false ("A={0}; B={1}" -f $aTrace, $bTrace)
+		foreach ($poseCheck in $script:s5PoseChecks) {
+			Add-Check $Result ("S5 $($poseCheck.name): B observe reports expected pose") $poseCheck.pass $poseCheck.fact
+		}
 		return
 	}
 	$aRows = Read-Trace $aTrace.FullName
@@ -735,6 +782,10 @@ function Invoke-S5 {
 	$poseMatch = $poseFound.Count -eq 2 -and @($poseFound | Where-Object { $null -eq $_ }).Count -eq 0
 	Add-Check $Result 'B receives separate sneak poses 05 then 00' $poseMatch `
 		("entity={0}; seq/hex: {1}" -f $entityId, (($poseFound | ForEach-Object { if ($_){ "$($_.seq)/$($_.hex)" } }) -join ', '))
+
+	foreach ($poseCheck in $script:s5PoseChecks) {
+		Add-Check $Result ("S5 $($poseCheck.name): B observe reports expected pose") $poseCheck.pass $poseCheck.fact
+	}
 
 	$attributes = @($bRows | Where-Object {
 		if ($_.dir -ne 'clientbound' -or $_.name -ne 'minecraft:update_attributes') { return $false }

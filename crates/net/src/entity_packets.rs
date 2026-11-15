@@ -57,8 +57,8 @@ fn metadata_second(game_mode: i32) -> &'static [u8] {
     }
 }
 
-/// Builds the confirmed survival sneak spawn snapshot; other modes remain
-/// unchanged because their held-sneak spawn state was not traced.
+/// Builds the confirmed survival sneak spawn snapshot; sprint spawn state
+/// remains unchanged because the traces do not establish it.
 // SOURCE: S7 held-sneak trace, B seq 176: flags `02`, pose `05`, then snapshot.
 fn spawn_metadata(sneaking: bool, game_mode: i32) -> Vec<u8> {
     let include_sneak = sneaking && game_mode == 0;
@@ -74,7 +74,7 @@ fn spawn_metadata(sneaking: bool, game_mode: i32) -> Vec<u8> {
 /// The three attributes the recorded join sends (`update_attributes`).
 ///
 /// The wire order differs between vanilla runs (C1: 26, 13, 8; C2: 8, 26, 13),
-/// so the parity comparison normalises it; here the C2 order is used.
+/// so an exact ordered parity comparison is unstable; this encoder uses C2 order.
 // SOURCE: two-bot vanilla trace 26.3 (C1/C2), values 4.5, 0.1, 3.0.
 fn standing_attributes(entity_id: PlayerId) -> UpdateAttributes {
     UpdateAttributes {
