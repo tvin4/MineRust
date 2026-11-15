@@ -229,8 +229,18 @@ pub struct EntityStateUpdate {
     /// The combined value `0x0a` is formula-derived; a combined sneak+sprint
     /// state was not observed in the trace.
     pub flags: u8,
+    /// Whether the sneak pose should be emitted: `Some(true)` for pose 5,
+    /// `Some(false)` for pose 0, and `None` when sneak did not change.
+    pub sneaking: Option<bool>,
     /// Sprint transition, which also changes the traced sprinting attribute.
     pub sprinting: Option<bool>,
+}
+
+impl EntityStateUpdate {
+    /// Returns the confirmed pose metadata value for a sneak transition.
+    pub fn sneak_pose(&self) -> Option<u8> {
+        self.sneaking.map(|sneaking| if sneaking { 5 } else { 0 })
+    }
 }
 
 impl StreamEntities {
@@ -410,6 +420,8 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
                                 states.push(EntityStateUpdate {
                                     id: left,
                                     flags: state_flags(state[subject].0, state[subject].1),
+                                    sneaking: (previous.0 != state[subject].0)
+                                        .then_some(state[subject].0),
                                     sprinting: (previous.1 != state[subject].1)
                                         .then_some(state[subject].1),
                                 });

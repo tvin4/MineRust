@@ -309,6 +309,16 @@ fn push_state_update(
     metadata.write_u8(0xff);
     out.push((SetEntityData::KEY, metadata.into_bytes()));
 
+    if let Some(pose_value) = update.sneak_pose() {
+        let mut pose = PacketWriter::new();
+        pose.write_varint(update.id);
+        pose.write_u8(0x06);
+        pose.write_u8(0x14);
+        pose.write_u8(pose_value);
+        pose.write_u8(0xff);
+        out.push((SetEntityData::KEY, pose.into_bytes()));
+    }
+
     if let Some(sprinting) = update.sprinting {
         let mut attributes = PacketWriter::new();
         attributes.write_varint(update.id);

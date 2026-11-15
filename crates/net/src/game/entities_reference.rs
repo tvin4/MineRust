@@ -152,6 +152,7 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
                         states.push(EntityStateUpdate {
                             id,
                             flags: state_flags(state[&id].0, state[&id].1),
+                            sneaking: (previous.0 != state[&id].0).then_some(state[&id].0),
                             sprinting: (previous.1 != state[&id].1).then_some(state[&id].1),
                         });
                         next_broadcast_state.insert(id, Some(state[&id]));
