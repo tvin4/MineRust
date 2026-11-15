@@ -225,9 +225,10 @@ pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> Result<(), R
     net::trace::start();
     net::trace::install_names(net::trace::names_for(&packet_ids));
     let (loader, world) = build_world(&config, Arc::clone(&game_data))?;
-    if let Some(loader) = &loader {
-        warm_world(loader).await;
-    }
+    let store = match &loader {
+        Some(loader) => warm_world(loader).await,
+        None => None,
+    };
     let listener = TcpListener::bind(&config.listen).await?;
     let local = listener.local_addr()?;
     tracing::info!(
@@ -241,6 +242,7 @@ pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> Result<(), R
     let game_config = net::game::GameConfig {
         workers: config.workers,
         region_side: config.region_side,
+        store,
         ..net::game::GameConfig::default()
     };
     net::serve_with(
@@ -258,23 +260,35 @@ pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> Result<(), R
 
 /// Reads the world batch once before the port is bound, so the start log
 /// shows how many chunks are ready to be sent (the live check asks for
-/// exactly that number). Not fatal: a world that cannot be read now will
-/// fail the same read with a warning on someone's join.
-async fn warm_world(loader: &net::Loader) {
+/// exactly that number) and the game thread gets the very store the
+/// connections send from (Шаг 13b) — the one object a later block write and
+/// a later join both see. Not fatal: a world that cannot be read now will
+/// fail the same read with a warning on someone's join, and the game thread
+/// then has no store (a block action is only acknowledged).
+async fn warm_world(loader: &net::Loader) -> Option<Arc<net::ChunkStore>> {
     let reply = match loader.load_batch().await {
         Ok(reply) => reply,
         Err(error) => {
             tracing::warn!(%error, "world warm-up could not be queued");
-            return;
+            return None;
         }
     };
     match reply.await {
-        Ok(Ok(chunks)) => tracing::info!(
-            ready_chunks = chunks.len(),
-            "world warm-up finished: chunks ready to send"
-        ),
-        Ok(Err(error)) => tracing::warn!(%error, "world warm-up failed at startup"),
-        Err(error) => tracing::warn!(%error, "the world warm-up reply was dropped"),
+        Ok(Ok(store)) => {
+            tracing::info!(
+                ready_chunks = store.len(),
+                "world warm-up finished: chunks ready to send"
+            );
+            Some(store)
+        }
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "world warm-up failed at startup");
+            None
+        }
+        Err(error) => {
+            tracing::warn!(%error, "the world warm-up reply was dropped");
+            None
+        }
     }
 }
 

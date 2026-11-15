@@ -2029,6 +2029,39 @@ wire-мира; схема владения/конкурентности — `doc
 (только память). Игровой поток пока не получает `Arc<ChunkStore>` — это
 подключит Шаг 13b.
 
+## Шаг 13b: серверное ломание блока в survival (15.11.2026)
+
+Код: `net::game::block_action` + декодеры в `crates/protocol`. Схема —
+`docs/DECISIONS.md`, «Шаг 13b»; байты и гипотезы — `docs/BLOCK-BREAKING.md`
+§3.5.
+
+- `protocol`: `PlayerAction` (41, serverbound), `BlockUpdate` (8),
+  `BlockChangedAck` (4); экспорт и `used_packet_keys`. Побайтные тесты против
+  S3: `00 0000177ffffea07b 01 01`, `03 0000177ffffea07b 01 02`,
+  `0000177ffffea07b 00`, ack `01`/`02`.
+- `net`: `ToGame::BlockAction(BlockAction)`; `ServerMessage::BlockUpdate`
+  / `BlockChangedAck`; соединение пишет их, резолвя id через `ids.id(...)`.
+- `game`: `GameConfig.store: Option<Arc<ChunkStore>>` (конфиг больше не
+  `Copy`, у `ChunkStore` ручной `Debug`); `warm_world` в `server` возвращает
+  store и кладёт его в конфиг.
+- Поведение: start/abort — только ack; finish — проверка «чанк загружен и
+  блок не воздух», запись `AIR_STATE=0`, `block_update` всем (включая
+  копающего), затем ack копающему. Отказ: воздух → `block_update` реального
+  состояния копающему + ack; нет чанка → только ack. Всё это **гипотеза**
+  (трейса отказа нет), в коде помечено.
+
+**Тесты.** `protocol`: 2 побайтных теста S3. `net`: 7 тестов
+`block_action_tests` (успех и порядок, наблюдатель без ack, поздний вход
+читает новый снимок, воздух, отсутствующий чанк, start/abort, без store,
+путь через `ToGame`). Полный gate (`fmt`, `clippy -D warnings`, `test
+--workspace`) — зелёный.
+
+**Не сделано (осознанно).** Трещины, звук/частицы, предмет,
+`block_destruction`/`level_event`/`add_entity`; пересчёт света; таймер
+копания, твёрдость, проверка дальности; правило «кому видно»
+(`block_update` — всем); запись на диск. Проверка света после `block_update`
+по ванильному трейсу — **не установлено**.
+
 ## Остаточные факты и блокеры
 
 - **Шаг 10 C:** punch→swing не детерминирован один-к-одному на S3 (22 punch, 11 swing); правила drain/aggregation и удержания на блоке не установлены. Нужны новые подтверждённые трейсы/семантика перед реализацией.

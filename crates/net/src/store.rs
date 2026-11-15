@@ -103,6 +103,19 @@ pub struct ChunkStore {
     blocks: Arc<BlockStates>,
 }
 
+impl std::fmt::Debug for ChunkStore {
+    /// Prints the counts, never the payloads: a `ChunkStore` sits inside
+    /// [`GameConfig`](crate::game::GameConfig), whose derived `Debug` must
+    /// stay cheap and bounded.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let snapshot = self.snapshot();
+        f.debug_struct("ChunkStore")
+            .field("chunks", &snapshot.len())
+            .field("blocks", &self.blocks.len())
+            .finish()
+    }
+}
+
 impl ChunkStore {
     /// Wraps a ready snapshot with the block report its writes classify
     /// against.

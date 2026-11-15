@@ -930,6 +930,158 @@ impl SynchronizePlayerPosition {
     }
 }
 
+/// Clientbound Block Update: the state of one block (play id 0x08).
+///
+/// SOURCE: our vanilla S3 trace (`docs/BLOCK-BREAKING.md` §1.2/§1.3): after a
+/// break finishes, the digger and every observer receive the removed block as
+/// `packed pos (8 B) + state varint 0` (air). `packets.json` carries only the
+/// id and direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockUpdate {
+    /// Block the update is about.
+    pub position: Position,
+    /// New block state id (`0` = air).
+    pub state: i32,
+}
+
+impl BlockUpdate {
+    /// Packet id of Block Update (play state, clientbound).
+    pub const ID: u32 = 0x08;
+
+    /// Key that resolves the Block Update id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::clientbound(ProtocolState::Play, "minecraft:block_update", Self::ID);
+
+    /// Encodes the payload (packet id excluded).
+    pub fn encode_payload(&self) -> Vec<u8> {
+        let mut writer = PacketWriter::new();
+        writer.write_position(self.position);
+        writer.write_varint(self.state);
+        writer.into_bytes()
+    }
+
+    /// Decodes the payload; the packet id must already be consumed.
+    pub fn decode_payload(reader: &mut PacketReader<'_>) -> Result<Self, CodecError> {
+        Ok(Self {
+            position: reader.read_position()?,
+            state: reader.read_varint()?,
+        })
+    }
+
+    /// Encodes the packet as a complete frame.
+    pub fn to_frame(&self) -> Result<Vec<u8>, CodecError> {
+        encode_frame(Self::ID, &self.encode_payload())
+    }
+}
+
+/// Clientbound Block Changed Ack: echoes the sequence of a `player_action`
+/// (play id 0x04).
+///
+/// SOURCE: our vanilla S3 trace (`docs/BLOCK-BREAKING.md` §1.2): the digger
+/// receives `01` after the start action and `02` after the finish — the
+/// client's own sequence counter, carried back unchanged. `packets.json`
+/// carries only the id and direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockChangedAck {
+    /// Sequence echoed back from the `player_action`.
+    pub sequence: i32,
+}
+
+impl BlockChangedAck {
+    /// Packet id of Block Changed Ack (play state, clientbound).
+    pub const ID: u32 = 0x04;
+
+    /// Key that resolves the Block Changed Ack id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::clientbound(ProtocolState::Play, "minecraft:block_changed_ack", Self::ID);
+
+    /// Encodes the payload (packet id excluded).
+    pub fn encode_payload(&self) -> Vec<u8> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.sequence);
+        writer.into_bytes()
+    }
+
+    /// Decodes the payload; the packet id must already be consumed.
+    pub fn decode_payload(reader: &mut PacketReader<'_>) -> Result<Self, CodecError> {
+        Ok(Self {
+            sequence: reader.read_varint()?,
+        })
+    }
+
+    /// Encodes the packet as a complete frame.
+    pub fn to_frame(&self) -> Result<Vec<u8>, CodecError> {
+        encode_frame(Self::ID, &self.encode_payload())
+    }
+}
+
+/// Serverbound Player Action: the client's block-breaking signal (play id
+/// 0x29).
+///
+/// SOURCE: our vanilla S3 trace (`docs/BLOCK-BREAKING.md` §1.2): a broken
+/// block arrives as two packets with the same packed position and face — a
+/// start (`00`) and a finish (`03`) — and the finish is followed by a
+/// `block_update` to the removed state and a `block_changed_ack` echoing the
+/// sequence. The abort value (`02`) is **behaviourally inferred** from a
+/// trace where a short tap produced an ack and left the block in place; the
+/// S3 trace does not carry that byte itself. `face` is a byte (`01`) in every
+/// observation; other values are not established. `packets.json` carries only
+/// the id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayerAction {
+    /// Action varint: see [`PlayerAction::ACTION_START`],
+    /// [`PlayerAction::ACTION_ABORT`] and [`PlayerAction::ACTION_FINISH`].
+    pub action: i32,
+    /// Target block.
+    pub position: Position,
+    /// Face byte of the clicked block face; `01` in every trace packet.
+    pub face: u8,
+    /// The client's own sequence counter, echoed by `block_changed_ack`.
+    pub sequence: i32,
+}
+
+impl PlayerAction {
+    /// Packet id of Player Action (play state, serverbound).
+    pub const ID: u32 = 0x29;
+
+    /// Key that resolves the Player Action id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::serverbound(ProtocolState::Play, "minecraft:player_action", Self::ID);
+
+    /// Action value the S3 trace records when breaking starts.
+    pub const ACTION_START: i32 = 0x00;
+    /// Action value inferred for an aborted break (not byte-confirmed by the
+    /// S3 trace — see the struct docs).
+    pub const ACTION_ABORT: i32 = 0x02;
+    /// Action value the S3 trace records when breaking finishes.
+    pub const ACTION_FINISH: i32 = 0x03;
+
+    /// Encodes the payload (packet id excluded).
+    pub fn encode_payload(&self) -> Vec<u8> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.action);
+        writer.write_position(self.position);
+        writer.write_u8(self.face);
+        writer.write_varint(self.sequence);
+        writer.into_bytes()
+    }
+
+    /// Decodes the payload; the packet id must already be consumed.
+    pub fn decode_payload(reader: &mut PacketReader<'_>) -> Result<Self, CodecError> {
+        Ok(Self {
+            action: reader.read_varint()?,
+            position: reader.read_position()?,
+            face: reader.read_u8()?,
+            sequence: reader.read_varint()?,
+        })
+    }
+
+    /// Encodes the packet as a complete frame.
+    pub fn to_frame(&self) -> Result<Vec<u8>, CodecError> {
+        encode_frame(Self::ID, &self.encode_payload())
+    }
+}
+
 /// Reads a non-negative length prefix used by the array fields above.
 fn read_count(reader: &mut PacketReader<'_>) -> Result<usize, CodecError> {
     let count = reader.read_varint()?;
@@ -1248,6 +1400,71 @@ mod tests {
         assert!(Punch.encode_payload().is_empty());
         let mut reader = PacketReader::new(&[0x00]);
         Punch::decode_payload(&mut reader).expect_err("a trailing byte is not punch");
+    }
+
+    /// The two `player_action` packets that broke (93,123,−22) in the vanilla
+    /// S3 trace: the exact bytes, action values and the echoed sequence.
+    #[test]
+    fn player_action_roundtrips_the_s3_break() {
+        let position = Position {
+            x: 93,
+            y: 123,
+            z: -22,
+        };
+        let start = PlayerAction {
+            action: PlayerAction::ACTION_START,
+            position,
+            face: 0x01,
+            sequence: 1,
+        };
+        let finish = PlayerAction {
+            action: PlayerAction::ACTION_FINISH,
+            position,
+            face: 0x01,
+            sequence: 2,
+        };
+        crate::packets::test_support::check(
+            start,
+            "000000177ffffea07b0101",
+            |packet| Ok(packet.encode_payload()),
+            PlayerAction::decode_payload,
+        );
+        crate::packets::test_support::check(
+            finish,
+            "030000177ffffea07b0102",
+            |packet| Ok(packet.encode_payload()),
+            PlayerAction::decode_payload,
+        );
+        // The action constants match the recorded bytes.
+        assert_eq!(start.action, 0x00, "start is 0x00 in the trace");
+        assert_eq!(finish.action, 0x03, "finish is 0x03 in the trace");
+    }
+
+    /// The `block_update` and the two `block_changed_ack` payloads of the S3
+    /// trace: `pos + state 0` and the echoed sequences.
+    #[test]
+    fn block_update_and_ack_roundtrip_the_s3_break() {
+        crate::packets::test_support::check(
+            BlockUpdate {
+                position: Position {
+                    x: 93,
+                    y: 123,
+                    z: -22,
+                },
+                state: 0,
+            },
+            "0000177ffffea07b00",
+            |packet| Ok(packet.encode_payload()),
+            BlockUpdate::decode_payload,
+        );
+        for (sequence, raw) in [(1, "01"), (2, "02")] {
+            crate::packets::test_support::check(
+                BlockChangedAck { sequence },
+                raw,
+                |packet| Ok(packet.encode_payload()),
+                BlockChangedAck::decode_payload,
+            );
+        }
     }
 
     #[test]

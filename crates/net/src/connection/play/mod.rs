@@ -17,10 +17,10 @@ use chunk_pace::ChunkPace;
 
 use data::{GameData, PacketIds};
 use protocol::{
-    decode_frame, ChunkBatchReceived, ClientInformation, ConfirmTeleportation, KeepAlive,
-    PacketReader, PlayerCommand, PlayerInput, Position, ProtocolState, Punch, StatusInfo,
-    MAX_STRING_CHARS, MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT,
-    MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
+    decode_frame, BlockChangedAck, BlockUpdate, ChunkBatchReceived, ClientInformation,
+    ConfirmTeleportation, KeepAlive, PacketReader, PlayerAction, PlayerCommand, PlayerInput,
+    Position, ProtocolState, Punch, StatusInfo, MAX_STRING_CHARS, MOVE_PLAYER_POS,
+    MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT, MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
 };
 use std::sync::Arc;
 
@@ -32,8 +32,8 @@ use tracing::{debug, info, trace, warn};
 use crate::error::ConnectionError;
 use crate::frame::{read_tracked, write_tracked};
 use crate::game::{
-    chunk_of_position, GameHandle, KickFlag, MoveKind, MoveSlot, MoveState, PlayerConnection,
-    PlayerId, PlayerJoin, ServerMessage, ToGame, OUTBOUND_CAPACITY,
+    chunk_of_position, BlockAction, GameHandle, KickFlag, MoveKind, MoveSlot, MoveState,
+    PlayerConnection, PlayerId, PlayerJoin, ServerMessage, ToGame, OUTBOUND_CAPACITY,
 };
 use crate::loader::{LoadError, Loader};
 use crate::store::ChunkStore;
@@ -363,6 +363,31 @@ where
                     Some(ServerMessage::Send { id, payload }) => {
                         write_tracked(&mut writer, ProtocolState::Play, id, &payload).await?;
                     }
+                    // A block changed (Шаг 13b): the connection resolves the
+                    // wire id and writes `block_update`.
+                    Some(ServerMessage::BlockUpdate { position, state }) => {
+                        let packet = BlockUpdate { position, state };
+                        write_tracked(
+                            &mut writer,
+                            ProtocolState::Play,
+                            ids.id(BlockUpdate::KEY),
+                            &packet.encode_payload(),
+                        )
+                        .await?;
+                    }
+                    // The digger's action is acknowledged (Шаг 13b): the
+                    // connection writes `block_changed_ack` with the echoed
+                    // sequence.
+                    Some(ServerMessage::BlockChangedAck { sequence }) => {
+                        let packet = BlockChangedAck { sequence };
+                        write_tracked(
+                            &mut writer,
+                            ProtocolState::Play,
+                            ids.id(BlockChangedAck::KEY),
+                            &packet.encode_payload(),
+                        )
+                        .await?;
+                    }
                     // The player's window moved (M4.4 B, ШАГ 3): the centre
                     // goes out first, then the traced forgets (chunks that
                     // were already sent), and the entering chunks join the
@@ -541,6 +566,35 @@ where
                         Punch::decode_payload(&mut payload)?;
                         last_move.store_swing();
                         trace!("punch stored as a swing");
+                    }
+                    // Block breaking (Шаг 13b): the connection classifies the
+                    // packet and hands the fields to the game thread, which
+                    // owns what the action means (a block write and the
+                    // broadcasts). The server trusts the client here — no
+                    // mining timer (docs/BLOCK-BREAKING.md §4.2).
+                    id if id == ids.id(PlayerAction::KEY) => {
+                        let action = PlayerAction::decode_payload(&mut payload)?;
+                        payload.ensure_empty()?;
+                        trace!(
+                            action = action.action,
+                            x = action.position.x,
+                            y = action.position.y,
+                            z = action.position.z,
+                            face = action.face,
+                            sequence = action.sequence,
+                            "player_action forwarded to the game thread"
+                        );
+                        if let Err(err) = game
+                            .send(ToGame::BlockAction(BlockAction {
+                                id: player_id,
+                                action: action.action,
+                                position: action.position,
+                                sequence: action.sequence,
+                            }))
+                            .await
+                        {
+                            warn!(%err, "the game thread is gone, block action dropped");
+                        }
                     }
                     // M2 has no gameplay: unknown or not-yet-handled
                     // serverbound packets must not drop the connection.

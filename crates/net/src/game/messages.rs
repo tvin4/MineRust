@@ -42,6 +42,27 @@ pub enum ToGame {
         /// Player that is leaving.
         id: PlayerId,
     },
+    /// A `player_action` (41) that reached the game thread (Шаг 13b).
+    ///
+    /// The connection classifies the packet by its runtime id and keeps the
+    /// fields verbatim; the tick decides what the action means (which is game
+    /// state, `apply` in `mod.rs` + `block_action.rs`).
+    BlockAction(BlockAction),
+}
+
+/// The fields of one `player_action` (41) as the game thread receives them
+/// (Шаг 13b).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockAction {
+    /// Player that acted.
+    pub id: PlayerId,
+    /// Action varint ([`protocol::PlayerAction`] constants: `0x00` start,
+    /// `0x02` abort, `0x03` finish).
+    pub action: i32,
+    /// Target block.
+    pub position: Position,
+    /// The client's own counter, echoed back in `block_changed_ack`.
+    pub sequence: i32,
 }
 
 /// Registration of a joining player: who they are and how to reach them.
@@ -114,6 +135,21 @@ pub enum ServerMessage {
         /// This tick's swing broadcasts (M4.5 Шаг 11): one entry per packet,
         /// in ascending subject id.
         swings: Vec<PlayerId>,
+    },
+    /// One block changed this tick (Шаг 13b): the connection writes
+    /// `block_update` (id resolved at runtime from `BlockUpdate::KEY`). Sent
+    /// to every observer, the digger included.
+    BlockUpdate {
+        /// Block that changed.
+        position: Position,
+        /// New block state id (`0` = air).
+        state: i32,
+    },
+    /// Echo of a `player_action` sequence (Шаг 13b): the connection writes
+    /// `block_changed_ack` (`BlockChangedAck::KEY`). Sent to the digger only.
+    BlockChangedAck {
+        /// Sequence echoed back from the action.
+        sequence: i32,
     },
 }
 

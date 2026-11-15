@@ -11,6 +11,7 @@
 //! choices, thresholds and the replay format are M4.1 **[hypothesis]**
 //! where no trace backs them (see `docs/ARCH-M4.md` §0/§1/§3).
 
+mod block_action;
 mod entities;
 mod grid;
 mod messages;
@@ -21,6 +22,8 @@ mod region;
 mod replay;
 mod scheduler;
 
+#[cfg(test)]
+mod block_action_tests;
 #[cfg(test)]
 mod entities_equivalence_tests;
 #[cfg(test)]
@@ -49,8 +52,8 @@ pub use entities::{
 };
 pub use grid::{chunk_of_position, RegionGrid, CHUNK_SIZE};
 pub use messages::{
-    KickFlag, KickReason, MoveKind, MoveSlot, MoveState, PlayerConnection, PlayerId, PlayerJoin,
-    ServerMessage, ToGame,
+    BlockAction, KickFlag, KickReason, MoveKind, MoveSlot, MoveState, PlayerConnection, PlayerId,
+    PlayerJoin, ServerMessage, ToGame,
 };
 pub use metrics::{TickMetrics, TickMetricsHandle};
 pub use movement::MoveUpdate;
@@ -71,6 +74,8 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use metrics::Recorder;
+
+use crate::store::ChunkStore;
 
 /// One game tick: 20 TPS.
 pub const TICK_PERIOD: Duration = Duration::from_millis(50);
@@ -132,7 +137,12 @@ pub const OUTBOUND_CAPACITY: usize = 256;
 /// without touching the loop. `reset_after` is the "[hypothesis] N ticks"
 /// of ARCH-M4 §3 (reset the deadline when the tick falls this far behind);
 /// `ticks_limit` stops the loop after a fixed count (bench and tests).
-#[derive(Debug, Clone, Copy)]
+///
+/// `store` is the one non-scalar field (Шаг 13b): the shared wire world the
+/// game thread changes blocks in. It is `None` for every caller without a
+/// ready world (tests, the bench), and a block action is then acknowledged
+/// without changing anything.
+#[derive(Debug, Clone)]
 pub struct GameConfig {
     /// Period of one tick.
     pub period: Duration,
@@ -165,6 +175,10 @@ pub struct GameConfig {
     /// `3` is not fully supported (no `player_abilities`, no spectator
     /// flight), see `docs/DECISIONS.md`.
     pub default_game_mode: i32,
+    /// The shared wire world the game thread changes blocks in (Шаг 13b).
+    /// `None` means no world is attached and a `player_action` only gets its
+    /// `block_changed_ack`.
+    pub store: Option<Arc<ChunkStore>>,
 }
 
 impl Default for GameConfig {
@@ -179,6 +193,7 @@ impl Default for GameConfig {
             region_side: 0,
             tick_thread_priority: false,
             default_game_mode: 0,
+            store: None,
         }
     }
 }
@@ -306,6 +321,9 @@ impl GameHandle {
         let stop = Arc::new(AtomicBool::new(false));
         let loop_stop = Arc::clone(&stop);
         let priority = config.tick_thread_priority;
+        // `config` is no longer `Copy` (Шаг 13b: it owns the world store), so
+        // the fields the handle needs are read before it moves into the loop.
+        let default_game_mode = config.default_game_mode;
         let join = std::thread::Builder::new()
             .name("minecraft-game".to_owned())
             .spawn(move || {
@@ -320,7 +338,7 @@ impl GameHandle {
             next_id: Arc::new(AtomicI32::new(1)),
             metrics,
             stop: Arc::clone(&stop),
-            default_game_mode: config.default_game_mode,
+            default_game_mode,
         };
         Ok((
             GameThread {
@@ -415,6 +433,7 @@ fn game_loop(
             tick,
             &mut incoming,
             &mut disconnected,
+            config.store.as_ref(),
         );
         let after_apply = Instant::now();
         let outcome = scheduler.tick(tick, deadline);
@@ -545,10 +564,11 @@ fn apply_queued<W: std::io::Write>(
     tick: u64,
     incoming: &mut mpsc::Receiver<ToGame>,
     disconnected: &mut bool,
+    store: Option<&Arc<ChunkStore>>,
 ) {
     replay.start_tick();
     while let Some(message) = next_message(incoming, disconnected) {
-        apply(scheduler, replay, tick, message);
+        apply(scheduler, replay, tick, message, store);
     }
 }
 
@@ -562,6 +582,7 @@ fn apply<W: std::io::Write>(
     replay: &mut Replay<W>,
     tick: u64,
     message: ToGame,
+    store: Option<&Arc<ChunkStore>>,
 ) {
     match message {
         ToGame::Join(join) => {
@@ -594,6 +615,9 @@ fn apply<W: std::io::Write>(
             let region_id = scheduler.region_of(id);
             replay.record(tick, region_id, id, "quit", serde_json::json!({}));
             scheduler.remove_player(id);
+        }
+        ToGame::BlockAction(action) => {
+            block_action::apply(scheduler, replay, tick, store, action);
         }
     }
 }
