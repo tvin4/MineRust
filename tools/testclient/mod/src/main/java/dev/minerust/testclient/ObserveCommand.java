@@ -60,6 +60,7 @@ final class ObserveCommand {
 			out.addProperty("reason", "no level");
 			return out;
 		}
+		out.addProperty("loadedChunks", minecraft.level.getChunkSource().getLoadedChunksCount());
 		AbstractClientPlayer target = null;
 		for (AbstractClientPlayer candidate : minecraft.level.players()) {
 			if (candidate.getScoreboardName().equalsIgnoreCase(name)) {
@@ -86,6 +87,7 @@ final class ObserveCommand {
 		out.addProperty("gameMode", info == null ? "unknown" : info.getGameMode().getSerializedName());
 		out.addProperty("pose", target.getPose().name());
 		out.addProperty("isCrouching", target.isCrouching());
+		out.addProperty("isSprinting", target.isSprinting());
 		return out;
 	}
 
@@ -125,6 +127,7 @@ final class ObserveCommand {
 		out.addProperty("sprinting", player.isSprinting());
 		out.addProperty("pose", player.getPose().name());
 		out.addProperty("isCrouching", player.isCrouching());
+		out.addProperty("loadedChunks", minecraft.level.getChunkSource().getLoadedChunksCount());
 		out.add("feetBlock", blockSnapshot(player, player.blockPosition()));
 		out.add("headBlock", blockSnapshot(player, player.blockPosition().above(1)));
 		out.add("supportBlock", blockSnapshot(player, player.blockPosition().below(1)));

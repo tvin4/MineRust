@@ -172,7 +172,10 @@ function Get-PlayerRotationFromNbt {
 function Get-NewTraceFiles {
 	param([string]$Dir, [datetime]$Since)
 	return @(Get-ChildItem $Dir -Filter 'proxy-conn-*.jsonl' -ErrorAction SilentlyContinue |
-		Where-Object { $_.CreationTime -gt $Since } | Sort-Object CreationTime)
+		Where-Object {
+			$_.CreationTime -gt $Since -and
+			(Select-String -LiteralPath $_.FullName -Pattern '"name":"minecraft:login_finished"' -Quiet)
+		} | Sort-Object CreationTime)
 }
 
 # --- vanilla log -----------------------------------------------------------

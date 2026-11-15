@@ -58,6 +58,19 @@ try {
 	$audit = Get-Content -LiteralPath $auditPath -Raw | ConvertFrom-Json
 	if ($audit.files.Count -lt 1 -or $audit.files[0].sha256 -notmatch '^[A-F0-9]{64}$') { throw 'world audit is missing SHA-256 records' }
 	if ($audit.playerData.Count -ne 0 -or $audit.unexpectedPlayerData.Count -ne 0) { throw 'world audit reports unexpected playerdata after copy' }
+
+	$oursWorld = Join-Path $root 'world'
+	New-Item -ItemType Directory -Path (Join-Path $oursWorld 'players\data') -Force | Out-Null
+	Set-Content -LiteralPath (Join-Path $oursWorld 'level.dat') -Value 'old ours world'
+	Set-Content -LiteralPath (Join-Path $oursWorld 'players\data\alice.dat') -Value 'keep old ours world'
+	$script:isVanilla = $false
+	$script:Target = 'ours'
+	Prepare-RunWorld
+	$oursStale = @(Get-ChildItem -LiteralPath $root -Directory -Filter 'world.stale-*')
+	if ($oursStale.Count -ne 1 -or -not (Test-Path -LiteralPath (Join-Path $oursStale[0].FullName 'players\data\alice.dat'))) {
+		throw 'ours world was not preserved under world.stale-<timestamp>'
+	}
+	if (-not (Test-Path -LiteralPath (Join-Path $oursWorld 'level.dat'))) { throw 'ours world was not recreated from the template' }
 } finally {
 	if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
 }

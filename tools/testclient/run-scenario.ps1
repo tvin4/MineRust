@@ -127,7 +127,6 @@ function Prepare-RunWorld {
 	if ([string]::Equals($script:activeWorldDir, $templateWorldDir, [StringComparison]::OrdinalIgnoreCase)) {
 		throw 'refusing to replace the source world template'
 	}
-
 	if (Test-Path -LiteralPath $script:activeWorldDir) {
 		$stamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
 		$staleDir = "$($script:activeWorldDir).stale-$stamp"
@@ -644,6 +643,63 @@ function Invoke-RemotePoseObservation {
 	return [PSCustomObject]@{ pass=[bool]$pass; fact=$fact }
 }
 
+# Picks the sprint attribute record that follows a given metadata flag row.
+#
+# The two S5 attribute checks are independent facts: a missing release flag must
+# not hide a sprint-on payload that is present in the trace. Run
+# 2026-11-15_1908 carried `01 01 1a ... minecraft:sprinting ...` at seq 849 and
+# still reported "missing" because the selection was gated on the full four-flag
+# sequence matching. `AfterSeq` is the anchor flag row; `$null` means the anchor
+# was never captured, which is reported as such instead of as a missing payload.
+function Select-SprintAttribute {
+	param($Attributes, [object]$AfterSeq, [bool]$Sprint)
+	if ($null -eq $AfterSeq) {
+		return [PSCustomObject]@{ found = $false; seq = $null; hex = $null; reason = 'anchor metadata flag was not captured' }
+	}
+	$hit = $Attributes | Where-Object {
+		$_.seq -gt [int]$AfterSeq -and ([bool]$_.sprint -eq $Sprint)
+	} | Select-Object -First 1
+	if (-not $hit) {
+		$kind = if ($Sprint) { 'sprint-on' } else { 'sprint-off' }
+		return [PSCustomObject]@{ found = $false; seq = $null; hex = $null; reason = "no $kind attribute record after seq $AfterSeq" }
+	}
+	return [PSCustomObject]@{ found = $true; seq = $hit.seq; hex = $hit.hex; reason = 'ok' }
+}
+
+# Waits until the observer's loaded-chunk count stops changing. The client keeps
+# draining the join batch for seconds after `inGame`, and entity packets for A
+# are queued behind that drain on the same connection (run 2026-11-15_1908:
+# 473 chunks still pending when the scenario disconnected). Facts sampled before
+# the drain settles describe the drain, not the pose transition.
+# Falls back to `StableSamples` reads with a bounded wait so a client that never
+# settles still produces a fact instead of hanging the scenario.
+function Wait-ObserverChunksStable {
+	param([int]$Port, [int]$TimeoutSec = 30)
+	$deadline = (Get-Date).AddSeconds($TimeoutSec)
+	$previous = -1
+	$stable = 0
+	$reads = 0
+	$last = -1
+	while ((Get-Date) -lt $deadline) {
+		$reads++
+		try {
+			$response = Invoke-TestCmd $Port (New-ObserveCmd 'chunk-gate') 5000
+			if ($response.ok -and $response.result.PSObject.Properties['loadedChunks']) {
+				$last = [int]$response.result.loadedChunks
+			}
+		} catch { }
+		if ($last -eq $previous) { $stable++ } else { $stable = 0 }
+		$previous = $last
+		if ($stable -ge 2) { break }
+		Start-Sleep -Milliseconds 120
+	}
+	return [PSCustomObject]@{
+		settled = ($stable -ge 2)
+		loadedChunks = $last
+		reads = $reads
+	}
+}
+
 # --- S5: sneak and sprint flags seen by B (stage 10, encoder B reference) ---
 # A holds shift / sprint, then releases. Facts come from the traces: the
 # serverbound player_input flags in A's trace vs the clientbound
@@ -840,6 +896,12 @@ function Invoke-S5 {
 	$script:s5ObservationIndex = 0
 	$script:s5PoseChecks = [System.Collections.ArrayList]::new()
 	$script:s5ReleaseObservations = [System.Collections.ArrayList]::new()
+	# Stage 11: B keeps receiving the join chunk batch for several seconds after
+	# it reports inGame, and the server's entity stream to B competes with that
+	# drain (run 2026-11-15_1908: 473 chunks still in flight when the scenario
+	# disconnected). Pose facts sampled during the drain describe the drain, not
+	# the transition. Wait until B's loaded-chunk count stops moving.
+	$script:s5ObserverReadiness = Wait-ObserverChunksStable $portB 30
 	foreach ($pose in $Cfg.poses) {
 		if ($pose.alsoKey) {
 			$null = Invoke-TestCmd $portA (New-KeyCmd ('s5-' + $pose.name + '-also-on') $pose.alsoKey 'down')
@@ -860,22 +922,30 @@ function Invoke-S5 {
 		if ($pose.key -eq 'sprint') {
 			$releaseAt = Get-Date
 			$previousSampleMs = 0
-			foreach ($sampleAfterReleaseMs in @(0, 100, 300, 700)) {
+			# Stage 11: the sprint-off transition needs the server tick plus the
+			# delivery slot, and run 2026-11-15_1908 showed ~0.5 s of tick
+			# lateness on top of that. Sampling stops as soon as the observer
+			# reports sprinting=false, so a healthy run still ends within ~0 ms;
+			# the later samples only bound a slow one.
+			foreach ($sampleAfterReleaseMs in @(0, 100, 300, 700, 1500, 3000, 5000)) {
 				$waitMs = $sampleAfterReleaseMs - $previousSampleMs
 				if ($waitMs -gt 0) { Start-Sleep -Milliseconds $waitMs }
 				$releaseResponse = Invoke-TestCmd $portB (New-ObserveCmd "s5-sprint-release-$sampleAfterReleaseMs" $nickA)
 				$releaseObservation = if ($releaseResponse.ok) { $releaseResponse.result } else { $null }
 				$observedAt = Get-Date
+				$foundRelease = [bool]($releaseObservation -and $releaseObservation.found)
+				$sprintingAfterRelease = if ($releaseObservation -and $releaseObservation.PSObject.Properties['isSprinting']) { $releaseObservation.isSprinting } else { $null }
 				$script:s5ReleaseObservations.Add([PSCustomObject]@{
 					targetAfterReleaseMs = $sampleAfterReleaseMs
 					actualAfterReleaseMs = [Math]::Round(($observedAt - $releaseAt).TotalMilliseconds, 1)
 					observedAt = $observedAt.ToString('o')
-					found = [bool]($releaseObservation -and $releaseObservation.found)
-					isSprinting = if ($releaseObservation -and $releaseObservation.PSObject.Properties['isSprinting']) { $releaseObservation.isSprinting } else { $null }
+					found = $foundRelease
+					isSprinting = $sprintingAfterRelease
 					pose = if ($releaseObservation) { $releaseObservation.pose } else { $null }
 					isCrouching = if ($releaseObservation) { $releaseObservation.isCrouching } else { $null }
 				}) | Out-Null
 				$previousSampleMs = $sampleAfterReleaseMs
+				if ($foundRelease -and $sprintingAfterRelease -eq $false) { break }
 			}
 		}
 		Start-Sleep -Milliseconds 800
@@ -892,6 +962,8 @@ function Invoke-S5 {
 		foreach ($poseCheck in $script:s5PoseChecks) {
 			Add-Check $Result ("S5 $($poseCheck.name): B observe reports expected pose") $poseCheck.pass $poseCheck.fact
 		}
+		Add-Check $Result 'S5 observer chunk drain settled before pose sampling' $script:s5ObserverReadiness.settled `
+			("loadedChunks={0}; reads={1}; settled={2}" -f $script:s5ObserverReadiness.loadedChunks, $script:s5ObserverReadiness.reads, $script:s5ObserverReadiness.settled)
 		return
 	}
 	$aRows = Read-Trace $aTrace.FullName
@@ -982,6 +1054,8 @@ function Invoke-S5 {
 	foreach ($poseCheck in $script:s5PoseChecks) {
 		Add-Check $Result ("S5 $($poseCheck.name): B observe reports expected pose") $poseCheck.pass $poseCheck.fact
 	}
+	Add-Check $Result 'S5 observer chunk drain settled before pose sampling' $script:s5ObserverReadiness.settled `
+		("loadedChunks={0}; reads={1}; settled={2}" -f $script:s5ObserverReadiness.loadedChunks, $script:s5ObserverReadiness.reads, $script:s5ObserverReadiness.settled)
 	foreach ($releaseObservation in $script:s5ReleaseObservations) {
 		$releasePass = $releaseObservation.found -and $releaseObservation.isSprinting -eq $false
 		Add-Check $Result ("B observe sees sprint-off at target +{0} ms" -f $releaseObservation.targetAfterReleaseMs) $releasePass `
@@ -993,21 +1067,15 @@ function Invoke-S5 {
 		$p = ConvertFrom-TraceB64 $_.b64
 		$p.Length -ge 3 -and $p[0] -eq $entityId -and $p[1] -eq 1 -and $p[2] -eq 0x1a
 	} | ForEach-Object { $p = ConvertFrom-TraceB64 $_.b64; [PSCustomObject]@{seq=[int]$_.seq; hex=[BitConverter]::ToString($p).Replace('-', ' ').ToLowerInvariant(); sprint=([Text.Encoding]::ASCII.GetString($p).Contains('minecraft:sprinting'))} })
-	$onAttribute = $null
-	$offAttribute = $null
-	if ($stateMatch) {
-		$onAttribute = $attributes | Where-Object { $_.seq -gt $found[2].seq -and $_.sprint } | Select-Object -First 1
-		$offAttribute = $attributes | Where-Object { $_.seq -gt $found[3].seq -and -not $_.sprint } | Select-Object -First 1
-	}
+	$onSelection = Select-SprintAttribute $attributes $(if ($found[2]) { $found[2].seq } else { $null }) $true
+	$offSelection = Select-SprintAttribute $attributes $(if ($found[3]) { $found[3].seq } else { $null }) $false
 	$attributeSuffix = if ($entityId -lt 0x80) { '{0:x2}' -f $entityId } else { $null }
 	$onHex = $attributeSuffix + ' 01 1a 3f b9 99 99 a0 00 00 00 01 13 6d 69 6e 65 63 72 61 66 74 3a 73 70 72 69 6e 74 69 6e 67 3f d3 33 33 40 00 00 00 02'
 	$offHex = $attributeSuffix + ' 01 1a 3f b9 99 99 a0 00 00 00 00'
-	$onPass = $null -ne $onAttribute -and $onAttribute.hex -eq $onHex -and $onAttribute.seq -gt $found[2].seq
-	$offPass = $null -ne $offAttribute -and $offAttribute.hex -eq $offHex -and $offAttribute.seq -gt $found[3].seq
-	$onDetail = 'missing'
-	if ($onAttribute) { $onDetail = "seq=$($onAttribute.seq) hex=$($onAttribute.hex)" }
-	$offDetail = 'missing'
-	if ($offAttribute) { $offDetail = "seq=$($offAttribute.seq) hex=$($offAttribute.hex)" }
+	$onPass = $onSelection.found -and $onSelection.hex -eq $onHex
+	$offPass = $offSelection.found -and $offSelection.hex -eq $offHex
+	$onDetail = if ($onSelection.found) { "seq=$($onSelection.seq) hex=$($onSelection.hex)" } else { "missing: $($onSelection.reason)" }
+	$offDetail = if ($offSelection.found) { "seq=$($offSelection.seq) hex=$($offSelection.hex)" } else { "missing: $($offSelection.reason)" }
 	Add-Check $Result 'Sprint-on attribute payload follows flags 08' $onPass $onDetail
 	Add-Check $Result 'Sprint-off attribute payload follows flags 00' $offPass $offDetail
 }
