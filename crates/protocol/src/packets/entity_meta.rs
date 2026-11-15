@@ -72,7 +72,7 @@ pub struct AttributeModifier {
 /// One attribute of [`UpdateAttributes`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct AttributeEntry {
-    /// Attribute key id (8, 26 and 13 in the trace).
+    /// Attribute key id (8, 13 and 26 in the traces).
     pub key: i32,
     /// Base value.
     pub base: f64,
@@ -93,6 +93,14 @@ pub struct UpdateAttributes {
 }
 
 impl UpdateAttributes {
+    /// Compares the entity id and attribute records without relying on wire order.
+    ///
+    /// Duplicate records and modifiers are preserved by comparing occurrence counts.
+    pub fn records_match(&self, other: &Self) -> bool {
+        self.entity_id == other.entity_id
+            && same_multiset(&self.attributes, &other.attributes, attribute_matches)
+    }
+
     /// Encodes the payload (packet id excluded).
     pub fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
         let mut writer = PacketWriter::new();
@@ -139,6 +147,36 @@ impl UpdateAttributes {
             attributes,
         })
     }
+}
+
+fn attribute_matches(left: &AttributeEntry, right: &AttributeEntry) -> bool {
+    left.key == right.key
+        && left.base.to_bits() == right.base.to_bits()
+        && same_multiset(&left.modifiers, &right.modifiers, modifier_matches)
+}
+
+fn modifier_matches(left: &AttributeModifier, right: &AttributeModifier) -> bool {
+    left.id == right.id
+        && left.amount.to_bits() == right.amount.to_bits()
+        && left.operation == right.operation
+}
+
+fn same_multiset<T>(left: &[T], right: &[T], equal: impl Fn(&T, &T) -> bool) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut matched = vec![false; right.len()];
+    for item in left {
+        let Some(index) = right
+            .iter()
+            .enumerate()
+            .position(|(index, candidate)| !matched[index] && equal(item, candidate))
+        else {
+            return false;
+        };
+        matched[index] = true;
+    }
+    true
 }
 
 play_packet!(UpdateAttributes, 0x86, "minecraft:update_attributes");
@@ -265,6 +303,62 @@ mod tests {
             UpdateAttributes::encode_payload,
             UpdateAttributes::decode_payload,
         );
+    }
+
+    #[test]
+    fn update_attributes_records_match_after_reordering() {
+        let modifier_a = AttributeModifier {
+            id: [1; 16],
+            amount: 0.25,
+            operation: 0,
+        };
+        let modifier_b = AttributeModifier {
+            id: [2; 16],
+            amount: -0.5,
+            operation: 1,
+        };
+        let left = UpdateAttributes {
+            entity_id: 77,
+            attributes: vec![
+                AttributeEntry {
+                    key: 8,
+                    base: 4.5,
+                    modifiers: vec![modifier_a, modifier_b],
+                },
+                AttributeEntry {
+                    key: 26,
+                    base: f64::from(0.1_f32),
+                    modifiers: Vec::new(),
+                },
+            ],
+        };
+        let right = UpdateAttributes {
+            entity_id: 77,
+            attributes: vec![
+                AttributeEntry {
+                    key: 26,
+                    base: f64::from(0.1_f32),
+                    modifiers: Vec::new(),
+                },
+                AttributeEntry {
+                    key: 8,
+                    base: 4.5,
+                    modifiers: vec![modifier_b, modifier_a],
+                },
+            ],
+        };
+
+        assert!(left.records_match(&right));
+        assert!(!left.records_match(&UpdateAttributes {
+            entity_id: 78,
+            attributes: right.attributes.clone(),
+        }));
+        let mut changed_modifier = right.clone();
+        changed_modifier.attributes[1].modifiers[0].amount = 0.75;
+        assert!(!left.records_match(&changed_modifier));
+        let mut changed_base = right;
+        changed_base.attributes[1].base = 5.0;
+        assert!(!left.records_match(&changed_base));
     }
 
     #[test]

@@ -112,6 +112,11 @@ pub fn diff_traces(vanilla: &Trace, ours: &Trace) -> TracesDiff {
             compared += 1;
             let v_norm = normalize(v_entry);
             let o_norm = normalize(o_entry);
+            if v_entry.name.as_deref() == Some("minecraft:update_attributes")
+                && update_attributes_match(v_entry, o_entry)
+            {
+                continue;
+            }
             if v_norm != o_norm {
                 payloads.push(PayloadRow {
                     state,
@@ -134,6 +139,27 @@ pub fn diff_traces(vanilla: &Trace, ours: &Trace) -> TracesDiff {
         counts,
         payloads,
         compared,
+    }
+}
+
+fn update_attributes_match(vanilla: &TraceEntry, ours: &TraceEntry) -> bool {
+    fn decode(entry: &TraceEntry) -> Option<protocol::UpdateAttributes> {
+        if entry.name.as_deref() != Some("minecraft:update_attributes") {
+            return None;
+        }
+        let raw = from_hex(&entry.payload).ok()?;
+        let mut reader = protocol::PacketReader::new(&raw);
+        let packet = protocol::UpdateAttributes::decode_payload(&mut reader).ok()?;
+        reader.is_empty().then_some(packet)
+    }
+
+    match (decode(vanilla), decode(ours)) {
+        (Some(mut vanilla), Some(mut ours)) => {
+            vanilla.entity_id = 0;
+            ours.entity_id = 0;
+            vanilla.records_match(&ours)
+        }
+        _ => false,
     }
 }
 
@@ -604,6 +630,44 @@ mod tests {
             1,
             "view distance behind the id is real data"
         );
+    }
+
+    #[test]
+    fn update_attributes_parity_ignores_record_order_but_not_values() {
+        let packet = |attributes: Vec<protocol::AttributeEntry>| {
+            protocol::UpdateAttributes {
+                entity_id: 77,
+                attributes,
+            }
+            .encode_payload()
+            .expect("attributes encodable")
+        };
+        let entry_for = |attributes| {
+            entry(
+                TraceState::Play,
+                TraceDirection::Clientbound,
+                0x86,
+                Some("minecraft:update_attributes"),
+                &packet(attributes),
+            )
+        };
+        let a = protocol::AttributeEntry {
+            key: 13,
+            base: 3.0,
+            modifiers: Vec::new(),
+        };
+        let b = protocol::AttributeEntry {
+            key: 8,
+            base: 4.5,
+            modifiers: Vec::new(),
+        };
+        let vanilla = trace("vanilla", vec![entry_for(vec![a.clone(), b.clone()])]);
+        let reordered = trace("ours", vec![entry_for(vec![b.clone(), a.clone()])]);
+        assert!(diff_traces(&vanilla, &reordered).is_identical());
+
+        let changed = protocol::AttributeEntry { base: 5.0, ..b };
+        let changed = trace("ours", vec![entry_for(vec![a, changed])]);
+        assert_eq!(diff_traces(&vanilla, &changed).payloads.len(), 1);
     }
 
     #[test]
