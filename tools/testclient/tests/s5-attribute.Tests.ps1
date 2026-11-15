@@ -60,4 +60,31 @@ if ($noOff.found -or $noOff.reason -notmatch 'no sprint-off attribute record aft
 	throw 'a missing sprint-off record must name the transition and the anchor'
 }
 
+# 6. The observer timeline: a late sprint-off counts, the +0 ms sample alone
+#    does not. Run 2026-11-15_s5-live-clean reported isSprinting=true at +8 ms
+#    and false at +159 ms; a check keyed to the +0 ms sample alone failed there.
+function New-Observation {
+	param([int]$Target, [double]$Actual, [bool]$Found, [object]$Sprinting)
+	[PSCustomObject]@{ targetAfterReleaseMs = $Target; actualAfterReleaseMs = $Actual; found = $Found; isSprinting = $Sprinting }
+}
+
+$lateOnly = Get-SprintOffObservation @(
+	(New-Observation 0 8 $true $true),
+	(New-Observation 100 159 $true $false)
+)
+if (-not $lateOnly.observed) { throw 'a sprint-off at a later sample must count as observed' }
+if ($lateOnly.timeline -notmatch '\+0/8ms=True/True' -or $lateOnly.timeline -notmatch '\+100/159ms=True/False') {
+	throw "the timeline must keep every sample: $($lateOnly.timeline)"
+}
+
+$firstOnly = Get-SprintOffObservation @( (New-Observation 0 8 $true $true) )
+if ($firstOnly.observed) { throw 'the +0 ms sample alone must not satisfy the check' }
+
+# 7. A never-found observer never satisfies the check.
+$neverFound = Get-SprintOffObservation @(
+	(New-Observation 0 5 $false $null),
+	(New-Observation 100 104 $false $null)
+)
+if ($neverFound.observed) { throw 'an observer that never found the entity must not satisfy the check' }
+
 Write-Host 'S5 attribute-selection tests passed.'

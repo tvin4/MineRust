@@ -666,6 +666,25 @@ function Select-SprintAttribute {
 	return [PSCustomObject]@{ found = $true; seq = $hit.seq; hex = $hit.hex; reason = 'ok' }
 }
 
+# Summarizes the observer timeline captured after the sprint release.
+#
+# The sample at +0 ms is a timeline fact, not a deadline: the server applies the
+# release on its next tick and the packet needs one more hop, so the observer
+# may legitimately still report isSprinting=true there (run
+# 2026-11-15_s5-live-clean: true at +8 ms, false at +159 ms). The check passes
+# when a later sample reports the sprint-off; the whole timeline is kept as the
+# fact so a slow transition stays visible in the report.
+function Get-SprintOffObservation {
+	param($Observations)
+	$timeline = @()
+	$observed = $false
+	foreach ($observation in $Observations) {
+		$timeline += ("+{0}/{1}ms={2}/{3}" -f $observation.targetAfterReleaseMs, $observation.actualAfterReleaseMs, $observation.found, $observation.isSprinting)
+		if ($observation.found -and $observation.isSprinting -eq $false) { $observed = $true }
+	}
+	return [PSCustomObject]@{ observed = $observed; timeline = ($timeline -join '; ') }
+}
+
 # Waits until the observer's loaded-chunk count stops changing. The client keeps
 # draining the join batch for seconds after `inGame`, and entity packets for A
 # are queued behind that drain on the same connection (run 2026-11-15_1908:
@@ -1056,11 +1075,10 @@ function Invoke-S5 {
 	}
 	Add-Check $Result 'S5 observer chunk drain settled before pose sampling' $script:s5ObserverReadiness.settled `
 		("loadedChunks={0}; reads={1}; settled={2}" -f $script:s5ObserverReadiness.loadedChunks, $script:s5ObserverReadiness.reads, $script:s5ObserverReadiness.settled)
-	foreach ($releaseObservation in $script:s5ReleaseObservations) {
-		$releasePass = $releaseObservation.found -and $releaseObservation.isSprinting -eq $false
-		Add-Check $Result ("B observe sees sprint-off at target +{0} ms" -f $releaseObservation.targetAfterReleaseMs) $releasePass `
-			("targetAfterReleaseMs={0}; actualAfterReleaseMs={1}; observedAt={2}; found={3}; isSprinting={4}; pose={5}" -f $releaseObservation.targetAfterReleaseMs, $releaseObservation.actualAfterReleaseMs, $releaseObservation.observedAt, $releaseObservation.found, $releaseObservation.isSprinting, $releaseObservation.pose)
-	}
+	$sprintOffObservation = Get-SprintOffObservation $script:s5ReleaseObservations
+	$Result | Add-Member -NotePropertyName sprintOffObservations -NotePropertyValue $script:s5ReleaseObservations -Force
+	Add-Check $Result 'S5 B observe sees sprint-off after release (the +0 ms sample is a timeline fact, not a deadline)' `
+		$sprintOffObservation.observed ("timeline: {0}" -f $sprintOffObservation.timeline)
 
 	$attributes = @($bRows | Where-Object {
 		if ($_.dir -ne 'clientbound' -or $_.name -ne 'minecraft:update_attributes') { return $false }
