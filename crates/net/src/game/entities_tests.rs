@@ -5,7 +5,8 @@
 
 use super::entities::{
     byte_angle, mutually_visible, pitch_byte, pose_differs, relative_delta, view_radius,
-    visibility_pass, EntityMotion, EntityRemove, StreamEntities, BROADCAST_PERIOD_TICKS,
+    visibility_pass, EntityMotion, EntityRemove, EntityStateUpdate, StreamEntities,
+    BROADCAST_PERIOD_TICKS,
 };
 use super::test_support::join_at;
 use super::{MoveUpdate, PlayerId, PlayerPos, Region, SINGLE_REGION};
@@ -162,6 +163,38 @@ fn two_players_in_range_spawn_each_other() {
     );
 }
 
+/// Sneak transitions map only to the trace-confirmed standing and crouching poses.
+// SOURCE: E:\\MineRust-data\\autotests\\stage10-s5-vanilla-sprint-forward-2026-11-14, B seq 2259/3355.
+#[test]
+fn traced_sneak_transition_poses_are_exactly_five_then_zero() {
+    let entered = EntityStateUpdate {
+        id: 1,
+        flags: 0x02,
+        sneaking: Some(true),
+        sprinting: None,
+    };
+    let exited = EntityStateUpdate {
+        sneaking: Some(false),
+        ..entered
+    };
+    assert_eq!(entered.sneak_pose(), Some(5));
+    assert_eq!(exited.sneak_pose(), Some(0));
+}
+
+#[test]
+fn a_sneaking_player_spawn_record_carries_the_current_sneak_state() {
+    let mut regions = vec![region_with(&[(1, (0, 64, 0)), (2, (50, 64, 0))])];
+    regions[0]
+        .get_mut(1)
+        .expect("subject")
+        .apply_input(PlayerInput::SNEAK);
+
+    let events = visibility_pass(&mut regions);
+    let spawn = &event_of(&events, 2).expect("initial visibility").spawn[0];
+    assert_eq!(spawn.id, 1);
+    assert!(spawn.sneaking);
+}
+
 /// Confirmed S5 input transitions reach B as the exact traced metadata states.
 // SOURCE: E:\\MineRust-data\\autotests\\stage10-s5-vanilla-sprint-forward-2026-11-14, B observer trace seq 2217, 3326, 4029, 6958.
 #[test]
@@ -176,21 +209,28 @@ fn traced_sneak_and_sprint_state_changes_are_streamed_to_observers() {
     assert_state_transitions(&mut regions);
 }
 
-fn assert_state_transitions(mut regions: &mut [Region]) {
+fn assert_state_transitions(regions: &mut [Region]) {
     let transitions = [
-        (PlayerInput::SNEAK, 0x02, None),
-        (0, 0x00, None),
-        (PlayerInput::SPRINT, 0x08, Some(true)),
-        (0, 0x00, Some(false)),
+        (PlayerInput::SNEAK, 0x02, Some(true), None),
+        (0, 0x00, Some(false), None),
+        (PlayerInput::SPRINT, 0x08, None, Some(true)),
+        (0, 0x00, None, Some(false)),
     ];
-    for (input, expected_flags, sprinting) in transitions {
+    for (input, expected_flags, sneaking, sprinting) in transitions {
         regions[0].get_mut(1).expect("subject").apply_input(input);
-        let events = visibility_pass(&mut regions);
+        let events = visibility_pass(regions);
         let event = event_of(&events, 2).expect("state transition is streamed");
         assert_eq!(event.states.len(), 1);
         assert_eq!(event.states[0].id, 1);
         assert_eq!(event.states[0].flags, expected_flags);
+        assert_eq!(event.states[0].sneaking, sneaking);
         assert_eq!(event.states[0].sprinting, sprinting);
+        if let Some(sneaking) = sneaking {
+            assert_eq!(
+                event.states[0].sneak_pose(),
+                Some(if sneaking { 5 } else { 0 })
+            );
+        }
     }
 
     // Combination not confirmed by trace: test the formula only, not a claimed

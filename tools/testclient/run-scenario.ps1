@@ -717,6 +717,25 @@ function Invoke-S5 {
 	Add-Check $Result 'B receives exact metadata flags 02 00 08 00 in order' $stateMatch `
 		("entity={0}; seq/hex: {1}" -f $entityId, (($found | ForEach-Object { if ($_){ "$($_.seq)/$($_.hex)" } }) -join ', '))
 
+	$poseRows = @($bRows | Where-Object {
+		if ($_.dir -ne 'clientbound' -or $_.name -ne 'minecraft:set_entity_data') { return $false }
+		$p = ConvertFrom-TraceB64 $_.b64
+		$p.Length -eq 5 -and $p[0] -eq $entityId -and $p[1] -eq 0x06 -and $p[2] -eq 0x14 -and $p[4] -eq 0xff
+	} | ForEach-Object { $p = ConvertFrom-TraceB64 $_.b64; [PSCustomObject]@{seq=[int]$_.seq; pose=[int]$p[3]; hex=[BitConverter]::ToString($p).Replace('-', ' ').ToLowerInvariant()} })
+	$expectedPoses = @(0x05, 0x00)
+	$poseFound = @()
+	$poseCursor = 0
+	foreach ($expected in $expectedPoses) {
+		$match = $null
+		for ($i = $poseCursor; $i -lt $poseRows.Count; $i++) {
+			if ($poseRows[$i].pose -eq $expected) { $match = $poseRows[$i]; $poseCursor = $i + 1; break }
+		}
+		$poseFound += ,$match
+	}
+	$poseMatch = $poseFound.Count -eq 2 -and @($poseFound | Where-Object { $null -eq $_ }).Count -eq 0
+	Add-Check $Result 'B receives separate sneak poses 05 then 00' $poseMatch `
+		("entity={0}; seq/hex: {1}" -f $entityId, (($poseFound | ForEach-Object { if ($_){ "$($_.seq)/$($_.hex)" } }) -join ', '))
+
 	$attributes = @($bRows | Where-Object {
 		if ($_.dir -ne 'clientbound' -or $_.name -ne 'minecraft:update_attributes') { return $false }
 		$p = ConvertFrom-TraceB64 $_.b64

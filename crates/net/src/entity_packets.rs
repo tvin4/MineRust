@@ -416,6 +416,7 @@ mod tests {
                 flags: 0,
             },
             game_mode: 0,
+            sneaking: false,
         };
         let mut out = Vec::new();
         push_spawn(&entity, &mut out).expect("encodable");
@@ -465,31 +466,34 @@ mod tests {
         assert_eq!(keys, vec![RemoveEntities::KEY]);
     }
 
-    /// Each S5 metadata transition is byte-exact, including the sprint
-    /// attribute packet and its ordering immediately after metadata.
+    /// Each S5 state transition is byte-exact: sneak flags and pose use
+    /// separate metadata packets; sprint also carries its traced attribute.
     // SOURCE: E:\\MineRust-data\\autotests\\stage10-s5-vanilla-sprint-forward-2026-11-14, B observer trace; packet ids from reports/packets.json.
     #[test]
     fn sneak_and_sprint_transitions_match_the_vanilla_s5_payloads() {
         let cases = [
-            (0x02, None, "21 00 00 02 ff", None),
-            (0x00, None, "21 00 00 00 ff", None),
+            (0x02, Some(true), None, "21 00 00 02 ff", None),
+            (0x00, Some(false), None, "21 00 00 00 ff", None),
             (
                 0x08,
+                None,
                 Some(true),
                 "21 00 00 08 ff",
                 Some("21 01 1a 3f b9 99 99 a0 00 00 00 01 13 6d 69 6e 65 63 72 61 66 74 3a 73 70 72 69 6e 74 69 6e 67 3f d3 33 33 40 00 00 00 02"),
             ),
             (
                 0x00,
+                None,
                 Some(false),
                 "21 00 00 00 ff",
                 Some("21 01 1a 3f b9 99 99 a0 00 00 00 00"),
             ),
         ];
-        for (flags, sprinting, metadata_hex, attributes_hex) in cases {
+        for (flags, sneaking, sprinting, metadata_hex, attributes_hex) in cases {
             let update = EntityStateUpdate {
                 id: 0x21,
                 flags,
+                sneaking,
                 sprinting,
             };
             let mut packets = Vec::new();
@@ -500,13 +504,24 @@ mod tests {
                 parse_hex(metadata_hex),
                 "metadata bytes for flags {flags:#04x}"
             );
+            if let Some(sneaking) = sneaking {
+                assert_eq!(packets[1].0.name, "minecraft:set_entity_data");
+                assert_eq!(
+                    packets[1].1,
+                    parse_hex(if sneaking {
+                        "21 06 14 05 ff"
+                    } else {
+                        "21 06 14 00 ff"
+                    })
+                );
+            }
             match attributes_hex {
                 Some(expected) => {
-                    assert_eq!(packets.len(), 2, "sprint transition has attribute update");
-                    assert_eq!(packets[1].0.name, "minecraft:update_attributes");
-                    assert_eq!(packets[1].1, parse_hex(expected));
+                    let attributes = packets.last().expect("attribute update");
+                    assert_eq!(attributes.0.name, "minecraft:update_attributes");
+                    assert_eq!(attributes.1, parse_hex(expected));
                 }
-                None => assert_eq!(packets.len(), 1, "sneak transition has metadata only"),
+                None => assert_eq!(packets.len(), 2, "sneak transition carries flags and pose"),
             }
         }
 
@@ -628,6 +643,7 @@ mod tests {
             uuid: [0x11; 16],
             position,
             game_mode: 0,
+            sneaking: false,
         };
         let mut out = Vec::new();
         push_spawn(&spawn, &mut out).expect("encodable");
@@ -698,6 +714,36 @@ mod tests {
     }
 
     #[test]
+    fn a_sneaking_spawn_emits_the_trace_confirmed_flags_and_pose() {
+        let spawn = EntitySpawn {
+            id: 0x2f,
+            name: "Alice".to_owned(),
+            uuid: [0x11; 16],
+            position: PlayerPos {
+                x: 96.5,
+                y: 145.0,
+                z: -31.5,
+                yaw: 0.0,
+                pitch: 0.0,
+                head_yaw: 0.0,
+                flags: 0,
+            },
+            game_mode: 0,
+            sneaking: true,
+        };
+        let mut out = Vec::new();
+        push_spawn(&spawn, &mut out).expect("encodable");
+        let metadata = out
+            .iter()
+            .find(|(key, _)| *key == SetEntityData::KEY)
+            .expect("spawn metadata is present");
+        assert_eq!(
+            metadata.1,
+            parse_hex("2f 00 00 02 06 14 05 09 03 41 a0 00 00 10 00 7f ff")
+        );
+    }
+
+    #[test]
     fn the_second_metadata_set_depends_on_the_game_mode() {
         // M4.5 Шаг 7.3: spectator (3) takes the C1 record with the leading
         // entity-flags entry; survival (0), creative (1) and adventure (2)
@@ -709,6 +755,26 @@ mod tests {
             metadata_second(2),
             METADATA_SNAPSHOT,
             "adventure is untraced"
+        );
+        assert_eq!(
+            spawn_metadata(true, 0),
+            parse_hex("00 00 02 06 14 05 09 03 41 a0 00 00 10 00 7f"),
+            "S7 spawn snapshot carries only observed sneak flag and pose"
+        );
+        assert_eq!(
+            spawn_metadata(true, 1),
+            METADATA_SNAPSHOT,
+            "untraced creative spawn metadata remains unchanged"
+        );
+        assert_eq!(
+            spawn_metadata(true, 2),
+            METADATA_SNAPSHOT,
+            "untraced adventure mode does not get assumed sneak metadata"
+        );
+        assert_eq!(
+            spawn_metadata(false, 0),
+            METADATA_SNAPSHOT,
+            "standing spawn metadata remains unchanged"
         );
     }
 
@@ -731,6 +797,7 @@ mod tests {
                 flags: 0,
             },
             game_mode: 1,
+            sneaking: false,
         };
         push_spawn(&spawn, &mut out).expect("encodable");
         let mut reader = PacketReader::new(&out[0].1);
