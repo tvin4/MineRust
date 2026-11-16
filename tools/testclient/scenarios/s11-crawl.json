@@ -1,0 +1,44 @@
+{
+  "id": "s11",
+  "title": "forced crouch/crawl under a low ceiling (Шаг 15 п.5)",
+  "playerA": "Alice",
+  "playerB": "Bob",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "settleMs": 700,
+  "sampleEveryMs": 250,
+  "baseY": 200,
+  "forceload": [55, -65, 75, -45],
+  "platform": [
+    "fill 55 199 -65 75 200 -45 minecraft:stone"
+  ],
+  "roofY": 202,
+  "roofFromZ": -58,
+  "roofToZ": -54,
+  "probeZ": -46,
+  "openZ": -48,
+  "standY": 201.0,
+  "yaw": 180.0,
+  "cases": [
+    { "name": "S11-stone-1", "x": 60, "roof": "minecraft:stone" },
+    { "name": "S11-slab-15", "x": 68, "roof": "minecraft:stone_slab[type=top]" }
+  ],
+  "program": [
+    { "phase": "open", "tp": "open", "ms": 1000 },
+    { "phase": "block-above", "tp": "probe", "ms": 1500 },
+    { "phase": "open-again", "tp": "open", "ms": 700 },
+    { "phase": "walk-in", "key": "up", "action": "down", "ms": 1800 },
+    { "phase": "under-roof", "key": "up", "action": "up", "ms": 600 },
+    { "phase": "sneak", "key": "shift", "action": "down", "ms": 800 },
+    { "phase": "sneak-off", "key": "shift", "action": "up", "ms": 600 },
+    { "phase": "walk-out", "key": "down", "action": "down", "ms": 2500 },
+    { "phase": "walk-out-stop", "key": "down", "action": "up", "ms": 400 },
+    { "phase": "exit", "tp": "open", "ms": 900 }
+  ],
+  "dynamicProbe": {
+    "phase": "block-above-dynamic",
+    "placeMs": 1500,
+    "clearMs": 700
+  },
+  "notes": "Static geometry, identical procedure on both targets: a 5-long roof strip at y=202 (z -58..-54) plus one isolated block at y=202 over the probe cell (z -46). A stands in the open (z -48), is teleported under the isolated block (head cell full), back to the open, walks forward (yaw 180, -z) under the roof strip, holds sneak, and walks back out. y=201 is standing feet level; a stone roof leaves 1.0 block of clearance, a top slab 1.5. Vanilla additionally performs the literal hypothesis probe: while A stands in the open, /setblock places the case block at y=202 over the open cell, then removes it (block-above-dynamic); ours cannot place blocks at runtime, so that phase runs on vanilla only. bbHeight/bbWidth are the client's own measured hitbox. The geometry is written to the dev file (s11) for our server or applied with /fill on vanilla."
+}

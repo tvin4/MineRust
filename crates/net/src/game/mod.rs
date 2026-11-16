@@ -37,6 +37,8 @@ mod replay_tests;
 #[cfg(test)]
 mod s10_fixture;
 #[cfg(test)]
+mod s11_fixture;
+#[cfg(test)]
 mod state_tests;
 #[cfg(test)]
 mod step4_tests;
@@ -50,9 +52,10 @@ mod test_support;
 mod tests;
 
 pub use entities::{
-    byte_angle, is_swimming, pitch_byte, pose_of, relative_delta, state_flags, view_radius,
-    EntityMotion, EntityMove, EntityRemove, EntitySpawn, EntityStateUpdate, StreamEntities,
-    BLOCKS_PER_CHUNK, PLAYER_ENTITY_TYPE,
+    byte_angle, is_swimming, pitch_byte, pose_and_flags, pose_of, relative_delta, state_flags,
+    view_radius, EntityMotion, EntityMove, EntityRemove, EntitySpawn, EntityStateUpdate, Forced,
+    StreamEntities, BLOCKS_PER_CHUNK, CRAWLING_HEIGHT, CROUCHING_HEIGHT, PLAYER_ENTITY_TYPE,
+    STANDING_HEIGHT,
 };
 pub use grid::{chunk_of_position, RegionGrid, CHUNK_SIZE};
 pub use messages::{

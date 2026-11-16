@@ -17,7 +17,7 @@ pub use template::{TemplateWorld, WireTables};
 use std::path::Path;
 use std::sync::Arc;
 
-use data::{BlockStates, GameData};
+use data::{BlockStates, CollisionShapes, GameData};
 use protocol::StatusInfo;
 use tokio::net::TcpListener;
 
@@ -197,7 +197,18 @@ pub fn build_world(
             data::RegistryIds::default()
         }
     };
-    let tables = Arc::new(WireTables::new(blocks, registries, game_data));
+    let collisions = match config.collision_report.as_deref() {
+        Some(path) => {
+            let collisions = CollisionShapes::load(path)?;
+            tracing::info!(path, states = collisions.len(), "collision report loaded");
+            collisions
+        }
+        None => {
+            tracing::warn!("no collision_report: the forced crouch/crawl (Шаг 15 п.5) is disabled");
+            CollisionShapes::default()
+        }
+    };
+    let tables = Arc::new(WireTables::new(blocks, registries, game_data, collisions));
     let world = TemplateWorld::new(region_dir, level.data_version, tables);
     tracing::info!(
         data_version = level.data_version,
@@ -373,6 +384,7 @@ mod tests {
             packets_report: report,
             registries_report: None,
             blocks_report: None,
+            collision_report: None,
             world_dir: None,
             vanilla_server_jar: None,
             vanilla_server_dir: None,

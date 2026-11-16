@@ -222,16 +222,23 @@ impl Scheduler {
         outcome
     }
 
-    /// Recomputes the swimming bit from the current immutable chunk snapshot.
+    /// Recomputes the swimming bit and the headroom-forced pose from the current
+    /// immutable chunk snapshot.
     ///
-    /// Шаг 14e: the bit follows the rule derived from the S10 vanilla trace
+    /// Шаг 14e: the swim bit follows the rule derived from the S10 vanilla trace
     /// (`docs/SWIMMING.md` §4) — a player swims exactly when sprinting with the
     /// feet in water. Two changes from the Шаг 14d pass: the feet check reads
     /// the *fluid surface* of the feet block (`ChunkStore::feet_in_water`) so a
     /// waterlogged block the player stands on top of no longer counts, and the
     /// sprint requirement is now the confirmed rule rather than the temporary
-    /// 14e gate. The pose and flags follow from the bit in the visibility pass
-    /// (`entities::pose_of` / `entities::state_flags`).
+    /// 14e gate.
+    ///
+    /// Шаг 15 п.5: the same pass reads the free headroom above the feet
+    /// (`ChunkStore::free_headroom`). A player that no longer fits standing is
+    /// forced to crouch, one that does not fit crouching either is forced to
+    /// crawl — the poses the vanilla S11 run showed for a full block and a top
+    /// slab at the head cell. The pose and flags follow from both bits in the
+    /// visibility pass (`entities::pose_and_flags`).
     fn update_swimming(&mut self) {
         let Some(store) = self.store.as_ref() else {
             return;
@@ -253,6 +260,8 @@ impl Scheduler {
                     );
                     player
                         .set_swimming(super::entities::is_swimming(feet_in_water, player.sprint()));
+                    let headroom = store.free_headroom(position.x, position.y, position.z);
+                    player.set_forced(super::entities::Forced::from_headroom(headroom));
                 }
             }
         }

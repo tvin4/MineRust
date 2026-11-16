@@ -7,8 +7,12 @@
 //! flags Bob had last received. Both are scored here with a 50 ms (one tick)
 //! tolerance.
 
-use super::entities::{is_swimming, pose_of, state_flags};
+use super::entities::{
+    is_swimming, pose_and_flags, pose_of, state_flags, Forced, CRAWLING_HEIGHT, CROUCHING_HEIGHT,
+    STANDING_HEIGHT,
+};
 use super::s10_fixture::{S10_EVENTS, S10_GEOMETRY, S10_TICKS};
+use super::s11_fixture::S11_SAMPLES;
 
 /// Input bits of the RLE tick fixture (`T_NO_OBS` is the no-observation mark).
 const T_SPRINT: u8 = 0x01;
@@ -213,4 +217,117 @@ fn the_pose_prefers_swimming_over_sneaking() {
     assert_eq!(pose_of(true, false), 5, "crouching");
     assert_eq!(pose_of(false, true), 3, "swimming");
     assert_eq!(pose_of(true, true), 3, "swimming wins over crouching");
+}
+
+/// The headroom rule's thresholds, built from the measured hitbox heights.
+#[test]
+fn the_headroom_rule_uses_the_measured_heights() {
+    // The measured heights are what the thresholds are made of: crawl below
+    // the crouching hitbox, crouch below the standing one, standing above.
+    assert_eq!(
+        Forced::from_headroom(None),
+        Forced::None,
+        "no report, no rule"
+    );
+    assert_eq!(
+        Forced::from_headroom(Some(1.0)),
+        Forced::Crawl,
+        "stone at the head cell"
+    );
+    assert_eq!(
+        Forced::from_headroom(Some(1.5)),
+        Forced::Crouch,
+        "top slab at the head cell"
+    );
+    assert_eq!(
+        Forced::from_headroom(Some(1.8)),
+        Forced::None,
+        "exactly standing fits"
+    );
+    assert_eq!(Forced::from_headroom(Some(2.0)), Forced::None, "open");
+    // The thresholds are the observed heights, not round numbers: a block
+    // one thousandth below the crouching hitbox still forces a crawl.
+    assert_eq!(
+        Forced::from_headroom(Some(CROUCHING_HEIGHT - 0.001)),
+        Forced::Crawl
+    );
+    assert_eq!(
+        Forced::from_headroom(Some(STANDING_HEIGHT - 0.001)),
+        Forced::Crouch
+    );
+    const { assert!(CRAWLING_HEIGHT < CROUCHING_HEIGHT && CROUCHING_HEIGHT < STANDING_HEIGHT) };
+    assert_eq!(
+        (CRAWLING_HEIGHT, CROUCHING_HEIGHT, STANDING_HEIGHT),
+        (0.6, 1.5, 1.8)
+    );
+}
+
+/// The pose/flags composition of the forced rule, including the swim flag that
+/// a forced crawl deliberately does not set.
+#[test]
+fn the_forced_pose_composes_with_sneak_and_water() {
+    // A forced crawl is pose 3 but, on dry land, carries no swim flag.
+    assert_eq!(
+        pose_and_flags(false, false, false, Forced::Crawl),
+        (3, 0x00)
+    );
+    // A wet crawl is the same pose with the swim flag.
+    assert_eq!(pose_and_flags(false, false, true, Forced::Crawl), (3, 0x10));
+    // A forced crouch is pose 5 with the crouch flag.
+    assert_eq!(
+        pose_and_flags(false, false, false, Forced::Crouch),
+        (5, 0x02)
+    );
+    // The sneak key and a forced crouch agree.
+    assert_eq!(
+        pose_and_flags(true, false, false, Forced::Crouch),
+        (5, 0x02)
+    );
+    // Standing with no input is pose 0 and no flags; sprint still rides along.
+    assert_eq!(pose_and_flags(false, false, false, Forced::None), (0, 0x00));
+    assert_eq!(pose_and_flags(false, true, false, Forced::None), (0, 0x08));
+    // Falling in water without sprinting swims under the 14e rule, not the
+    // forced one: the composition keeps both consistent.
+    assert_eq!(pose_and_flags(false, false, true, Forced::None), (3, 0x10));
+}
+
+/// Шаг 15 п.5 oracle: the forced-pose rule scored against the recorded vanilla
+/// S11 run.
+///
+/// Every recorded sample contributes `count` rows; the rule turns the recorded
+/// head-block bottom and the held sneak key into a pose and flags, which must
+/// equal what the vanilla client reported byte for byte. All 112 samples must
+/// agree — there is no one-event tolerance here because the pose is forced by
+/// the geometry at the player's current column, not by an input edge.
+#[test]
+fn the_forced_pose_rule_matches_the_vanilla_s11_run() {
+    let mut total = 0u32;
+    let mut mismatches: Vec<(&str, &str, u8, u8, u8, u8)> = Vec::new();
+    for sample in S11_SAMPLES {
+        let headroom = sample.head_bottom.map(|bottom| bottom + 1.0);
+        let forced = Forced::from_headroom(headroom);
+        let (pose, flags) = pose_and_flags(sample.sneak, false, false, forced);
+        total += sample.count;
+        if pose != sample.pose || flags != sample.flags {
+            mismatches.push((
+                sample.case,
+                sample.phase,
+                pose,
+                sample.pose,
+                flags,
+                sample.flags,
+            ));
+        }
+    }
+
+    println!(
+        "S11 oracle: {total}/{total} samples agree across {} cases; mismatches: {mismatches:?}",
+        S11_SAMPLES.len()
+    );
+
+    assert_eq!(total, 112, "the r2 run recorded 112 samples");
+    assert!(
+        mismatches.is_empty(),
+        "the forced-pose rule disagrees with vanilla: {mismatches:?}"
+    );
 }

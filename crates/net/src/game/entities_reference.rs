@@ -14,8 +14,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use protocol::{offline_uuid, Uuid};
 
 use super::entities::{
-    mutually_visible, pose_differs, pose_of, relative_delta, state_flags, view_radius,
-    EntityMotion, EntityMove, EntityRemove, EntitySpawn, EntityStateUpdate, StreamEntities,
+    mutually_visible, pose_and_flags, pose_differs, relative_delta, view_radius, EntityMotion,
+    EntityMove, EntityRemove, EntitySpawn, EntityStateUpdate, Forced, StreamEntities,
     BROADCAST_PERIOD_TICKS, UPDATE_INTERVAL,
 };
 use super::messages::PlayerId;
@@ -51,8 +51,9 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
     let mut name: BTreeMap<PlayerId, String> = BTreeMap::new();
     let mut uuid: BTreeMap<PlayerId, Uuid> = BTreeMap::new();
     let mut game_mode: BTreeMap<PlayerId, i32> = BTreeMap::new();
-    let mut state: BTreeMap<PlayerId, (bool, bool, bool)> = BTreeMap::new();
-    let mut broadcast_state: BTreeMap<PlayerId, Option<(bool, bool, bool)>> = BTreeMap::new();
+    let mut state: BTreeMap<PlayerId, (bool, bool, bool, Forced)> = BTreeMap::new();
+    let mut broadcast_state: BTreeMap<PlayerId, Option<(bool, bool, bool, Forced)>> =
+        BTreeMap::new();
     let mut visible_before: BTreeMap<PlayerId, BTreeMap<PlayerId, Uuid>> = BTreeMap::new();
     let mut baseline: BTreeMap<PlayerId, Option<PlayerPos>> = BTreeMap::new();
     let mut ticks: BTreeMap<PlayerId, u32> = BTreeMap::new();
@@ -69,7 +70,15 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
             name.insert(id, player.name().to_owned());
             uuid.insert(id, offline_uuid(player.name()));
             game_mode.insert(id, player.game_mode());
-            state.insert(id, (player.sneak(), player.sprint(), player.swimming()));
+            state.insert(
+                id,
+                (
+                    player.sneak(),
+                    player.sprint(),
+                    player.swimming(),
+                    player.forced(),
+                ),
+            );
             broadcast_state.insert(id, player.broadcast_state());
             visible_before.insert(id, player.visible().clone());
             baseline.insert(id, player.last_broadcast());
@@ -146,6 +155,7 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
                     game_mode: game_mode[&id],
                     sneaking: state[&id].0,
                     swimming: state[&id].2,
+                    forced: state[&id].3,
                 });
                 next_baseline.insert(id, Some(position[&id]));
                 next_broadcast_state.insert(id, Some(state[&id]));
@@ -153,14 +163,16 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
             } else if matches!(game_mode[&id], 0 | 1) {
                 if let Some(previous) = broadcast_state[&id] {
                     if previous != state[&id] {
+                        let old = pose_and_flags(previous.0, previous.1, previous.2, previous.3);
+                        let now =
+                            pose_and_flags(state[&id].0, state[&id].1, state[&id].2, state[&id].3);
                         states.push(EntityStateUpdate {
                             id,
-                            flags: state_flags(state[&id].0, state[&id].1, state[&id].2),
+                            flags: now.1,
                             sneaking: (previous.0 != state[&id].0).then_some(state[&id].0),
                             sprinting: (previous.1 != state[&id].1).then_some(state[&id].1),
                             swimming: (previous.2 != state[&id].2).then_some(state[&id].2),
-                            pose: ((previous.0 != state[&id].0) || (previous.2 != state[&id].2))
-                                .then_some(pose_of(state[&id].0, state[&id].2)),
+                            pose: (old.0 != now.0).then_some(now.0),
                         });
                         next_broadcast_state.insert(id, Some(state[&id]));
                     }

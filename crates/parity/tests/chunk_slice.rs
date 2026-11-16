@@ -278,7 +278,12 @@ fn our_payloads(env: &ParityEnv) -> Option<Arc<ChunkStore>> {
     let world = TemplateWorld::new(
         region,
         data_version,
-        Arc::new(WireTables::new(blocks, registries, Arc::new(game_data))),
+        Arc::new(WireTables::new(
+            blocks,
+            registries,
+            Arc::new(game_data),
+            data::CollisionShapes::default(),
+        )),
     );
     match world.load_batch() {
         // The source hands its ready world out behind a shared `Arc`

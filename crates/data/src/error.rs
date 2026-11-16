@@ -124,6 +124,23 @@ pub enum DataError {
         source: io::Error,
     },
 
+    /// The collision report file cannot be read.
+    #[error("cannot read collision report {path}: {source}")]
+    CollisionReportRead {
+        /// Path of the report file.
+        path: String,
+        /// Underlying I/O error.
+        source: io::Error,
+    },
+
+    /// The collision report describes no state: it is not a report the test
+    /// client's `shapes` command wrote.
+    #[error("collision report {path} contains no block states")]
+    EmptyCollisionReport {
+        /// Path of the report file.
+        path: String,
+    },
+
     /// The registries report describes no registries: it is not a
     /// `reports/registries.json` of this game version.
     #[error("registries report {path} contains no registries")]

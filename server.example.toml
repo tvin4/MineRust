@@ -53,6 +53,14 @@ client_jar = "path/to/client.jar"
 # report, which is required to encode chunk block palettes.
 # blocks_report = "path/to/generated/reports/blocks.json"
 
+# Optional: reports/collision.json generated from your game copy by the test
+# client's `shapes` command. It maps every non-empty block state id to the
+# lowest Y of its collision boxes inside its cell, which is what lets the
+# server decide whether a player still fits standing under the block above it
+# (forced crouch/crawl). Without it that rule stays off and the pose follows
+# the sneak/swim bits alone.
+# collision_report = "path/to/generated/reports/collision.json"
+
 # REQUIRED at startup: a saved world directory (M3): the folder that
 # contains `level.dat` and `dimensions/minecraft/overworld/region/`. The
 # server sends the ready chunks of that world on join; without this field

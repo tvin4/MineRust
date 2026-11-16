@@ -22,8 +22,8 @@ use protocol::{
 };
 
 use crate::game::{
-    byte_angle, pitch_byte, EntityMotion, EntityMove, EntityRemove, EntitySpawn, EntityStateUpdate,
-    PlayerId, PLAYER_ENTITY_TYPE,
+    byte_angle, pitch_byte, pose_and_flags, EntityMotion, EntityMove, EntityRemove, EntitySpawn,
+    EntityStateUpdate, Forced, PlayerId, PLAYER_ENTITY_TYPE,
 };
 
 /// First metadata snapshot of a spawned player (`set_entity_data`, len 11).
@@ -59,19 +59,25 @@ fn metadata_second(game_mode: i32) -> &'static [u8] {
 
 /// Builds the confirmed survival sneak spawn snapshot; sprint spawn state
 /// remains unchanged because the traces do not establish it.
+///
+/// Шаг 15 п.5 adds the headroom-forced pose: [`Forced::Crouch`] carries the
+/// crouch flag and pose 5, [`Forced::Crawl`] pose 3 with no flag (the S11
+/// vanilla spawn shape). Forced poses apply to survival and creative; the sneak
+/// key itself stays survival-only as the traces established.
 // SOURCE: S7 held-sneak trace, B seq 176: flags `02`, pose `05`, then snapshot.
-fn spawn_metadata(sneaking: bool, swimming: bool, game_mode: i32) -> Vec<u8> {
-    let include_sneak = sneaking && game_mode == 0;
-    let include_swimming = swimming && matches!(game_mode, 0 | 1);
-    let flags = (if include_sneak { 0x02 } else { 0 }) | (if include_swimming { 0x10 } else { 0 });
-    let extra_len =
-        usize::from(flags != 0) * 4 + usize::from(include_sneak || include_swimming) * 3;
+fn spawn_metadata(sneaking: bool, swimming: bool, forced: Forced, game_mode: i32) -> Vec<u8> {
+    let (pose, flags) = if matches!(game_mode, 0 | 1) {
+        pose_and_flags(sneaking && game_mode == 0, false, swimming, forced)
+    } else {
+        (0, 0)
+    };
+    let flags = if pose == 0 { 0 } else { flags };
+    let extra_len = usize::from(flags != 0) * 4 + usize::from(pose != 0) * 3;
     let mut metadata = Vec::with_capacity(METADATA_SNAPSHOT.len() + extra_len);
     if flags != 0 {
         metadata.extend_from_slice(&[0x00, 0x00, flags]);
     }
-    if include_sneak || include_swimming {
-        let pose = if include_swimming { 3 } else { 5 };
+    if pose != 0 {
         metadata.extend_from_slice(&[0x06, 0x14, pose]);
     }
     metadata.extend_from_slice(METADATA_SNAPSHOT);
@@ -147,7 +153,12 @@ pub fn push_spawn(
 
     let snapshot = SetEntityData {
         entity_id: entity.id,
-        metadata: spawn_metadata(entity.sneaking, entity.swimming, entity.game_mode),
+        metadata: spawn_metadata(
+            entity.sneaking,
+            entity.swimming,
+            entity.forced,
+            entity.game_mode,
+        ),
     };
     out.push((SetEntityData::KEY, snapshot.encode_payload()?));
 
@@ -475,6 +486,7 @@ mod tests {
             game_mode: 0,
             sneaking: false,
             swimming: false,
+            forced: Forced::None,
         };
         let mut out = Vec::new();
         push_spawn(&entity, &mut out).expect("encodable");
@@ -749,6 +761,7 @@ mod tests {
             game_mode: 0,
             sneaking: false,
             swimming: false,
+            forced: Forced::None,
         };
         let mut out = Vec::new();
         push_spawn(&spawn, &mut out).expect("encodable");
@@ -836,6 +849,7 @@ mod tests {
             game_mode: 0,
             sneaking: true,
             swimming: false,
+            forced: Forced::None,
         };
         let mut out = Vec::new();
         push_spawn(&spawn, &mut out).expect("encodable");
@@ -863,24 +877,34 @@ mod tests {
             "adventure is untraced"
         );
         assert_eq!(
-            spawn_metadata(true, false, 0),
+            spawn_metadata(true, false, Forced::None, 0),
             parse_hex("00 00 02 06 14 05 09 03 41 a0 00 00 10 00 7f"),
             "S7 spawn snapshot carries only observed sneak flag and pose"
         );
         assert_eq!(
-            spawn_metadata(true, false, 1),
+            spawn_metadata(true, false, Forced::None, 1),
             METADATA_SNAPSHOT,
             "untraced creative spawn metadata remains unchanged"
         );
         assert_eq!(
-            spawn_metadata(true, false, 2),
+            spawn_metadata(true, false, Forced::None, 2),
             METADATA_SNAPSHOT,
             "untraced adventure mode does not get assumed sneak metadata"
         );
         assert_eq!(
-            spawn_metadata(false, false, 0),
+            spawn_metadata(false, false, Forced::None, 0),
             METADATA_SNAPSHOT,
             "standing spawn metadata remains unchanged"
+        );
+        assert_eq!(
+            spawn_metadata(false, false, Forced::Crouch, 0),
+            parse_hex("00 00 02 06 14 05 09 03 41 a0 00 00 10 00 7f"),
+            "a headroom-forced crouch spawns with the crouch flag and pose 5"
+        );
+        assert_eq!(
+            spawn_metadata(false, false, Forced::Crawl, 0),
+            parse_hex("06 14 03 09 03 41 a0 00 00 10 00 7f"),
+            "a headroom-forced crawl spawns with pose 3 and no flags"
         );
     }
 
@@ -905,6 +929,7 @@ mod tests {
             game_mode: 1,
             sneaking: false,
             swimming: false,
+            forced: Forced::None,
         };
         push_spawn(&spawn, &mut out).expect("encodable");
         let mut reader = PacketReader::new(&out[0].1);

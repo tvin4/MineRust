@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
-use data::{BlockStates, GameData, RegistryIds};
+use data::{BlockStates, CollisionShapes, GameData, RegistryIds};
 use net::chunks::ReadyChunks;
 use net::loader::LoadError;
 use net::store::ChunkStore;
@@ -41,17 +41,26 @@ pub struct WireTables {
     registries: RegistryIds,
     /// Loaded game data: synchronized registries and tags.
     game_data: Arc<GameData>,
+    /// Collision-shape bottoms per state id (Шаг 15 п.5); empty when the
+    /// server was started without `collision_report`.
+    collisions: Arc<CollisionShapes>,
 }
 
 impl WireTables {
     /// Binds the tables to the loaded reports; an absent report leaves its
     /// table empty and the conversion names the entry it could not resolve
     /// (`WireError::UnknownBlock`, no invented id).
-    pub fn new(blocks: BlockStates, registries: RegistryIds, game_data: Arc<GameData>) -> Self {
+    pub fn new(
+        blocks: BlockStates,
+        registries: RegistryIds,
+        game_data: Arc<GameData>,
+        collisions: CollisionShapes,
+    ) -> Self {
         Self {
             blocks: Arc::new(blocks),
             registries,
             game_data,
+            collisions: Arc::new(collisions),
         }
     }
 }
@@ -159,9 +168,10 @@ impl TemplateWorld {
         if let Some(cached) = self.ready.get() {
             return Ok(Arc::clone(cached));
         }
-        let built = Arc::new(ChunkStore::new(
+        let built = Arc::new(ChunkStore::with_collisions(
             ReadyChunks::new(self.build_batch()?),
             Arc::clone(&self.refs.blocks),
+            Arc::clone(&self.refs.collisions),
         ));
         Ok(Arc::clone(self.ready.get_or_init(|| built)))
     }
@@ -226,6 +236,7 @@ mod tests {
                 BlockStates::default(),
                 RegistryIds::default(),
                 Arc::new(GameData::default()),
+                CollisionShapes::default(),
             )),
         );
 

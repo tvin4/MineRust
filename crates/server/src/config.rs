@@ -106,6 +106,17 @@ pub struct ServerConfig {
     /// `tools/generate-reports.ps1`.
     #[serde(default)]
     pub blocks_report: Option<String>,
+    /// Optional path to a collision-shape report (`reports/collision.json`).
+    ///
+    /// It maps every non-empty block state id to the lowest Y of its collision
+    /// boxes inside its cell. `reports/blocks.json` carries state ids but no
+    /// shapes, so this report is what lets the server decide whether a player
+    /// still fits standing under the block above it (Шаг 15 п.5, forced
+    /// crouch/crawl). Generated from the user's own game copy by the test
+    /// client's `shapes` command (`tools/testclient`); without it the forced
+    /// pose stays off.
+    #[serde(default)]
+    pub collision_report: Option<String>,
     /// Chunks around the player the server announces it sends in Login
     /// (play) — also the largest radius this server ever sends (the real
     /// radius is min(this, the client's own request), see
@@ -230,6 +241,13 @@ impl ServerConfig {
             .is_some_and(|path| path.trim().is_empty())
         {
             return Err(ConfigError::Invalid("blocks_report is empty".to_owned()));
+        }
+        if self
+            .collision_report
+            .as_deref()
+            .is_some_and(|path| path.trim().is_empty())
+        {
+            return Err(ConfigError::Invalid("collision_report is empty".to_owned()));
         }
         if self
             .world_dir
@@ -554,6 +572,34 @@ simulation_distance = 4
     fn rejects_an_empty_blocks_report_path() {
         let text = example_toml()
             + r#"blocks_report = " "
+"#;
+        let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+        assert!(matches!(config.validate(), Err(ConfigError::Invalid(_))));
+    }
+
+    #[test]
+    fn collision_report_path_is_optional() {
+        let config: ServerConfig = toml::from_str(&example_toml()).expect("valid toml");
+        assert_eq!(
+            config.collision_report, None,
+            "absent means the forced pose is off"
+        );
+
+        let text = example_toml()
+            + r#"collision_report = "generated/reports/collision.json"
+"#;
+        let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+        assert_eq!(
+            config.collision_report.as_deref(),
+            Some("generated/reports/collision.json")
+        );
+        config.validate().expect("valid");
+    }
+
+    #[test]
+    fn rejects_an_empty_collision_report_path() {
+        let text = example_toml()
+            + r#"collision_report = " "
 "#;
         let config: ServerConfig = toml::from_str(&text).expect("valid toml");
         assert!(matches!(config.validate(), Err(ConfigError::Invalid(_))));

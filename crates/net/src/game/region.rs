@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use tracing::warn;
 
-use super::entities::StreamEntities;
+use super::entities::{Forced, StreamEntities};
 use super::grid::{chunk_of_position, RegionGrid};
 use super::messages::{
     KickFlag, KickReason, MoveState, PlayerConnection, PlayerId, PlayerJoin, ServerMessage,
@@ -157,11 +157,17 @@ pub struct Player {
     /// update pass — a region owns only players, the store is the
     /// scheduler's field.
     swimming: bool,
-    /// The sneak/sprint/swim state currently represented in each viewer's
-    /// metadata. `None` means no observer state has been sent yet; an initial
-    /// sneaking spawn carries the trace-confirmed flags and pose (S7), while
-    /// sprint spawn encoding is not established.
-    broadcast_state: Option<(bool, bool, bool)>,
+    /// Pose forced by the free headroom above the feet (Шаг 15 п.5),
+    /// recomputed every tick from the shared `ChunkStore`. Unlike `sneaking`,
+    /// this is not an input: vanilla lowers the pose when the player no longer
+    /// fits. [`Forced::None`] means the store could not decide (no collision
+    /// report) or the player fits standing.
+    forced: Forced,
+    /// The sneak/sprint/swim/forced state currently represented in each
+    /// viewer's metadata. `None` means no observer state has been sent yet; an
+    /// initial sneaking spawn carries the trace-confirmed flags and pose (S7),
+    /// while sprint spawn encoding is not established.
+    broadcast_state: Option<(bool, bool, bool, Forced)>,
     /// Swing animation state (M4.5 Шаг 11): whether a swing is in progress
     /// and how many ticks it has run. The rule and the constants are a
     /// vanilla-memory hypothesis confirmed by the tick model against the S3
@@ -198,6 +204,7 @@ impl Player {
             sneak: false,
             sprint: false,
             swimming: false,
+            forced: Forced::None,
             broadcast_state: None,
             swinging: false,
             swing_time: 0,
@@ -321,13 +328,24 @@ impl Player {
         self.swimming = swimming;
     }
 
+    /// The pose forced by the free headroom above the feet (Шаг 15 п.5).
+    pub fn forced(&self) -> Forced {
+        self.forced
+    }
+
+    /// Sets the forced pose from the scheduler's store pass; the visibility
+    /// pass turns a change into flags/pose metadata.
+    pub(crate) fn set_forced(&mut self, forced: Forced) {
+        self.forced = forced;
+    }
+
     /// State flags last sent to observers, if initialized by a spawn.
-    pub(crate) fn broadcast_state(&self) -> Option<(bool, bool, bool)> {
+    pub(crate) fn broadcast_state(&self) -> Option<(bool, bool, bool, Forced)> {
         self.broadcast_state
     }
 
     /// Updates the observer-state baseline after the visibility pass.
-    pub(crate) fn set_broadcast_state(&mut self, state: Option<(bool, bool, bool)>) {
+    pub(crate) fn set_broadcast_state(&mut self, state: Option<(bool, bool, bool, Forced)>) {
         self.broadcast_state = state;
     }
 

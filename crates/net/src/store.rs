@@ -21,7 +21,7 @@
 
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use data::BlockStates;
+use data::{BlockStates, CollisionShapes};
 use protocol::{ChunkSection, PaletteContainer, BLOCK_CELLS};
 
 use crate::chunks::ReadyChunks;
@@ -101,6 +101,10 @@ pub struct ChunkStore {
     current: RwLock<Arc<ReadyChunks>>,
     /// The block report: state id → air/fluid, for the section headers.
     blocks: Arc<BlockStates>,
+    /// The collision report: state id → collision-shape bottom, for the
+    /// free-headroom query of the crawl rule (Шаг 15 п.5). Empty when the
+    /// server was started without `collision_report`.
+    collisions: Arc<CollisionShapes>,
 }
 
 impl std::fmt::Debug for ChunkStore {
@@ -112,6 +116,7 @@ impl std::fmt::Debug for ChunkStore {
         f.debug_struct("ChunkStore")
             .field("chunks", &snapshot.len())
             .field("blocks", &self.blocks.len())
+            .field("collisions", &self.collisions.len())
             .finish()
     }
 }
@@ -120,9 +125,21 @@ impl ChunkStore {
     /// Wraps a ready snapshot with the block report its writes classify
     /// against.
     pub fn new(ready: ReadyChunks, blocks: Arc<BlockStates>) -> Self {
+        Self::with_collisions(ready, blocks, Arc::new(CollisionShapes::default()))
+    }
+
+    /// Like [`Self::new`], with the collision report the free-headroom query
+    /// reads. Without it [`Self::free_headroom`] answers `None` and the forced
+    /// crouch/crawl rule stays off.
+    pub fn with_collisions(
+        ready: ReadyChunks,
+        blocks: Arc<BlockStates>,
+        collisions: Arc<CollisionShapes>,
+    ) -> Self {
         Self {
             current: RwLock::new(Arc::new(ready)),
             blocks,
+            collisions,
         }
     }
 
@@ -202,6 +219,63 @@ impl ChunkStore {
         let block_y = feet_y.floor() as i32;
         self.water_surface_at(x, block_y, z)
             .is_some_and(|surface| (feet_y - f64::from(block_y)) < f64::from(surface))
+    }
+
+    /// Free space above the feet of a player standing at `(x, feet_y, z)`,
+    /// measured to the lowest collision shape directly above it.
+    ///
+    /// Шаг 15 п.5: the vanilla S11 run forces the pose from this number. The
+    /// player footprint is 0.6 wide, so up to two block columns may overlap per
+    /// axis; every column's cell is checked from the feet cell up to two blocks
+    /// above, and the lowest obstruction wins. The result saturates at `2.0`
+    /// because the rule only distinguishes `< 1.5` (crawl), `1.5 .. 1.8`
+    /// (crouch) and `>= 1.8` (standing).
+    ///
+    /// `None` when the store has no collision report: the rule cannot be
+    /// evaluated and the caller keeps the pose it had.
+    ///
+    /// SOURCE: the vanilla S11 timeline (`docs/SWIMMING.md` §5): a full block at
+    /// the head cell (feet `201.0`, block at `202.0`) gives headroom `1.0` and
+    /// pose SWIMMING (crawl, measured hitbox `0.6`); a top slab in the same
+    /// cell gives `1.5` and CROUCHING (`1.5`); the open cell gives `>= 1.8`
+    /// and STANDING (`1.8`). The per-state bottoms come from the
+    /// `reports/collision.json` the game's own `getCollisionShape` produced.
+    pub fn free_headroom(&self, x: f64, feet_y: f64, z: f64) -> Option<f64> {
+        if self.collisions.is_empty() {
+            return None;
+        }
+        const HALF_WIDTH: f64 = 0.3;
+        let mut columns = [(0i32, 0i32); 4];
+        let mut count = 0usize;
+        let xs = [x - HALF_WIDTH, x + HALF_WIDTH];
+        let zs = [z - HALF_WIDTH, z + HALF_WIDTH];
+        for &cx in &xs {
+            for &cz in &zs {
+                let cell = (cx.floor() as i32, cz.floor() as i32);
+                if !columns[..count].contains(&cell) {
+                    columns[count] = cell;
+                    count += 1;
+                }
+            }
+        }
+        let first = feet_y.floor() as i32;
+        let last = (feet_y + 2.0).floor() as i32;
+        let mut headroom = 2.0_f64;
+        for &(bx, bz) in &columns[..count] {
+            for by in first..=last {
+                let Some(state) = self.block(bx, by, bz) else {
+                    continue;
+                };
+                let Some(bottom) = self.collisions.bottom(state) else {
+                    continue;
+                };
+                let obstruction = by as f64 + bottom;
+                if obstruction > feet_y {
+                    headroom = headroom.min(obstruction - feet_y);
+                }
+            }
+        }
+        Some(headroom)
     }
 
     /// The state id of the block at `(x, y, z)`, or `None` when the store
@@ -483,6 +557,20 @@ mod tests {
         ChunkStore::new(ReadyChunks::new(chunks), test_blocks())
     }
 
+    /// A store over `chunks` with a collision report mapping stone (1) to a
+    /// full-cell bottom and the oak log's x-axis state (3) to a top-slab-like
+    /// `0.5`, so [`ChunkStore::free_headroom`] has a shape to read.
+    fn store_with_collisions(chunks: Vec<LevelChunkWithLight>) -> ChunkStore {
+        let report = r#"{"shapes": {"1": 0.0, "3": 0.5}}"#;
+        let collisions =
+            CollisionShapes::parse(report, "test".to_owned()).expect("valid collision report");
+        ChunkStore::with_collisions(
+            ReadyChunks::new(chunks),
+            test_blocks(),
+            Arc::new(collisions),
+        )
+    }
+
     /// Packing and unpacking invert each other, and the first word pins the
     /// measured least-significant-cell-first packing.
     #[test]
@@ -651,6 +739,60 @@ mod tests {
         assert!(!store.feet_in_water(0, 65.0, 0), "on top of the block");
         assert!(!store.feet_in_water(1, 64.0, 0), "stone holds no water");
         assert!(!store.feet_in_water(0, 200.0, 0), "no section, no water");
+    }
+
+    /// The free-headroom query (Шаг 15 п.5): the lowest collision box above the
+    /// feet, measured over the player's footprint columns; `None` without a
+    /// collision report, the S11 heights otherwise.
+    #[test]
+    fn the_free_headroom_reads_the_collision_report() {
+        // Without a collision report the rule stays off: the pose is not
+        // forced and the caller keeps what it had.
+        let bare = store_with(vec![test_chunk(0, 0)]);
+        assert_eq!(
+            bare.free_headroom(8.5, 64.0, 8.5),
+            None,
+            "no report, no rule"
+        );
+
+        let store = store_with_collisions(vec![test_chunk(0, 0)]);
+        // The open column: nothing above, so the value saturates at 2.0.
+        assert_eq!(store.free_headroom(8.5, 64.0, 8.5), Some(2.0), "open");
+        // A full block in the head cell (feet 64.0, block at y=65): 1.0, the
+        // S11 stone value that forces a crawl.
+        store.set_block(8, 65, 8, 1).expect("stone above");
+        assert_eq!(store.free_headroom(8.5, 64.0, 8.5), Some(1.0), "stone");
+        // A top-slab-like block (the x-axis log state): 1.5, the S11 slab
+        // value that forces a crouch.
+        store.set_block(8, 65, 8, 3).expect("slab-like above");
+        assert_eq!(store.free_headroom(8.5, 64.0, 8.5), Some(1.5), "top slab");
+        // A block whose top is not above the feet does not lower the headroom
+        // (the query only counts obstruction *above* the feet).
+        store.set_block(8, 65, 8, 0).expect("cleared");
+        store
+            .set_block(8, 64, 8, 1)
+            .expect("a block at the feet cell");
+        assert_eq!(
+            store.free_headroom(8.5, 64.5, 8.5),
+            Some(2.0),
+            "a block below the feet does not obstruct the head"
+        );
+        // The footprint is 0.6 wide, so at x=8.9 the columns 8 and 9 both
+        // count: a block one column over still lowers the headroom.
+        store
+            .set_block(9, 65, 8, 1)
+            .expect("stone in the far column");
+        store.set_block(8, 65, 8, 0).expect("cleared near column");
+        assert_eq!(
+            store.free_headroom(8.9, 64.0, 8.5),
+            Some(1.0),
+            "the far column of the footprint counts"
+        );
+        assert_eq!(
+            store.free_headroom(8.2, 64.0, 8.5),
+            Some(2.0),
+            "a 0.6-wide box at x=8.2 stays inside column 8"
+        );
     }
 
     /// The number of chunks the store holds, and the air classification of

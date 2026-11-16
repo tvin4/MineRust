@@ -16,6 +16,7 @@
 //! Update Tags packet then refers to those ids.
 
 mod blocks;
+mod collision;
 mod error;
 mod load;
 mod packets;
@@ -29,6 +30,7 @@ pub mod fixtures;
 mod tests;
 
 pub use blocks::{BlockStates, Properties};
+pub use collision::CollisionShapes;
 pub use error::DataError;
 pub use load::{load_from_jar, load_from_zip, SYNCHRONIZED_REGISTRIES};
 pub use packets::{load_packets_report, packets_from_json, PacketIds};

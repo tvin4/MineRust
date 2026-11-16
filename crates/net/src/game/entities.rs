@@ -118,6 +118,8 @@ pub struct EntitySpawn {
     pub sneaking: bool,
     /// Whether the player's feet were in water when it became visible.
     pub swimming: bool,
+    /// The pose forced by the headroom when it became visible (Шаг 15 п.5).
+    pub forced: Forced,
 }
 
 /// An entity a viewer stops seeing this tick.
@@ -258,6 +260,71 @@ pub fn pose_of(sneak: bool, swimming: bool) -> u8 {
     }
 }
 
+/// The pose the free headroom above the feet forces (Шаг 15 п.5).
+///
+/// The vanilla S11 run: a full block at the head cell leaves `1.0` block, a top
+/// slab leaves `1.5`; `1.0` makes the player crawl (pose SWIMMING, measured
+/// hitbox `0.6`, no swimming flag), `1.5` makes it crouch (pose CROUCHING, hitbox
+/// `1.5`, crouch flag). Nothing above the head leaves the input-driven pose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Forced {
+    /// The store could not decide (no collision report) or the player fits
+    /// standing.
+    None,
+    /// Standing does not fit but crouching does: pose 5, crouch flag.
+    Crouch,
+    /// Not even crouching fits: pose 3 (the same pose value vanilla uses for
+    /// swimming), no swim flag.
+    Crawl,
+}
+
+/// Hitbox heights of the three poses, measured in the vanilla S11 run
+/// (`docs/SWIMMING.md` §5): the observer's `bbHeight` reads 1.8 standing,
+/// 1.5 crouching and 0.6 crawling (pose value 3). Not from memory.
+pub const STANDING_HEIGHT: f64 = 1.8;
+/// See [`STANDING_HEIGHT`]: the crouching hitbox.
+pub const CROUCHING_HEIGHT: f64 = 1.5;
+/// See [`STANDING_HEIGHT`]: the crawling (pose 3) hitbox.
+pub const CRAWLING_HEIGHT: f64 = 0.6;
+
+impl Forced {
+    /// Maps the free headroom to the pose it forces.
+    ///
+    /// `None` (no collision report) leaves the pose alone. The thresholds are
+    /// the measured heights above: less than 1.5 means crouching does not fit
+    /// (crawl); 1.5 up to 1.8 means only crouching fits; 1.8 or more fits
+    /// standing. The S11 run confirms 1.0 → crawl and 1.5 → crouch.
+    pub fn from_headroom(headroom: Option<f64>) -> Self {
+        match headroom {
+            Some(height) if height < CROUCHING_HEIGHT => Forced::Crawl,
+            Some(height) if height < STANDING_HEIGHT => Forced::Crouch,
+            _ => Forced::None,
+        }
+    }
+}
+
+/// Pose and flags for one tick's state (Шаг 15 п.5).
+///
+/// `crouch` covers both the sneak key and [`Forced::Crouch`]; [`Forced::Crawl`]
+/// forces pose 3 and leaves the swimming flag to the water rule (a forced crawl
+/// on dry land sets no flag, exactly as the S11 trace shows).
+// SOURCE: the S11 vanilla timeline (`docs/SWIMMING.md` §5).
+pub fn pose_and_flags(sneak: bool, sprint: bool, swimming: bool, forced: Forced) -> (u8, u8) {
+    let crawl = swimming || forced == Forced::Crawl;
+    let crouch = !crawl && (sneak || forced == Forced::Crouch);
+    let pose = if crawl {
+        3
+    } else if crouch {
+        5
+    } else {
+        0
+    };
+    let flags = (if crouch { 0x02 } else { 0 })
+        | (if sprint { 0x08 } else { 0 })
+        | if swimming { 0x10 } else { 0 };
+    (pose, flags)
+}
+
 /// A traced sneak/sprint/swim metadata transition for a survival or creative player.
 ///
 /// Combined flag values such as `0x0a` are the OR of confirmed bits but the
@@ -330,15 +397,23 @@ fn motion_from(previous: &PlayerPos, now: &PlayerPos) -> EntityMotion {
 fn spawn_of(region: &Region, id: PlayerId, position: PlayerPos) -> EntitySpawn {
     // The id is in this tick's snapshot, so the player exists; the fallback is
     // defensive only and is never hit.
-    let (name, uuid, game_mode, sneaking, swimming) = match region.get(id) {
+    let (name, uuid, game_mode, sneaking, swimming, forced) = match region.get(id) {
         Some(player) => (
             player.name().to_owned(),
             offline_uuid(player.name()),
             player.game_mode(),
             player.sneak(),
             player.swimming(),
+            player.forced(),
         ),
-        None => (String::new(), Uuid::default(), 0, false, false),
+        None => (
+            String::new(),
+            Uuid::default(),
+            0,
+            false,
+            false,
+            Forced::None,
+        ),
     };
     EntitySpawn {
         id,
@@ -348,6 +423,7 @@ fn spawn_of(region: &Region, id: PlayerId, position: PlayerPos) -> EntitySpawn {
         game_mode,
         sneaking,
         swimming,
+        forced,
     }
 }
 
@@ -377,8 +453,8 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
     let mut baseline: Vec<Option<PlayerPos>> = Vec::new();
     let mut ticks: Vec<u32> = Vec::new();
     let mut game_mode: Vec<i32> = Vec::new();
-    let mut state: Vec<(bool, bool, bool)> = Vec::new();
-    let mut broadcast_state: Vec<Option<(bool, bool, bool)>> = Vec::new();
+    let mut state: Vec<(bool, bool, bool, Forced)> = Vec::new();
+    let mut broadcast_state: Vec<Option<(bool, bool, bool, Forced)>> = Vec::new();
     let mut swings: Vec<u32> = Vec::new();
     let mut before: Vec<Vec<PlayerId>> = Vec::new();
     let mut index: BTreeMap<PlayerId, usize> = BTreeMap::new();
@@ -396,7 +472,12 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
             baseline.push(player.last_broadcast());
             ticks.push(player.ticks_since_broadcast());
             game_mode.push(player.game_mode());
-            state.push((player.sneak(), player.sprint(), player.swimming()));
+            state.push((
+                player.sneak(),
+                player.sprint(),
+                player.swimming(),
+                player.forced(),
+            ));
             broadcast_state.push(player.broadcast_state());
             swings.push(player.pending_swings());
             before.push(player.visible().keys().copied().collect());
@@ -486,22 +567,24 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
                     if matches!(game_mode[subject], 0 | 1) {
                         if let Some(previous) = broadcast_state[subject] {
                             if previous != state[subject] {
+                                let old =
+                                    pose_and_flags(previous.0, previous.1, previous.2, previous.3);
+                                let now = pose_and_flags(
+                                    state[subject].0,
+                                    state[subject].1,
+                                    state[subject].2,
+                                    state[subject].3,
+                                );
                                 states.push(EntityStateUpdate {
                                     id: left,
-                                    flags: state_flags(
-                                        state[subject].0,
-                                        state[subject].1,
-                                        state[subject].2,
-                                    ),
+                                    flags: now.1,
                                     sneaking: (previous.0 != state[subject].0)
                                         .then_some(state[subject].0),
                                     sprinting: (previous.1 != state[subject].1)
                                         .then_some(state[subject].1),
                                     swimming: (previous.2 != state[subject].2)
                                         .then_some(state[subject].2),
-                                    pose: ((previous.0 != state[subject].0)
-                                        || (previous.2 != state[subject].2))
-                                        .then_some(pose_of(state[subject].0, state[subject].2)),
+                                    pose: (old.0 != now.0).then_some(now.0),
                                 });
                                 next_broadcast_state[subject] = Some(state[subject]);
                             }

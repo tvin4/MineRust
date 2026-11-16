@@ -88,6 +88,11 @@ final class ObserveCommand {
 		out.addProperty("pose", target.getPose().name());
 		out.addProperty("isCrouching", target.isCrouching());
 		out.addProperty("isSprinting", target.isSprinting());
+		// Measured hitbox of the pose B sees (Шаг 15 п.5): public Entity
+		// signatures, so the standing/crouching/crawling heights are read from
+		// the client, not assumed.
+		out.addProperty("bbWidth", target.getBbWidth());
+		out.addProperty("bbHeight", target.getBbHeight());
 		// Water/swim facts the observer's client derived for the remote player
 		// (Шаг 14e): the client keeps the synced swimming flag and pose, so B
 		// reports what an actual vanilla client would show, not our rule.
@@ -148,6 +153,10 @@ final class ObserveCommand {
 		out.addProperty("sprinting", player.isSprinting());
 		out.addProperty("pose", player.getPose().name());
 		out.addProperty("isCrouching", player.isCrouching());
+		// Measured hitbox of A's current pose (Шаг 15 п.5), public Entity
+		// signatures: standing/crouching/crawling heights come from the client.
+		out.addProperty("bbWidth", player.getBbWidth());
+		out.addProperty("bbHeight", player.getBbHeight());
 		// Water/swim facts (Шаг 14e), public Entity/Player signatures; reference
 		// labels only - the rule itself comes from the vanilla traces.
 		out.addProperty("isInWater", player.isInWater());

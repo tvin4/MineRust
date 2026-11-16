@@ -37,6 +37,11 @@ param(
 	# generated config untouched. For S10 the runner writes the file from the
 	# scenario definition before the stand starts (-OursDevGeometry is the path).
 	[string]$OursDevGeometry = '',
+	# Data-generation hook (Шаг 15 п.5): when set, the S11 vanilla run asks the
+	# connected test client to dump every block state's collision-shape bottom
+	# (public BlockState API) to this file. The server's collision_report reads
+	# that file; it stays outside the repository.
+	[string]$CollisionReport = '',
 	[switch]$KeepStand
 )
 $ErrorActionPreference = 'Stop'
@@ -273,6 +278,16 @@ function Start-Stand {
 				$config = $config -replace '(?m)^dev_geometry\s*=.*$', "dev_geometry = `"$geomPath`""
 			} else {
 				$config = $config.TrimEnd() + "`r`ndev_geometry = `"$geomPath`"`r`n"
+			}
+		}
+		if ($CollisionReport) {
+			# The forced crouch/crawl rule reads the collision report; point
+			# the generated config at it (forward slashes, see above).
+			$collisionPath = $CollisionReport -replace '\\', '/'
+			if ($config -match '(?m)^collision_report\s*=') {
+				$config = $config -replace '(?m)^collision_report\s*=.*$', "collision_report = `"$collisionPath`""
+			} else {
+				$config = $config.TrimEnd() + "`r`ncollision_report = `"$collisionPath`"`r`n"
 			}
 		}
 		$config | Set-Content $oursConfig -Encoding utf8
@@ -1590,29 +1605,48 @@ function Get-S10Build {
 	}
 }
 
-# Writes the S10 platform and geometry commands to a file our server applies to
-# its in-memory store at startup (dev_geometry, Шаг 15 п.2). Must run before
-# Start-Stand: our server has no /fill, so the geometry has to be in the store
-# before the port opens.
-function Write-S10GeometryFile {
+# Writes the dev-only geometry of the selected scenarios to a file our server
+# applies to its in-memory store at startup (dev_geometry, Шаг 15 п.2). Must run
+# before Start-Stand: our server has no /fill, so the geometry has to be in the
+# store before the port opens. S10 and S11 share the format and the file.
+function Write-DevGeometryFile {
 	param([string]$Path)
-	$scenarioFile = Get-ChildItem (Join-Path $here 'scenarios') -Filter 's10-*.json' | Select-Object -First 1
-	if (-not $scenarioFile) { throw 'no s10 scenario file to build the geometry from' }
-	$cfg = Get-Content $scenarioFile.FullName -Raw | ConvertFrom-Json
-	$baseY = [int]$cfg.baseY
-	$xs = @($cfg.geometryRow.xs)
-	$zs = @($cfg.geometryRow.zs)
 	$lines = New-Object System.Collections.Generic.List[string]
-	foreach ($cmd in @($cfg.platform)) { $lines.Add([string]$cmd) }
-	foreach ($geo in $cfg.geometries) {
-		$slot = [int]$geo.slot
-		$col = $slot % $xs.Count
-		$row = [int][Math]::Floor($slot / $xs.Count)
-		$build = Get-S10Build $geo $baseY $xs[$col] $zs[$row]
-		foreach ($cmd in $build.commands) { $lines.Add([string]$cmd) }
+	if ($Scenarios -contains 's10') {
+		$scenarioFile = Get-ChildItem (Join-Path $here 'scenarios') -Filter 's10-*.json' | Select-Object -First 1
+		if (-not $scenarioFile) { throw 'no s10 scenario file to build the geometry from' }
+		$cfg = Get-Content $scenarioFile.FullName -Raw | ConvertFrom-Json
+		$baseY = [int]$cfg.baseY
+		$xs = @($cfg.geometryRow.xs)
+		$zs = @($cfg.geometryRow.zs)
+		foreach ($cmd in @($cfg.platform)) { $lines.Add([string]$cmd) }
+		foreach ($geo in $cfg.geometries) {
+			$slot = [int]$geo.slot
+			$col = $slot % $xs.Count
+			$row = [int][Math]::Floor($slot / $xs.Count)
+			$build = Get-S10Build $geo $baseY $xs[$col] $zs[$row]
+			foreach ($cmd in $build.commands) { $lines.Add([string]$cmd) }
+		}
 	}
+	if ($Scenarios -contains 's11') {
+		$scenarioFile = Get-ChildItem (Join-Path $here 'scenarios') -Filter 's11-*.json' | Select-Object -First 1
+		if (-not $scenarioFile) { throw 'no s11 scenario file to build the geometry from' }
+		$cfg = Get-Content $scenarioFile.FullName -Raw | ConvertFrom-Json
+		foreach ($cmd in @($cfg.platform)) { $lines.Add([string]$cmd) }
+		$roofY = [int]$cfg.roofY
+		$from = [int]$cfg.roofFromZ
+		$to = [int]$cfg.roofToZ
+		$probeZ = [int]$cfg.probeZ
+		foreach ($case in @($cfg.cases)) {
+			$lines.Add(("fill {0} {1} {2} {0} {1} {3} {4}" -f [int]$case.x, $roofY, $from, $to, [string]$case.roof))
+			# The isolated block over the probe cell: one full cell at head
+			# level, the literal "block placed above the standing player" case.
+			$lines.Add(("setblock {0} {1} {2} {3}" -f [int]$case.x, $roofY, $probeZ, [string]$case.roof))
+		}
+	}
+	if ($lines.Count -eq 0) { throw 'no dev geometry for the selected scenarios' }
 	$lines | Set-Content -LiteralPath $Path -Encoding utf8
-	Write-Host ("  [info] S10 dev geometry: {0} commands written to {1}" -f $lines.Count, $Path)
+	Write-Host ("  [info] dev geometry: {0} commands written to {1}" -f $lines.Count, $Path)
 }
 
 function Invoke-S10 {
@@ -1812,12 +1846,251 @@ function Invoke-S10 {
 	Start-Sleep -Seconds 3
 }
 
+# --- S11: forced crouch/crawl under a low ceiling (Шаг 15 п.5) --------------
+# Static geometry, the same procedure on both targets: a roof strip at y=202
+# (head level for feet at y=201) and one isolated block at the same height over
+# a probe cell. A stands in the open, is moved under the isolated block, back to
+# the open, walks under the roof, holds sneak and comes back out. On vanilla the
+# literal hypothesis probe also runs: /setblock places the block at head level
+# over the standing player, then removes it. Ours cannot place blocks at
+# runtime, so that extra phase runs on vanilla only. The runner only records
+# facts (A and B observations, including the client-measured hitbox); the rule
+# is derived from the vanilla timeline.
+function Invoke-S11 {
+	param($Cfg, $Result)
+	$portA = [int]$Cfg.controlPortA
+	$portB = [int]$Cfg.controlPortB
+	$nickA = [string]$Cfg.playerA
+	$nickB = [string]$Cfg.playerB
+	$sampleEvery = [int]$Cfg.sampleEveryMs
+	$standY = [double]$Cfg.standY
+	$yaw = [double]$Cfg.yaw
+	$roofY = [int]$Cfg.roofY
+	$inv = [System.Globalization.CultureInfo]::InvariantCulture
+	$script:s11Samples = New-Object System.Collections.ArrayList
+	$script:s11SampleIndex = 0
+
+	$watermark = Get-Date
+	$launchA = Start-Client $nickA $portA $watermark
+	if (-not $launchA.uuid) { throw 'S11: could not resolve Alice offline UUID' }
+	$null = Start-Client $nickB $portB (Get-Date)
+	$observer = Wait-ObserverChunksStable $portB 30
+	$script:s7Facts.Add(("S11 B chunk drain: settled={0} loadedChunks={1}" -f $observer.settled, $observer.loadedChunks))
+
+	if ($isVanilla -and $CollisionReport) {
+		# Data generation for the server's headroom query: the connected client
+		# reads every state's collision-shape bottom through the game's own
+		# public API and writes the report. The file stays outside the repo.
+		$shapesCmd = [PSCustomObject]@{
+			id   = 's11-shapes'
+			cmd  = 'shapes'
+			args = [PSCustomObject]@{ path = $CollisionReport }
+		} | ConvertTo-Json -Compress
+		$shapes = Invoke-TestCmd $portA $shapesCmd 30000
+		$fact = if ($shapes.ok) {
+			"states={0} nonEmpty={1} path={2}" -f $shapes.result.states, $shapes.result.nonEmpty, $shapes.result.path
+		} else {
+			"error: $($shapes.error)"
+		}
+		Add-Check $Result 'S11 collision report written' ([bool]$shapes.ok) $fact
+	}
+
+	$cases = New-Object System.Collections.ArrayList
+	foreach ($case in @($Cfg.cases)) {
+		$commands = New-Object System.Collections.Generic.List[string]
+		$commands.Add(("fill {0} {1} {2} {0} {1} {3} {4}" -f [int]$case.x, $roofY, `
+					[int]$Cfg.roofFromZ, [int]$Cfg.roofToZ, [string]$case.roof))
+		$commands.Add(("setblock {0} {1} {2} {3}" -f [int]$case.x, $roofY, [int]$Cfg.probeZ, [string]$case.roof))
+		$cases.Add([PSCustomObject]@{ name = [string]$case.name; x = [int]$case.x; roof = [string]$case.roof; commands = $commands }) | Out-Null
+	}
+
+	if (-not $isVanilla) {
+		if (-not $OursDevGeometry) {
+			Add-Check $Result 'S11 geometry is available on our server' $false `
+				'pass -OursDevGeometry <file>: the runner writes the s11 commands there before start'
+			$null = Invoke-TestCmd $portA (New-SessionCmd 's11-off' 'disconnect')
+			$null = Invoke-TestCmd $portB (New-SessionCmd 's11-offb' 'disconnect')
+			Start-Sleep -Seconds 3
+			return
+		}
+		$script:s7Facts.Add("S11 dev geometry applied at startup: $OursDevGeometry")
+	} else {
+		$fl = @($Cfg.forceload)
+		if ($fl.Count -eq 4) {
+			Invoke-VanillaConsole ("forceload add {0} {1} {2} {3}" -f $fl[0], $fl[1], $fl[2], $fl[3]) | Out-Null
+			Start-Sleep -Milliseconds 1000
+		}
+		foreach ($cmd in @($Cfg.platform)) { Invoke-VanillaConsole $cmd | Out-Null }
+		foreach ($case in $cases) { foreach ($cmd in $case.commands) { Invoke-VanillaConsole $cmd | Out-Null } }
+		Start-Sleep -Seconds 2
+		# Same survival measures as S10: a fresh night world must not kill B.
+		Invoke-VanillaConsole 'difficulty peaceful' | Out-Null
+		Invoke-VanillaConsole 'gamerule doMobSpawning false' | Out-Null
+		Start-Sleep -Milliseconds 500
+	}
+
+	foreach ($case in $cases) {
+		$standX = [double]$case.x + 0.5
+		$spots = @{
+			open  = [PSCustomObject]@{ x = $standX; y = $standY; z = [double]$Cfg.openZ + 0.5 }
+			probe = [PSCustomObject]@{ x = $standX; y = $standY; z = [double]$Cfg.probeZ + 0.5 }
+		}
+		$tpOk = $true
+		$tpFact = ''
+		foreach ($action in @($Cfg.program)) {
+			$id = "$($case.name)-$($action.phase)"
+			if ($action.tp) {
+				$spot = $spots[[string]$action.tp]
+				if ($null -eq $spot) { throw "S11: unknown spot '$($action.tp)'" }
+				if ($isVanilla) {
+					$line = [string]::Format($inv, "tp {0} {1} {2} {3} {4} {5}", `
+							$nickA, $spot.x, $spot.y, $spot.z, $yaw, 0.0)
+					Invoke-StandRcon $line | Out-Null
+					Start-Sleep -Milliseconds 200
+				} else {
+					# Client-side teleport; our server has no /tp. The client then
+					# reports its own position, which the server applies.
+					$null = Invoke-TestCmd $portA (New-TpCmd "$id-tp" $spot.x $spot.y $spot.z $yaw 0.0)
+				}
+				# Probe until A reports the spot: a geometry without a floor would
+				# make it fall, and that has to surface as a fact, not silence.
+				$probe = $null
+				$deadline = (Get-Date).AddSeconds(5)
+				while ((Get-Date) -lt $deadline) {
+					Start-Sleep -Milliseconds 150
+					$probe = (Invoke-TestCmd $portA (New-ObserveCmd "$id-tp-probe")).result
+					if ($null -eq $probe -or $null -eq $probe.pos) { continue }
+					$dxz = [Math]::Sqrt([Math]::Pow($probe.pos.x - $spot.x, 2) + [Math]::Pow($probe.pos.z - $spot.z, 2))
+					$dy = [Math]::Abs($probe.pos.y - $spot.y)
+					if ($dxz -le 1.0 -and $dy -le 2.0) { break }
+				}
+				if ($null -eq $probe -or $null -eq $probe.pos) {
+					$tpOk = $false
+					$tpFact = "phase $($action.phase): no observe"
+				} elseif ([Math]::Abs($probe.pos.y - $spot.y) -gt 2.0) {
+					$tpOk = $false
+					$tpFact = "phase $($action.phase): y=$($probe.pos.y) expected $($spot.y)"
+				}
+				Start-Sleep -Milliseconds ([int]$Cfg.settleMs)
+			}
+			if ($action.key) {
+				$null = Invoke-TestCmd $portA (New-KeyCmd $id ([string]$action.key) ([string]$action.action))
+			}
+			$remaining = [int]$action.ms
+			while ($remaining -gt 0) {
+				$slice = [Math]::Min($sampleEvery, $remaining)
+				Start-Sleep -Milliseconds $slice
+				$remaining -= $slice
+				$elapsed = [int]$action.ms - $remaining
+				$aResp = Invoke-TestCmd $portA (New-ObserveCmd "s11-a-$($script:s11SampleIndex)")
+				$bResp = Invoke-TestCmd $portB (New-ObserveCmd "s11-b-$($script:s11SampleIndex)" $nickA)
+				$script:s11SampleIndex++
+				$script:s11Samples.Add([PSCustomObject]@{
+						caseName  = [string]$case.name
+						phase     = [string]$action.phase
+						elapsedMs = $elapsed
+						a         = $(if ($aResp.ok) { $aResp.result } else { $null })
+						b         = $(if ($bResp.ok) { $bResp.result } else { $null })
+					}) | Out-Null
+			}
+		}
+
+		if ($isVanilla -and $Cfg.dynamicProbe) {
+			# The literal hypothesis probe: the player stands in the open and one
+			# block is placed at head level (feet y+1) over its own column, then
+			# removed. Ours cannot place blocks at runtime (no console), so this
+			# phase is vanilla-only and is not part of the aligned sample set.
+			$dp = $Cfg.dynamicProbe
+			$spot = $spots['open']
+			$line = [string]::Format($inv, "tp {0} {1} {2} {3} {4} {5}", `
+					$nickA, $spot.x, $spot.y, $spot.z, $yaw, 0.0)
+			Invoke-StandRcon $line | Out-Null
+			Start-Sleep -Milliseconds ([int]$Cfg.settleMs)
+			$place = ("setblock {0} {1} {2} {3}" -f [int]$case.x, $roofY, [int]$Cfg.openZ, [string]$case.roof)
+			Invoke-VanillaConsole $place | Out-Null
+			$remaining = [int]$dp.placeMs
+			while ($remaining -gt 0) {
+				$slice = [Math]::Min($sampleEvery, $remaining)
+				Start-Sleep -Milliseconds $slice
+				$remaining -= $slice
+				$aResp = Invoke-TestCmd $portA (New-ObserveCmd "s11-a-$($script:s11SampleIndex)")
+				$bResp = Invoke-TestCmd $portB (New-ObserveCmd "s11-b-$($script:s11SampleIndex)" $nickA)
+				$script:s11SampleIndex++
+				$script:s11Samples.Add([PSCustomObject]@{
+						caseName  = [string]$case.name
+						phase     = [string]$dp.phase
+						elapsedMs = [int]$dp.placeMs - $remaining
+						a         = $(if ($aResp.ok) { $aResp.result } else { $null })
+						b         = $(if ($bResp.ok) { $bResp.result } else { $null })
+						placed    = $place
+					}) | Out-Null
+			}
+			$clear = ("setblock {0} {1} {2} air" -f [int]$case.x, $roofY, [int]$Cfg.openZ)
+			Invoke-VanillaConsole $clear | Out-Null
+			$remaining = [int]$dp.clearMs
+			while ($remaining -gt 0) {
+				$slice = [Math]::Min($sampleEvery, $remaining)
+				Start-Sleep -Milliseconds $slice
+				$remaining -= $slice
+				$aResp = Invoke-TestCmd $portA (New-ObserveCmd "s11-a-$($script:s11SampleIndex)")
+				$bResp = Invoke-TestCmd $portB (New-ObserveCmd "s11-b-$($script:s11SampleIndex)" $nickA)
+				$script:s11SampleIndex++
+				$script:s11Samples.Add([PSCustomObject]@{
+						caseName  = [string]$case.name
+						phase     = "$($dp.phase)-cleared"
+						elapsedMs = [int]$dp.clearMs - $remaining
+						a         = $(if ($aResp.ok) { $aResp.result } else { $null })
+						b         = $(if ($bResp.ok) { $bResp.result } else { $null })
+					}) | Out-Null
+			}
+		}
+
+		$rows = @($script:s11Samples | Where-Object { $_.caseName -eq $case.name })
+		$aPoses = @($rows | ForEach-Object { $_.a.pose } | Sort-Object -Unique) -join ','
+		$aHeights = @($rows | ForEach-Object { $_.a.bbHeight } | Sort-Object -Unique) -join ','
+		$aHead = @($rows | Where-Object { $_.phase -eq 'block-above' } | ForEach-Object { $_.a.headBlock.id } | Sort-Object -Unique) -join ','
+		$bPoses = @($rows | ForEach-Object { $_.b.pose } | Sort-Object -Unique) -join ','
+		Add-Check $Result ("S11 {0}: samples recorded" -f $case.name) ($rows.Count -gt 0 -and $tpOk) `
+			("samples={0}; roof={1}; A poses=[{2}] bbHeight=[{3}] head@probe=[{4}]; B poses=[{5}]; tp={6}" -f `
+				$rows.Count, $case.roof, $aPoses, $aHeights, $aHead, $bPoses, $(if ($tpOk) { 'ok' } else { $tpFact }))
+		foreach ($key in @('up', 'down', 'left', 'right', 'jump', 'shift', 'sprint')) {
+			$null = Invoke-TestCmd $portA (New-KeyCmd "$($case.name)-release-$key" $key 'up')
+		}
+	}
+
+	$artifact = [PSCustomObject]@{
+		target        = $Target
+		generated     = (Get-Date).ToString('s')
+		baseY         = [int]$Cfg.baseY
+		uuidA         = $launchA.uuid
+		nickA         = $nickA
+		nickB         = $nickB
+		platform      = @($Cfg.platform)
+		roofY         = $roofY
+		roofFromZ     = [int]$Cfg.roofFromZ
+		roofToZ       = [int]$Cfg.roofToZ
+		probeZ        = [int]$Cfg.probeZ
+		openZ         = [int]$Cfg.openZ
+		standY        = $standY
+		cases         = @($cases)
+		samples       = @($script:s11Samples)
+	}
+	$artifactPath = Join-Path $RunDir 's11-samples.json'
+	$artifact | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $artifactPath -Encoding utf8
+	$script:s7Facts.Add("S11 artifact: $artifactPath ($($script:s11Samples.Count) samples)")
+	Write-Host ("  [info] S11 artifact written: $artifactPath")
+
+	$null = Invoke-TestCmd $portA (New-SessionCmd 's11-off' 'disconnect')
+	$null = Invoke-TestCmd $portB (New-SessionCmd 's11-offb' 'disconnect')
+	Start-Sleep -Seconds 3
+}
+
 $scenarioDir = Join-Path $here 'scenarios'
 $allResults = @()
 try {
 	Prepare-RunWorld
-	if (-not $isVanilla -and $OursDevGeometry -and ($Scenarios -contains 's10')) {
-		Write-S10GeometryFile $OursDevGeometry
+	if (-not $isVanilla -and $OursDevGeometry -and (($Scenarios -contains 's10') -or ($Scenarios -contains 's11'))) {
+		Write-DevGeometryFile $OursDevGeometry
 	}
 	Start-Stand
 	foreach ($id in $Scenarios) {
@@ -1851,6 +2124,7 @@ try {
 			's8' { Invoke-S8 $cfg $result }
 			's9' { Invoke-S9 $cfg $result }
 			's10' { Invoke-S10 $cfg $result }
+			's11' { Invoke-S11 $cfg $result }
 			default { throw "unknown scenario '$($cfg.id)'" }
 		}
 		Stop-ClientByName $cfg.playerA
