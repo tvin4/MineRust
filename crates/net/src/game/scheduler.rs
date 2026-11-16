@@ -223,6 +223,14 @@ impl Scheduler {
     }
 
     /// Recomputes feet-in-water from the current immutable chunk snapshot.
+    ///
+    /// TEMPORARY (Шаг 14e): the swimming bit additionally requires sprint, so
+    /// a player merely standing in water is no longer reported as swimming —
+    /// the owner's complaint about the 14d rule. This is **not** confirmed by
+    /// any trace: the one positive S8 sample showed pose 3 at rest too, and no
+    /// negative (dry-feet) water sample exists. It only suppresses the known
+    /// false positives until the Шаг 14e decision table (from G1..G7 vanilla
+    /// traces) replaces it; do not treat it as the original behaviour.
     fn update_swimming(&mut self) {
         let Some(store) = self.store.as_ref() else {
             return;
@@ -241,7 +249,9 @@ impl Scheduler {
                         position.y.floor() as i32,
                         position.z.floor() as i32,
                     );
-                    player.set_swimming(store.is_water_at(x, y, z));
+                    // TEMPORARY gate (see the method docs): sprint-only.
+                    let sprinting = player.sprint();
+                    player.set_swimming(store.is_water_at(x, y, z) && sprinting);
                 }
             }
         }
