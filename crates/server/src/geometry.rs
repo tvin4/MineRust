@@ -523,4 +523,36 @@ mod tests {
         assert_eq!(store.block(5, 200, 5), Some(1), "the good line went in");
         let _ = std::fs::remove_file(&path);
     }
+
+    /// The shipped dev-geometry scenes (Шаг 16.0c) must stay parsable: a typo
+    /// in a command is caught here, not on a live server. Only the syntax is
+    /// checked — resolving names and properties needs `reports/blocks.json`,
+    /// which lives outside the repository.
+    #[test]
+    fn shipped_dev_geometry_files_parse() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("tools/testclient/geometry");
+        assert!(
+            dir.is_dir(),
+            "the geometry directory is part of the repository: {}",
+            dir.display()
+        );
+        let mut files = 0;
+        for entry in std::fs::read_dir(&dir).expect("read the geometry directory") {
+            let path = entry.expect("directory entry").path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("txt") {
+                continue;
+            }
+            let commands =
+                load(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            assert!(!commands.is_empty(), "{} has no command", path.display());
+            files += 1;
+        }
+        assert!(
+            files >= 3,
+            "expected the pond/crawl/waterlogged scenes, found {files}"
+        );
+    }
 }

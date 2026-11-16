@@ -1,0 +1,20 @@
+# pond.txt — swimming pool for the manual two-client check (Шаг 16.0c)
+#
+# A self-contained 9x9 basin whose water surface sits at y=41, reproducing the
+# template's natural pond near (106.5, 41, -30.5) that the S8 vanilla run used.
+# The commands run through the dev_geometry path (Шаг 15 п.2): the server writes
+# them into its in-memory ChunkStore before the port is bound, so the world on
+# disk is never touched.
+#
+# Not enabled by default. In server.toml:
+#   dev_geometry = "tools/testclient/geometry/pond.txt"
+#   spawn_override = "106,41,-31"     # the client centres x/z -> (106.5, 41, -30.5)
+#   collision_report = "<your reports>/collision.json"
+#   game_mode = 0                      # survival; creative also works
+#
+# 9x9 stone floor.
+fill 102 36 -35 110 36 -27 minecraft:stone
+# Stone ring at the water level (y 37..41); the 7x7 interior is the pool.
+fill 102 37 -35 110 41 -27 minecraft:stone
+# Water, surface at y=41 (sources, so the column is continuous).
+fill 103 37 -34 109 41 -28 minecraft:water

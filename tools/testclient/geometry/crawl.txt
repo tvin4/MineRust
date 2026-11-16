@@ -1,0 +1,31 @@
+# crawl.txt — low-ceiling tunnels for the forced crawl/crouch check (Шаг 16.0c)
+#
+# Two covered corridors side by side, each 1 block of clearance, on a raised
+# walkway: the stone roof leaves 1.0 block (feet y=201, roof y=202) and forces
+# pose 3 SWIMMING (crawl); the top-slab roof leaves 1.5 and forces pose 5
+# CROUCHING. The open approach has no roof, so the player walks in standing and
+# the pose drops under the first covered cell. Same geometry the recorded S10
+# G7-tunnel-1 / G7-crouch-15 rows and the S11 run used.
+#
+# Not enabled by default. In server.toml:
+#   dev_geometry = "tools/testclient/geometry/crawl.txt"
+#   spawn_override = "56,201,-47"     # the client centres x/z -> (56.5, 201, -46.5)
+#   collision_report = "<your reports>/collision.json"
+#   game_mode = 0
+#
+# After joining, face east / +x (yaw -90) and hold forward: the stone tunnel is
+# straight ahead at z=-46.5. Walk south to z=-41.5 for the 1.5-block corridor.
+
+# --- 1-block tunnel: full stone roof over x 58..63, corridor at z=-47 ---
+fill 55 200 -48 63 200 -46 minecraft:stone
+fill 55 201 -48 63 201 -48 minecraft:stone
+fill 55 201 -46 63 201 -46 minecraft:stone
+fill 58 202 -48 63 202 -46 minecraft:stone
+fill 63 201 -48 63 202 -46 minecraft:stone
+
+# --- 1.5-block tunnel: top-slab roof over x 58..63, corridor at z=-42 ---
+fill 55 200 -43 63 200 -41 minecraft:stone
+fill 55 201 -43 63 201 -43 minecraft:stone
+fill 55 201 -41 63 201 -41 minecraft:stone
+fill 58 202 -43 63 202 -41 minecraft:stone_slab[type=top]
+fill 63 201 -43 63 202 -41 minecraft:stone

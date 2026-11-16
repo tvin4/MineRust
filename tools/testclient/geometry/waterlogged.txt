@@ -1,0 +1,27 @@
+# waterlogged.txt — waterlogged blocks in shallow water (Шаг 16.0c)
+#
+# A shallow pool on a stone platform with four waterlogged shapes standing at
+# floor level (y=200) inside it, so the player can wade onto them: a top slab,
+# a bottom slab, oak stairs and an oak fence. The S10 grid used the same block
+# specs (G4-wl-*); this file packs one of each next to open water so the owner
+# can see both cases — a block the feet are inside (counts as water) and one the
+# player stands on (does not).
+#
+# Not enabled by default. In server.toml:
+#   dev_geometry = "tools/testclient/geometry/waterlogged.txt"
+#   spawn_override = "92,201,-32"     # the client centres x/z -> (92.5, 201, -31.5)
+#   collision_report = "<your reports>/collision.json"
+#   game_mode = 0
+#
+# Join on the dry south lip and walk north (-z) into the water and onto the
+# blocks. See README.md for the expected observer-B behaviour.
+
+# Platform, top surface y=200 (feet stand at y=201).
+fill 86 200 -40 98 200 -32 minecraft:stone
+# Water on top of the platform (feet level y=201), 11x7, surface at y=201.
+fill 87 201 -39 97 201 -33 minecraft:water
+# Waterlogged blocks at floor level (y=200), inside the water.
+fill 88 200 -38 90 200 -36 minecraft:stone_slab[type=top,waterlogged=true]
+fill 92 200 -38 94 200 -36 minecraft:stone_slab[type=bottom,waterlogged=true]
+fill 88 200 -35 90 200 -33 minecraft:oak_stairs[waterlogged=true]
+fill 92 200 -35 94 200 -33 minecraft:oak_fence[waterlogged=true]
