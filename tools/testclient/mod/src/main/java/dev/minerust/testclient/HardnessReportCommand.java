@@ -33,7 +33,10 @@ import net.minecraft.world.level.block.state.BlockState;
  *
  * <p>Both are read against the connected world in an air cell above the player,
  * the same neutral context the {@code shapes} command uses, so
- * neighbour-dependent states are measured in isolation. No Minecraft internals
+ * neighbour-dependent states are measured in isolation. The command only runs
+ * while the player stands on the ground: the game divides the dig speed by 5 in
+ * the air, so an airborne reading would report {@code 0.2} for every state and
+ * make every server-side dig five times too slow. No Minecraft internals
  * are read and nothing is assumed about the dig-time formula: the server derives
  * that from real dig traces (Шаг 16a.2).
  *
@@ -61,6 +64,14 @@ final class HardnessReportCommand {
 		}
 		if (minecraft.player == null || minecraft.level == null) {
 			throw new IllegalStateException("hardness: the client is not in a world");
+		}
+		// The game divides the dig speed by 5 while the player is airborne, so a
+		// measurement taken mid-jump (or right after a join, while still falling)
+		// would write 0.2 for every state instead of the bare-hand 1.0 and make
+		// every server-side dig timer five times too slow. Refuse instead.
+		if (!minecraft.player.onGround()) {
+			throw new IllegalStateException(
+					"hardness: the client is not on the ground (the dig speed is /5 in the air); stand still and retry");
 		}
 		// A cell high above the player: air around it, inside the loaded chunk
 		// and below the build limit, so neighbour-dependent states see air.
