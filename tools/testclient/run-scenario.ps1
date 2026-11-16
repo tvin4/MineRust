@@ -1166,7 +1166,199 @@ function Invoke-S4 {
 	Start-Sleep -Seconds 3
 }
 
-# --- main ------------------------------------------------------------------
+# --- S8: water (runbook: water y 37..41 at x 105..107, z -32..-28) ----------
+# A sprints on land, is teleported by RCON into the water column, swims,
+# releases and is teleported back to the start. B is the observer; its
+# clientbound trace is the data for docs/SWIMMING.md: flags/pose metadata for
+# A, update_attributes (water_movement_efficiency?), level_event/sound around
+# the entry. Vanilla only (the teleport is an RCON command).
+function Invoke-S8 {
+	param($Cfg, $Result)
+	$portA = [int]$Cfg.controlPortA
+	$portB = [int]$Cfg.controlPortB
+	$nickA = [string]$Cfg.playerA
+	$nickB = [string]$Cfg.playerB
+	$settle = [int]$Cfg.settleMs
+	$inv = [System.Globalization.CultureInfo]::InvariantCulture
+
+	$watermark = Get-Date
+	$null = Start-Client $nickA $portA $watermark
+	$null = Start-Client $nickB $portB $watermark
+	# Stage 11: B keeps draining the join chunk batch for seconds; pose facts
+	# sampled during the drain describe the drain, not the player (S5 note).
+	$observer = Wait-ObserverChunksStable $portB 30
+	Write-Host ("  [info] B chunk drain settled={0} loadedChunks={1} reads={2}" -f `
+			$observer.settled, $observer.loadedChunks, $observer.reads)
+	$script:s7Facts.Add(("S8 B chunk drain: settled={0} loadedChunks={1}" -f `
+			$observer.settled, $observer.loadedChunks))
+
+	$start = (Invoke-TestCmd $portA (New-ObserveCmd 's8-start')).result
+	Add-Check $Result 'A is on dry land before the water run' `
+		($null -ne $start -and $start.inGame -and $start.onGround) `
+		("pos=({0},{1},{2}) feet={3}" -f $start.pos.x, $start.pos.y, $start.pos.z, $start.feetBlock.id)
+
+	# 1) Sprint on land: the known S5 baseline, kept in the same trace so the
+	# water packets can be read against it.
+	$null = Invoke-TestCmd $portA (New-KeyCmd 's8-forward-on' 'up' 'down')
+	$null = Invoke-TestCmd $portA (New-KeyCmd 's8-sprint-on' 'sprint' 'down')
+	Start-Sleep -Milliseconds ([int]$Cfg.sprintMs)
+	$land = (Invoke-TestCmd $portB (New-ObserveCmd 's8-land' $nickA)).result
+	Add-Check $Result 'B sees A sprinting on land' ($land.isSprinting -eq $true) `
+		("pose={0} isSprinting={1} pos=({2},{3},{4})" -f `
+			$land.pose, $land.isSprinting, $land.pos.x, $land.pos.y, $land.pos.z)
+	$null = Invoke-TestCmd $portA (New-KeyCmd 's8-forward-off' 'up' 'up')
+	$null = Invoke-TestCmd $portA (New-KeyCmd 's8-sprint-off' 'sprint' 'up')
+
+	if (-not $isVanilla) {
+		Add-Check $Result 'water entry is a vanilla RCON teleport' $false `
+			'no RCON on our server - the water run is a vanilla-trace fact'
+		$null = Invoke-TestCmd $portA (New-SessionCmd 's8-off' 'disconnect')
+		$null = Invoke-TestCmd $portB (New-SessionCmd 's8-offb' 'disconnect')
+		Start-Sleep -Seconds 3
+		return
+	}
+
+	# 2) Into the water column, at rest first (the entry observation).
+	$wx = ([double]$Cfg.water.x).ToString($inv)
+	$wy = ([double]$Cfg.water.y).ToString($inv)
+	$wz = ([double]$Cfg.water.z).ToString($inv)
+	Invoke-StandRcon ("tp {0} {1} {2} {3}" -f $nickA, $wx, $wy, $wz) | Out-Null
+	Start-Sleep -Milliseconds $settle
+	$wet = (Invoke-TestCmd $portA (New-ObserveCmd 's8-wet')).result
+	Add-Check $Result 'A is in water after the teleport' `
+		($wet.feetBlock.id -eq 'minecraft:water' -or $wet.headBlock.id -eq 'minecraft:water') `
+		("feet={0} head={1} pose={2} onGround={3}" -f `
+			$wet.feetBlock.id, $wet.headBlock.id, $wet.pose, $wet.onGround)
+
+	# 3) Swim: forward + sprint held, the pose the swimmer reports.
+	$null = Invoke-TestCmd $portA (New-KeyCmd 's8-swim-forward' 'up' 'down')
+	$null = Invoke-TestCmd $portA (New-KeyCmd 's8-swim-sprint' 'sprint' 'down')
+	Start-Sleep -Milliseconds ([int]$Cfg.swimMs)
+	$swim = (Invoke-TestCmd $portB (New-ObserveCmd 's8-swim' $nickA)).result
+	Add-Check $Result 'B sees A swimming (pose SWIMMING)' ($swim.pose -eq 'SWIMMING') `
+		("pose={0} isSprinting={1} pos=({2},{3},{4})" -f `
+			$swim.pose, $swim.isSprinting, $swim.pos.x, $swim.pos.y, $swim.pos.z)
+	$null = Invoke-TestCmd $portA (New-KeyCmd 's8-swim-forward-off' 'up' 'up')
+	$null = Invoke-TestCmd $portA (New-KeyCmd 's8-swim-sprint-off' 'sprint' 'up')
+	Start-Sleep -Milliseconds $settle
+
+	# 4) Out of the water: back to the recorded start position.
+	$sx = ([double]$start.pos.x).ToString($inv)
+	$sy = ([double]$start.pos.y).ToString($inv)
+	$sz = ([double]$start.pos.z).ToString($inv)
+	Invoke-StandRcon ("tp {0} {1} {2} {3}" -f $nickA, $sx, $sy, $sz) | Out-Null
+	Start-Sleep -Milliseconds $settle
+	$dry = (Invoke-TestCmd $portB (New-ObserveCmd 's8-dry' $nickA)).result
+	Add-Check $Result 'B sees A out of the water after the exit teleport' ($dry.pose -ne 'SWIMMING') `
+		("pose={0} pos=({1},{2},{3})" -f $dry.pose, $dry.pos.x, $dry.pos.y, $dry.pos.z)
+
+	$script:s7Facts.Add(("S8 land baseline: pose={0} isSprinting={1}" -f $land.pose, $land.isSprinting))
+	$script:s7Facts.Add(("S8 in water (at rest): feet={0} head={1} pose={2}" -f `
+			$wet.feetBlock.id, $wet.headBlock.id, $wet.pose))
+	$script:s7Facts.Add(("S8 swimming: pose={0} isSprinting={1} pos=({2},{3},{4})" -f `
+			$swim.pose, $swim.isSprinting, $swim.pos.x, $swim.pos.y, $swim.pos.z))
+	$script:s7Facts.Add(("S8 after exit: pose={0}" -f $dry.pose))
+
+	$null = Invoke-TestCmd $portA (New-SessionCmd 's8-off' 'disconnect')
+	$null = Invoke-TestCmd $portB (New-SessionCmd 's8-offb' 'disconnect')
+	Start-Sleep -Seconds 3
+}
+
+# --- S9: creative instant block break (both traces kept) --------------------
+# A is put into creative by RCON, looks down so the crosshair sits on a block,
+# taps a movement key to flush the angles, then attacks. Vanilla facts from
+# the 2026-11-16 runs: a tap (setDown true then false) sends no packets at
+# all, a held click sends player_action(start) + punch per targeted block and
+# the server answers each with block_update(air) + block_changed_ack - no
+# abort/stop action while the hold lasts. At the spawn pad the crosshair
+# reaches a dark-oak-leaf dip beside the pad (the ray is not vertical), so A
+# does not fall; the check is that the crosshair lost its target, not a y
+# drop. The A trace carries the serverbound side, the B trace the observer
+# side: level_event(2001) with the destroyed state id, swing_animation, and
+# block_update - no block_destruction and no sound in creative.
+function Invoke-S9 {
+	param($Cfg, $Result)
+	$portA = [int]$Cfg.controlPortA
+	$portB = [int]$Cfg.controlPortB
+	$nickA = [string]$Cfg.playerA
+	$nickB = [string]$Cfg.playerB
+	$settle = [int]$Cfg.settleMs
+
+	$watermark = Get-Date
+	$null = Start-Client $nickA $portA $watermark
+	$null = Start-Client $nickB $portB $watermark
+	$observer = Wait-ObserverChunksStable $portB 30
+	Write-Host ("  [info] B chunk drain settled={0} loadedChunks={1} reads={2}" -f `
+			$observer.settled, $observer.loadedChunks, $observer.reads)
+	$script:s7Facts.Add(("S9 B chunk drain: settled={0} loadedChunks={1}" -f `
+			$observer.settled, $observer.loadedChunks))
+
+	if (-not $isVanilla) {
+		Add-Check $Result 'creative mode is a vanilla RCON command' $false `
+			'no RCON on our server - the creative break is a vanilla-trace fact'
+		$null = Invoke-TestCmd $portA (New-SessionCmd 's9-off' 'disconnect')
+		$null = Invoke-TestCmd $portB (New-SessionCmd 's9-offb' 'disconnect')
+		Start-Sleep -Seconds 3
+		return
+	}
+
+	Invoke-StandRcon ("gamemode creative {0}" -f $nickA) | Out-Null
+	Start-Sleep -Milliseconds $settle
+	$mode = (Invoke-TestCmd $portB (New-ObserveCmd 's9-mode' $nickA)).result
+	Add-Check $Result 'B sees A in creative' ($mode.gameMode -eq 'creative') `
+		("gameMode seen by B: {0}" -f $mode.gameMode)
+
+	# A downward look (S6 with 150 deltas was a MISS: ~22 degrees never
+	# reaches a block) plus a movement tap to flush the angles.
+	$look = $Cfg.lookDown
+	$null = Invoke-TestCmd $portA (New-LookCmd 's9-look' $look.dx $look.dy)
+	$null = Invoke-TestCmd $portA (New-KeyCmd 's9-flush' 'up' 'tap')
+	Start-Sleep -Milliseconds $settle
+	$before = (Invoke-TestCmd $portA (New-ObserveCmd 's9-before')).result
+	Add-Check $Result 'crosshair is on a block before the click' `
+		($before.hitType -eq 'BLOCK' -and $null -ne $before.hitBlock) `
+		("hitType={0} block=({1},{2},{3}) face={4}" -f `
+			$before.hitType, $before.hitBlock.x, $before.hitBlock.y, $before.hitBlock.z, $before.hitBlock.face)
+
+	# Attempt 1: one click tap. Recorded as a fact only - two vanilla runs
+	# (2026-11-16_0918, _0932) show the tap sends nothing (no punch, no
+	# player_action), so it cannot be asserted per run.
+	$null = Invoke-TestCmd $portA (New-KeyCmd 's9-attack-tap' 'attack' 'tap')
+	Start-Sleep -Milliseconds $settle
+	$afterTap = (Invoke-TestCmd $portA (New-ObserveCmd 's9-after-tap')).result
+	$script:s7Facts.Add(("S9 tap: y {0} -> {1} onGround={2}" -f `
+			$before.pos.y, $afterTap.pos.y, $afterTap.onGround))
+
+	# Attempt 2: the held click (the proven B3 path). Vanilla destroys each
+	# targeted block instantly; afterwards the crosshair must have lost the
+	# block it pointed at (a different target or a miss).
+	$null = Invoke-TestCmd $portA (New-KeyCmd 's9-attack-down' 'attack' 'down')
+	Start-Sleep -Milliseconds ([int]$Cfg.attackHoldMs)
+	$null = Invoke-TestCmd $portA (New-KeyCmd 's9-attack-up' 'attack' 'up')
+	Start-Sleep -Milliseconds $settle
+	$afterHold = (Invoke-TestCmd $portA (New-ObserveCmd 's9-after-hold')).result
+	$targetGone = ($afterHold.hitType -ne $before.hitType) -or `
+		($null -ne $afterHold.hitBlock -and $null -ne $before.hitBlock -and `
+			([int]$afterHold.hitBlock.x -ne [int]$before.hitBlock.x -or `
+				[int]$afterHold.hitBlock.y -ne [int]$before.hitBlock.y -or `
+				[int]$afterHold.hitBlock.z -ne [int]$before.hitBlock.z))
+	Add-Check $Result 'the held attack destroyed the targeted blocks (crosshair target changed)' $targetGone `
+		("hitType {0} -> {1}, y {2} -> {3} onGround={4}" -f `
+			$before.hitType, $afterHold.hitType, $before.pos.y, $afterHold.pos.y, $afterHold.onGround)
+	$witness = (Invoke-TestCmd $portB (New-ObserveCmd 's9-witness' $nickA)).result
+	Add-Check $Result 'B observed A after the break' ($witness.found -eq $true) `
+		("pose={0} pos=({1},{2},{3})" -f $witness.pose, $witness.pos.x, $witness.pos.y, $witness.pos.z)
+
+	$script:s7Facts.Add(("S9 creative crosshair: hitType={0} block=({1},{2},{3})" -f `
+			$before.hitType, $before.hitBlock.x, $before.hitBlock.y, $before.hitBlock.z))
+	$script:s7Facts.Add(("S9 after the hold: hitType={0} y {1} -> {2}" -f `
+			$afterHold.hitType, $before.pos.y, $afterHold.pos.y))
+
+	$null = Invoke-TestCmd $portA (New-SessionCmd 's9-off' 'disconnect')
+	$null = Invoke-TestCmd $portB (New-SessionCmd 's9-offb' 'disconnect')
+	Start-Sleep -Seconds 3
+}
+
 $scenarioDir = Join-Path $here 'scenarios'
 $allResults = @()
 try {
@@ -1200,6 +1392,8 @@ try {
 			's5' { Invoke-S5 $cfg $result }
 			's6' { Invoke-S6 $cfg $result }
 			's7' { Invoke-S7 $cfg $result }
+			's8' { Invoke-S8 $cfg $result }
+			's9' { Invoke-S9 $cfg $result }
 			default { throw "unknown scenario '$($cfg.id)'" }
 		}
 		Stop-ClientByName $cfg.playerA

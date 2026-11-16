@@ -1,0 +1,12 @@
+{
+  "id": "s9",
+  "title": "creative: instant block break, packets on both sides",
+  "playerA": "Alice",
+  "playerB": "Bob",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "lookDown": { "dx": 0, "dy": 400 },
+  "attackHoldMs": 900,
+  "settleMs": 700,
+  "notes": "A is put into creative by RCON, looks ~60 degrees down (dy mouse deltas) so the crosshair sits on a block, taps a movement key to flush the angles, taps attack once (known to send nothing on vanilla - recorded as a fact), then holds attack for attackHoldMs. Vanilla destroys each targeted block instantly per player_action(start). Vanilla runs 2026-11-16_0918/_0932: the spawn-pad ray reaches a dark-oak-leaf dip beside the pad, so A does not fall; the check is the crosshair losing its target. A and B traces are both kept: serverbound player_action/punch from A, clientbound block_update/block_changed_ack to A and level_event(2001)/swing_animation to B - no block_destruction, no sound in creative. Vanilla only (RCON gamemode)."
+}

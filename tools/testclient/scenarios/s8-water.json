@@ -1,0 +1,13 @@
+{
+  "id": "s8",
+  "title": "water: sprint on land, teleport into the water column, swim, exit",
+  "playerA": "Alice",
+  "playerB": "Bob",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "sprintMs": 3000,
+  "swimMs": 3000,
+  "settleMs": 700,
+  "water": { "x": 106.5, "y": 41.0, "z": -30.5 },
+  "notes": "A sprints forward on land for sprintMs, is teleported by RCON into the water column at (106.5,41,-30.5) (runbook: water y 37..41, chunk (6,-2)), swims forward+sprint for swimMs, releases, is teleported back to the recorded start position and disconnects. B observes A and its clientbound trace is the data: flags/pose metadata, water_movement_efficiency, level_event/sound near the water. Vanilla only (RCON teleport)."
+}
