@@ -13,6 +13,9 @@
 # of the user's own game installation (see server.example.toml).
 /server.toml
 
+# Console copies written by tools/run-server-logged.bat.
+/logs/
+
 # Local knowledge graph built by graphify (rebuilt by the git hook).
 /graphify-out/
 

@@ -37,4 +37,5 @@ echo Starting the MineRust server (release build) ...
 cargo run -p server --release
 echo.
 echo The MineRust server has stopped.
+echo Tip: tools\run-server-logged.bat keeps this console in logs\server-*.log.
 pause
