@@ -974,6 +974,60 @@ impl BlockUpdate {
     }
 }
 
+/// Clientbound Block Destruction: the crack stage of a block being dug (play
+/// id 0x05).
+///
+/// SOURCE: five vanilla traces of 2026-11-14 (`docs/BLOCK-BREAKING.md` §1.3).
+/// The payload is `entityId varint + packed pos (8 B) + stage u8`. The stage
+/// is `floor(progress·10)` **without clamping** — the traces carry 10, 11 and
+/// 13 for leaves — and [`BlockDestruction::RESET`] (`0xFF`) clears the cracks
+/// when the dig stops, on completion and on an abort. The packet reaches the
+/// observers of the dig, never the digger (who draws its own prediction).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockDestruction {
+    /// Entity id of the digging player.
+    pub entity_id: i32,
+    /// Block being dug.
+    pub position: Position,
+    /// Crack stage byte, or [`BlockDestruction::RESET`].
+    pub stage: u8,
+}
+
+impl BlockDestruction {
+    /// Packet id of Block Destruction (play state, clientbound).
+    pub const ID: u32 = 0x05;
+
+    /// Key that resolves the Block Destruction id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::clientbound(ProtocolState::Play, "minecraft:block_destruction", Self::ID);
+
+    /// Stage byte that removes the cracks (traced on completion and abort).
+    pub const RESET: u8 = 0xFF;
+
+    /// Encodes the payload (packet id excluded).
+    pub fn encode_payload(&self) -> Vec<u8> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.entity_id);
+        writer.write_position(self.position);
+        writer.write_u8(self.stage);
+        writer.into_bytes()
+    }
+
+    /// Decodes the payload; the packet id must already be consumed.
+    pub fn decode_payload(reader: &mut PacketReader<'_>) -> Result<Self, CodecError> {
+        Ok(Self {
+            entity_id: reader.read_varint()?,
+            position: reader.read_position()?,
+            stage: reader.read_u8()?,
+        })
+    }
+
+    /// Encodes the packet as a complete frame.
+    pub fn to_frame(&self) -> Result<Vec<u8>, CodecError> {
+        encode_frame(Self::ID, &self.encode_payload())
+    }
+}
+
 /// Clientbound Block Changed Ack: echoes the sequence of a `player_action`
 /// (play id 0x04).
 ///
@@ -1531,6 +1585,73 @@ mod tests {
                 BlockChangedAck::decode_payload,
             );
         }
+    }
+
+    /// The `block_destruction` payloads of the 2026-11-14 traces: the entity
+    /// id varint, the packed position and the stage byte, straight from the
+    /// proxy capture (`docs/BLOCK-BREAKING.md` §1.3). `0xFF` is the reset;
+    /// stage `00` starts a slow block (stone/dirt), stage `01` a fast one
+    /// (leaves), and the packet id itself is 5 (`packets.json`).
+    #[test]
+    fn block_destruction_roundtrips_the_traced_stages() {
+        let cases = [
+            (
+                51,
+                Position {
+                    x: 97,
+                    y: 144,
+                    z: -34,
+                },
+                0x01,
+                "330000187ffffde09001",
+            ),
+            (
+                826,
+                Position {
+                    x: 97,
+                    y: 141,
+                    z: -22,
+                },
+                0x01,
+                "ba060000187ffffea08d01",
+            ),
+            (
+                1069,
+                Position {
+                    x: 95,
+                    y: 127,
+                    z: -22,
+                },
+                0x00,
+                "ad08000017fffffea07f00",
+            ),
+            (
+                1034,
+                Position {
+                    x: 93,
+                    y: 123,
+                    z: -22,
+                },
+                0x00,
+                "8a080000177ffffea07b00",
+            ),
+        ];
+        for (entity_id, position, stage, raw) in cases {
+            crate::packets::test_support::check(
+                BlockDestruction {
+                    entity_id,
+                    position,
+                    stage,
+                },
+                raw,
+                |packet| Ok(packet.encode_payload()),
+                BlockDestruction::decode_payload,
+            );
+        }
+        // The reset byte and the id are the ones the traces and the packet
+        // report carry.
+        assert_eq!(BlockDestruction::RESET, 0xFF, "0xFF clears the cracks");
+        assert_eq!(BlockDestruction::ID, 0x05, "block_destruction is id 5");
     }
 
     /// The block-break `level_event` the S3 observer received after the

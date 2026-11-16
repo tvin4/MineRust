@@ -46,11 +46,11 @@ pub use login::{
 };
 pub use movement::{MoveEntityPos, MoveEntityPosRot, MoveEntityRot, MoveHeader, RotateHead};
 pub use play::{
-    hashed_seed, BlockChangedAck, BlockUpdate, ConfirmTeleportation, DeathLocation,
-    ForgetLevelChunk, GameEvent, KeepAlive, LevelEvent, LoginPlay, PlayerAction, PlayerCommand,
-    PlayerInfoEntry, PlayerInfoUpdate, PlayerInput, Punch, SetCenterChunk, SetDefaultSpawnPosition,
-    SynchronizePlayerPosition, MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT,
-    MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
+    hashed_seed, BlockChangedAck, BlockDestruction, BlockUpdate, ConfirmTeleportation,
+    DeathLocation, ForgetLevelChunk, GameEvent, KeepAlive, LevelEvent, LoginPlay, PlayerAction,
+    PlayerCommand, PlayerInfoEntry, PlayerInfoUpdate, PlayerInput, Punch, SetCenterChunk,
+    SetDefaultSpawnPosition, SynchronizePlayerPosition, MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT,
+    MOVE_PLAYER_ROT, MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
 };
 pub use status::{PingRequest, PongResponse, StatusRequest, StatusResponse};
 
@@ -109,6 +109,7 @@ pub fn used_packet_keys() -> &'static [PacketKey] {
         ChunkBatchFinished::KEY,
         BlockUpdate::KEY,
         BlockChangedAck::KEY,
+        BlockDestruction::KEY,
         LevelEvent::KEY,
         // play, clientbound entity stream (M4.5)
         AddEntity::KEY,
