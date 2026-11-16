@@ -3,7 +3,7 @@
 Полный план: `ARCHITECTURE.md` (раздел 8 — этапы M0–M10).
 Правила для агента: `AGENTS.md`.
 
-**Текущий этап: M4.5, Шаг 14 (серверное ломание блока и плавание).** Закрыты 13a–13c (ломание блока: `ChunkStore`, survival/creative, `level_event` 2001), 14b (автоочистка `world.stale`) и 14d (плавание: water state у ног → pose/flags наблюдателям). Ручная проверка владельца подтвердила A, B, C; D (плавание) и ломание реализованы на сервере. Реестр — `docs/MECHANICS.md`, планы — `docs/BLOCK-BREAKING.md` и `docs/SWIMMING.md`. Исторические результаты M0–M3 описаны ниже.
+**Текущий этап: M4.5, Шаг 14 (серверное ломание блока и плавание).** Закрыты 13a–13c (ломание блока: `ChunkStore`, survival/creative, `level_event` 2001), 14b (автоочистка `world.stale`), 14d (плавание: water state у ног → pose/flags наблюдателям) и 14e (правило плавания выведено из ванильного S10-прогона по 16 геометриям, oracle 97.1 %, вода у ног — по высоте жидкости). Ручная проверка владельца подтвердила A, B, C; D (плавание) и ломание реализованы на сервере, ползание остаётся неустановленным. Реестр — `docs/MECHANICS.md`, планы — `docs/BLOCK-BREAKING.md` и `docs/SWIMMING.md`. Исторические результаты M0–M3 описаны ниже.
 
 Историческая запись M3/Шаг 3.3: коммиты `504de49..192a806` закрыли owner 6-point checklist (live-vs-vanilla отчёт, chunk-diff матрица, причина block entities (7,−2) в `docs/DECISIONS.md`, flake guard и SOURCES/PROGRESS); live проверка 08.11.2026 подтвердила M1/M2/3.3 настоящим клиентом 26.3. Следующий этап M4 был затем принят и выполнен; движок света оставался вне scope этого исторического шага.
 
@@ -2157,6 +2157,57 @@ floor(y), floor(z)` по общему снимку перед visibility pass),
 - **Не реализовано (явно):** таймер воздуха и урон, подводность глаз,
   `oxygen_bonus`/`water_movement_efficiency`, всплытие прыжком, звуки/частицы
   всплесков, ползание.
+
+## Шаг 14e: правило плавания из ванильного S10-прогона (16.11.2026)
+
+Black-box вывод правила позы/flags по ванильным трейсам; чужой код не читался.
+Стенд и разбор: `tools/testclient/scenarios/s10-swimcrawl.json`,
+`tools/trace-analyze/s10-swim-table.py`, `tools/trace-analyze/s10-rule-search.py`.
+Трейс: `E:\MineRust-data\autotests\s10-vanilla-r3` (16 геометрий G1..G7, 47
+сэмплов на геометрию, 0 failed). Часы A/B сведены по строкам `recording ...
+proxy-conn-N.jsonl` в `mcproxy-err.log` (сдвиг B→A = +35944.8 мс).
+
+- **Таблица решений (по r3).** По воде у ног, битам `player_input` (sprint,
+  sneak) и метаданным, которые получил B: `swim = feet_in_water ∧ sprint`;
+  `flags = sneak?0x02 | sprint?0x08 | swim?0x10`; `pose = swim?3 : sneak?5 : 0`.
+  Бит `SWIMMING` «липкий» на одно событие (сетевой лаг на обоих фронтах).
+- **Вода у ног — по высоте жидкости, не по имени блока.**
+  `BlockStates::water_surface`: источник `minecraft:water` = `(8 − level)/9`,
+  waterlogged-блок и 5 растений (`seagrass`, `tall_seagrass`, `kelp`,
+  `kelp_plant`, `bubble_column`) = `8/9`; lava/воздух — не вода. Поэтому игрок,
+  стоящий **на** waterlogged-блоке, сухой, а стоящий **в** нём — мокрый (прежнее
+  правило 14d «блок у ног — `minecraft:water`» этого не различало).
+- **Oracle.** `crates/net/src/game/swim_tests.rs` прогоняет 68 записанных
+  flags-переходов через `is_swimming` + `state_flags`; фикстура
+  `crates/net/src/game/s10_fixture.rs` сгенерирована `s10-rule-search.py`.
+  Результат: **точно 50/68 (73.5 %), в пределах ±1 события 66/68 (97.1 %)**.
+  Два расхождения — транзиенты sprint-флага на телепорте (`G5-bubble-column`,
+  `G5-seagrass`): наш `0x08` против ванильного `0x00`. Три формы правила
+  (simple / eyes / hysteresis) дали одинаковые 66/68 — данные не различают,
+  оставлена простейшая.
+- Код: `crates/net/src/game/entities.rs` (`is_swimming`, `pose_of`),
+  `crates/net/src/game/scheduler.rs` (`update_swimming` — правило 14e вместо
+  временного гейта), `crates/net/src/store.rs` (`water_surface_at`,
+  `feet_in_water`), `crates/data/src/blocks.rs` (`WATER_PLANTS`,
+  `is_waterlogged`, `water_surface`).
+- **Не установлено:** подводность глаз (старт только с глазами под водой данными
+  r3 не различается — не реализована), ползание (туннели G7 дали только явный
+  sneak `0x02`/pose 5; автоматической позы ползания нет — нужен отдельный
+  ручной сценарий).
+- **Live S8 на нашем сервере** (`E:\MineRust-data\autotests\s8-ours-14e`,
+  `-OursSpawnOverride 106,41,-31`, 3/3 PASS): A входит в пруд (feet/head =
+  `minecraft:water`, `y=37`, стоит на дне), **в покое B видит `pose=STANDING`,
+  `isSwimming=false`**, затем A жмёт forward+sprint через KeyMapping и **B видит
+  `pose=SWIMMING`, `isSwimming=true`** (`pos` сместилась на z на 0.2). Прежний
+  чек 14d «в покое в воде B видит SWIMMING» заменён на эти два (он противоречил
+  правилу 14e). Полная сетка G1..G7 на нашем сервере не гонялась — предобпечённой
+  геометрии/`/fill` на нашем сервере нет (см. ниже).
+- **Gap (п.7):** полная сетка G1..G7 на нашем сервере **не гонялась**. Наш S10
+  (`-Target ours`) честно фиксирует «нет `/fill`» — построить 16 геометрий в
+  мире прогона нечем. Живой S8 использует один пруд из шаблона v3
+  (`-OursSpawnOverride 106,41,-31`). Чтобы прогнать сетку, нужен либо готовый
+  мир с геометрией (NBT-копия или будущий `ChunkStore`-API), либо dev-команда
+  установки блоков; шаблон v3 при этом не трогается. Оставлено как долг.
 
 ## Остаточные факты и блокеры
 

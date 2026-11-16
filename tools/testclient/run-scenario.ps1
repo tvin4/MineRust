@@ -1269,14 +1269,32 @@ function Invoke-S8 {
 			("feet={0} head={1} pose={2} onGround={3} y={4}" -f `
 				$wet.feetBlock.id, $wet.headBlock.id, $wet.pose, $wet.onGround, $wet.pos.y)
 
+		# At rest in water the Шаг 14e rule says A is NOT swimming: the bit
+		# follows `feet_in_water && sprint`, so a still player reports the
+		# standing pose with no 0x10 bit. This is the check the old 14d run
+		# got wrong (it expected SWIMMING at rest).
+		$rest = (Invoke-TestCmd $portB (New-ObserveCmd 's8-rest' $nickA)).result
+		Add-Check $Result 'B sees A NOT swimming at rest in water (sprint required)' `
+			($null -ne $rest -and $rest.pose -ne 'SWIMMING' -and -not $rest.isSwimming) `
+			("pose={0} isSwimming={1} isSprinting={2} pos=({3},{4},{5})" -f `
+				$rest.pose, $rest.isSwimming, $rest.isSprinting, $rest.pos.x, $rest.pos.y, $rest.pos.z)
+
+		# Now A holds forward + sprint through KeyMapping; B must see A swimming.
+		$null = Invoke-TestCmd $portA (New-KeyCmd 's8-swim-forward' 'up' 'down')
+		$null = Invoke-TestCmd $portA (New-KeyCmd 's8-swim-sprint' 'sprint' 'down')
+		Start-Sleep -Milliseconds ([int]$Cfg.swimMs)
 		$swim = (Invoke-TestCmd $portB (New-ObserveCmd 's8-swim' $nickA)).result
-		Add-Check $Result 'B sees A swimming (pose SWIMMING) via the spawn override' ($swim.pose -eq 'SWIMMING') `
-			("pose={0} isSprinting={1} pos=({2},{3},{4})" -f `
-				$swim.pose, $swim.isSprinting, $swim.pos.x, $swim.pos.y, $swim.pos.z)
+		Add-Check $Result 'B sees A swimming (pose SWIMMING) when sprinting in water' `
+			($swim.pose -eq 'SWIMMING' -and $swim.isSwimming) `
+			("pose={0} isSwimming={1} isSprinting={2} pos=({3},{4},{5})" -f `
+				$swim.pose, $swim.isSwimming, $swim.isSprinting, $swim.pos.x, $swim.pos.y, $swim.pos.z)
+		$null = Invoke-TestCmd $portA (New-KeyCmd 's8-swim-forward-off' 'up' 'up')
+		$null = Invoke-TestCmd $portA (New-KeyCmd 's8-swim-sprint-off' 'sprint' 'up')
 
 		$script:s7Facts.Add(("S8 ours in water: feet={0} head={1} pose={2} y={3}" -f `
 				$wet.feetBlock.id, $wet.headBlock.id, $wet.pose, $wet.pos.y))
-		$script:s7Facts.Add(("S8 ours observed by B: pose={0} isSprinting={1}" -f $swim.pose, $swim.isSprinting))
+		$script:s7Facts.Add(("S8 ours observed by B at rest: pose={0} isSwimming={1}" -f $rest.pose, $rest.isSwimming))
+		$script:s7Facts.Add(("S8 ours observed by B sprinting: pose={0} isSwimming={1}" -f $swim.pose, $swim.isSwimming))
 
 		$null = Invoke-TestCmd $portA (New-SessionCmd 's8-off' 'disconnect')
 		$null = Invoke-TestCmd $portB (New-SessionCmd 's8-offb' 'disconnect')
