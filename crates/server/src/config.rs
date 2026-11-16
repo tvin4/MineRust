@@ -145,6 +145,18 @@ pub struct ServerConfig {
     /// `docs/DECISIONS.md`): M4.6 decides the side.
     #[serde(default)]
     pub region_side: i32,
+    /// Raise the tick thread's priority one step above normal (A3/D7).
+    ///
+    /// Windows only: `SetThreadPriority` with `THREAD_PRIORITY_ABOVE_NORMAL`;
+    /// other platforms ignore it. The A3 A/B series measured it under CPU
+    /// contention (100 bots + 8 busy threads): the late-tick count dropped
+    /// from 27/4/10 to 1/0/0 while the tick's own p50/p99 did not change — the
+    /// flag only helps the OS schedule the tick's wake-ups, which is what the
+    /// live `tick woke late` batches need (see `docs/DECISIONS.md` D7). Absent
+    /// means `false` (the benchmarked default); turn it on when the server
+    /// shares its machine with other heavy processes.
+    #[serde(default)]
+    pub tick_thread_priority: bool,
     /// Game mode every new player joins in (Шаг 14c): `0` survival (the
     /// default, the pre-14c behaviour), `1` creative, `2` adventure,
     /// `3` spectator. Absent means survival. There is no in-game mode switch
@@ -417,6 +429,17 @@ simulation_distance = 4
         let text = example_toml() + "region_side = 64\n";
         let config: ServerConfig = toml::from_str(&text).expect("valid toml");
         assert_eq!(config.region_side, 64);
+        config.validate().expect("valid");
+    }
+
+    #[test]
+    fn tick_thread_priority_defaults_off_and_parses_an_override() {
+        let config: ServerConfig = toml::from_str(&example_toml()).expect("valid toml");
+        assert!(!config.tick_thread_priority, "absent means the default off");
+
+        let text = example_toml() + "tick_thread_priority = true\n";
+        let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+        assert!(config.tick_thread_priority, "the flag is parsed");
         config.validate().expect("valid");
     }
 

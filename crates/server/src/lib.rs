@@ -291,6 +291,7 @@ pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> Result<(), R
     let game_config = net::game::GameConfig {
         workers: config.workers,
         region_side: config.region_side,
+        tick_thread_priority: config.tick_thread_priority,
         store,
         default_game_mode: config.game_mode,
         ..net::game::GameConfig::default()
@@ -392,6 +393,7 @@ mod tests {
             simulation_distance: config::DEFAULT_DISTANCES,
             workers: 0,
             region_side: 0,
+            tick_thread_priority: false,
             game_mode: 0,
             spawn_override: None,
             dev_geometry: None,

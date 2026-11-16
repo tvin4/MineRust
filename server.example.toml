@@ -32,6 +32,15 @@ simulation_distance = 10
 # the region grid.
 # region_side = 0
 
+# Raise the tick thread's priority one step above normal (A3/D7; Windows only,
+# other platforms ignore it). Off by default. Turn it on when the server
+# shares its machine with other heavy processes: the A3 A/B series measured
+# the late-tick count drop from 27/4/10 to 1/0/0 under CPU contention, while
+# the tick's own cost did not change. It only helps the OS wake the tick on
+# time (the `tick woke late` warnings), so enable it if you see batches of
+# those. See docs/DECISIONS.md D7.
+# tick_thread_priority = true
+
 # Path to the client jar of your game installation.
 client_jar = "path/to/client.jar"
 
