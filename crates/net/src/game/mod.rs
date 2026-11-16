@@ -26,6 +26,8 @@ mod scheduler;
 #[cfg(test)]
 mod block_action_tests;
 #[cfg(test)]
+mod dig_oracle_tests;
+#[cfg(test)]
 mod entities_equivalence_tests;
 #[cfg(test)]
 mod entities_reference;
