@@ -88,6 +88,13 @@ final class ObserveCommand {
 		out.addProperty("pose", target.getPose().name());
 		out.addProperty("isCrouching", target.isCrouching());
 		out.addProperty("isSprinting", target.isSprinting());
+		// Water/swim facts the observer's client derived for the remote player
+		// (Шаг 14e): the client keeps the synced swimming flag and pose, so B
+		// reports what an actual vanilla client would show, not our rule.
+		out.addProperty("isInWater", target.isInWater());
+		out.addProperty("isUnderWater", target.isUnderWater());
+		out.addProperty("isSwimming", target.isSwimming());
+		out.addProperty("isVisuallySwimming", target.isVisuallySwimming());
 		return out;
 	}
 
@@ -99,6 +106,20 @@ final class ObserveCommand {
 		block.addProperty("solid", state.isSolid());
 		block.addProperty("collisionShapeFullBlock", state.isCollisionShapeFullBlock(player.level(), pos));
 		block.addProperty("collisionShapeEmpty", state.getCollisionShape(player.level(), pos).isEmpty());
+		// Fluid view of the same block (Шаг 14e): the swimming rule needs the
+		// fluid, not just the block. Public BlockState/FluidState signatures;
+		// `waterlogged` is read straight off the state's own property values,
+		// no Minecraft internals.
+		var fluid = state.getFluidState();
+		block.addProperty("fluid", net.minecraft.core.registries.BuiltInRegistries.FLUID.getKey(fluid.getType()).toString());
+		block.addProperty("fluidEmpty", fluid.isEmpty());
+		block.addProperty("fluidSource", fluid.isSource());
+		block.addProperty("fluidFull", fluid.isFull());
+		block.addProperty("fluidAmount", fluid.getAmount());
+		block.addProperty("fluidHeight", fluid.getOwnHeight());
+		boolean waterlogged = state.getValues().anyMatch(value ->
+				"waterlogged".equals(value.property().getName()) && "true".equals(value.valueName()));
+		block.addProperty("waterlogged", waterlogged);
 		return block;
 	}
 
@@ -127,6 +148,15 @@ final class ObserveCommand {
 		out.addProperty("sprinting", player.isSprinting());
 		out.addProperty("pose", player.getPose().name());
 		out.addProperty("isCrouching", player.isCrouching());
+		// Water/swim facts (Шаг 14e), public Entity/Player signatures; reference
+		// labels only - the rule itself comes from the vanilla traces.
+		out.addProperty("isInWater", player.isInWater());
+		out.addProperty("isUnderWater", player.isUnderWater());
+		out.addProperty("isSwimming", player.isSwimming());
+		out.addProperty("isVisuallySwimming", player.isVisuallySwimming());
+		out.addProperty("eyeHeight", player.getEyeHeight());
+		out.addProperty("eyeY", player.getEyeY());
+		out.add("eyeBlock", blockSnapshot(player, BlockPos.containing(player.getX(), player.getEyeY(), player.getZ())));
 		out.addProperty("loadedChunks", minecraft.level.getChunkSource().getLoadedChunksCount());
 		out.add("feetBlock", blockSnapshot(player, player.blockPosition()));
 		out.add("headBlock", blockSnapshot(player, player.blockPosition().above(1)));

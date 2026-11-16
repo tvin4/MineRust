@@ -1,0 +1,63 @@
+{
+  "id": "s10",
+  "title": "swimming and crawling decision data: geometries G1..G7 (Шаг 14e)",
+  "playerA": "Alice",
+  "playerB": "Bob",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "settleMs": 700,
+  "sampleEveryMs": 250,
+  "baseY": 200,
+  "forceload": [80, -50, 130, -10],
+  "platform": [
+    "fill 80 199 -50 130 200 -10 minecraft:stone"
+  ],
+  "geometryRow": {
+    "xs": [88, 100, 112, 124],
+    "zs": [-44, -34, -24, -14]
+  },
+  "geometries": [
+    { "slot": 0, "name": "G1-pool-d1", "kind": "pool", "depth": 1, "enterFromTop": true, "program": "water" },
+    { "slot": 1, "name": "G2-pool-d2", "kind": "pool", "depth": 2, "enterFromTop": true, "program": "water" },
+    { "slot": 2, "name": "G3-pool-d3", "kind": "pool", "depth": 3, "enterFromTop": true, "program": "water" },
+    { "slot": 3, "name": "G6-pool-d4", "kind": "pool", "depth": 4, "enterFromTop": true, "program": "water" },
+    { "slot": 4, "name": "G4-wl-slab-bottom", "kind": "waterlogged", "at": "floor", "block": "minecraft:stone_slab[type=bottom,waterlogged=true]", "program": "water" },
+    { "slot": 5, "name": "G4-wl-slab-top", "kind": "waterlogged", "at": "floor", "block": "minecraft:stone_slab[type=top,waterlogged=true]", "program": "water" },
+    { "slot": 6, "name": "G4-wl-stairs", "kind": "waterlogged", "at": "floor", "block": "minecraft:oak_stairs[waterlogged=true]", "program": "water" },
+    { "slot": 7, "name": "G4-wl-fence", "kind": "waterlogged", "at": "floor", "block": "minecraft:oak_fence[waterlogged=true]", "program": "water" },
+    { "slot": 8, "name": "G4-wl-sign", "kind": "waterlogged", "at": "feet", "block": "minecraft:oak_sign[rotation=0,waterlogged=true]", "program": "water" },
+    { "slot": 9, "name": "G5-bubble-column", "kind": "plant", "block": "minecraft:bubble_column[drag=true]", "program": "water" },
+    { "slot": 10, "name": "G5-seagrass", "kind": "plant", "block": "minecraft:seagrass", "program": "water" },
+    { "slot": 11, "name": "G5-tall-seagrass", "kind": "plant", "block": "minecraft:tall_seagrass[half=lower]", "block2": "minecraft:tall_seagrass[half=upper]", "program": "water" },
+    { "slot": 12, "name": "G5-kelp-plant", "kind": "plant", "block": "minecraft:kelp_plant", "program": "water" },
+    { "slot": 13, "name": "G5-kelp", "kind": "plant", "block": "minecraft:kelp[age=0]", "program": "water" },
+    { "slot": 14, "name": "G7-tunnel-1", "kind": "tunnel", "roof": "minecraft:stone", "program": "crawl" },
+    { "slot": 15, "name": "G7-crouch-15", "kind": "tunnel", "roof": "minecraft:stone_slab[type=top]", "program": "crawl" }
+  ],
+  "programs": {
+    "water": [
+      { "phase": "settle", "ms": 1500 },
+      { "phase": "walk", "key": "up", "action": "down", "ms": 900 },
+      { "phase": "walk-stop", "key": "up", "action": "up", "ms": 700 },
+      { "phase": "walk-back", "key": "down", "action": "down", "ms": 900 },
+      { "phase": "walk-back-stop", "key": "down", "action": "up", "ms": 700 },
+      { "phase": "sprint-hold", "key": "sprint", "action": "down", "ms": 300 },
+      { "phase": "sprint-run", "key": "up", "action": "down", "ms": 1200 },
+      { "phase": "sprint-slack", "key": "sprint", "action": "up", "ms": 600 },
+      { "phase": "sprint-run-stop", "key": "up", "action": "up", "ms": 700 },
+      { "phase": "crouch", "key": "shift", "action": "down", "ms": 1400 },
+      { "phase": "crouch-stop", "key": "shift", "action": "up", "ms": 700 },
+      { "phase": "jump", "key": "jump", "action": "tap", "ms": 1200 }
+    ],
+    "crawl": [
+      { "phase": "settle", "ms": 1200 },
+      { "phase": "walk-in", "key": "up", "action": "down", "ms": 2500 },
+      { "phase": "walk-in-stop", "key": "up", "action": "up", "ms": 1000 },
+      { "phase": "crouch", "key": "shift", "action": "down", "ms": 1200 },
+      { "phase": "crouch-stop", "key": "shift", "action": "up", "ms": 800 },
+      { "phase": "walk-out", "key": "down", "action": "down", "ms": 2500 },
+      { "phase": "walk-out-stop", "key": "down", "action": "up", "ms": 1000 }
+    ]
+  },
+  "notes": "Vanilla: geometry is built with /fill and /setblock over the server stdin AFTER a client joins (before that the server answers 'That position is not loaded'), the exact commands land in s10-samples.json. forceload keeps the build area resident. A is teleported (RCON) into each geometry and replays a fixed input program through the client key path; samples of A (self) and B (remote) are reference labels, the byte truth stays in the mcproxy traces. Pools enter from the top (a fall into the water). Ours: no /fill, the same commands must be pre-baked into the run world (see Invoke-S10); with -OursSpawnOverride the joining player is placed at a geometry stand point. slot indexes the geometryRow grid (xs by zs)."
+}

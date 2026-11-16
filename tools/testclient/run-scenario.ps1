@@ -1489,6 +1489,244 @@ function Invoke-S9 {
 	Start-Sleep -Seconds 3
 }
 
+# --- S10: swimming/crawling decision data (Шаг 14e) -------------------------
+# Builds small geometries in the air above spawn and replays a fixed input
+# program in each, sampling A (self labels) and B (remote labels) as reference
+# facts. The byte-level truth stays in the mcproxy traces; the samples and the
+# exact build commands go to <runDir>\s10-samples.json. This function only
+# contributes facts: the decision table is derived from the traces, not here.
+
+# Builds the console commands for one geometry and the A stand point.
+function Get-S10Build {
+	param($Geo, [int]$BaseY, [int]$X, [int]$Z)
+	$cx = $X
+	$cz = $Z
+	$commands = New-Object System.Collections.Generic.List[string]
+	$standX = [double]$cx + 0.5
+	$standY = [double]($BaseY + 1)
+	$standZ = [double]$cz + 0.5
+	$yaw = 0.0
+	# The y of the "enter from above" teleport: above the water surface, never
+	# inside it (a 4-deep pool otherwise starts the fall already submerged).
+	$dropY = $standY
+	switch ([string]$Geo.kind) {
+		'pool' {
+			$d = [int]$Geo.depth
+			# 9x9 stone platform, one-block stone walls, 7x7 water interior.
+			$commands.Add("fill $($cx - 4) $BaseY $($cz - 4) $($cx + 4) $BaseY $($cz + 4) minecraft:stone")
+			$commands.Add("fill $($cx - 4) $($BaseY + 1) $($cz - 4) $($cx + 4) $($BaseY + $d) $($cz + 4) minecraft:stone")
+			$commands.Add("fill $($cx - 3) $($BaseY + 1) $($cz - 3) $($cx + 3) $($BaseY + $d) $($cz + 3) minecraft:water")
+			$dropY = [double]($BaseY + $d + 2)
+		}
+		'waterlogged' {
+			$commands.Add("fill $($cx - 3) $BaseY $($cz - 3) $($cx + 3) $BaseY $($cz + 3) minecraft:stone")
+			$level = $BaseY
+			if ($Geo.at -eq 'feet') { $level = $BaseY + 1 }
+			$commands.Add("fill $($cx - 1) $level $($cz - 1) $($cx + 1) $level $($cz + 1) $([string]$Geo.block)")
+		}
+		'plant' {
+			$commands.Add("fill $($cx - 2) $BaseY $($cz - 2) $($cx + 2) $BaseY $($cz + 2) minecraft:sand")
+			$commands.Add("fill $($cx - 2) $($BaseY + 1) $($cz - 2) $($cx + 2) $($BaseY + 2) $($cz + 2) minecraft:stone")
+			$commands.Add("fill $($cx - 1) $($BaseY + 1) $($cz - 1) $($cx + 1) $($BaseY + 2) $($cz + 1) minecraft:water")
+			$commands.Add("setblock $cx $($BaseY + 1) $cz $([string]$Geo.block)")
+			if ($Geo.block2) { $commands.Add("setblock $cx $($BaseY + 2) $cz $([string]$Geo.block2)") }
+		}
+		'tunnel' {
+			# A long walkway with side walls, an open approach (no roof) and a
+			# roofed corridor the player walks into: x >= cx-2 is covered, so the
+			# player must lower the pose on the way in. The roof block decides
+			# the clearance: full stone = 1 block, top slab = 1.5 blocks.
+			$commands.Add("fill $($cx - 5) $BaseY $($cz - 1) $($cx + 3) $BaseY $($cz + 1) minecraft:stone")
+			$commands.Add("fill $($cx - 5) $($BaseY + 1) $($cz - 1) $($cx + 3) $($BaseY + 1) $($cz - 1) minecraft:stone")
+			$commands.Add("fill $($cx - 5) $($BaseY + 1) $($cz + 1) $($cx + 3) $($BaseY + 1) $($cz + 1) minecraft:stone")
+			$commands.Add("fill $($cx - 2) $($BaseY + 2) $($cz - 1) $($cx + 3) $($BaseY + 2) $($cz + 1) $([string]$Geo.roof)")
+			$commands.Add("fill $($cx + 3) $($BaseY + 1) $($cz - 1) $($cx + 3) $($BaseY + 2) $($cz + 1) minecraft:stone")
+			$standX = [double]($cx - 4) + 0.5
+			$yaw = -90.0
+		}
+		default { throw "unknown S10 geometry kind '$($Geo.kind)'" }
+	}
+	return [PSCustomObject]@{
+		name         = [string]$Geo.name
+		kind         = [string]$Geo.kind
+		program      = [string]$Geo.program
+		enterFromTop = [bool]$Geo.enterFromTop
+		dropY        = [double]$dropY
+		commands     = $commands
+		stand        = [PSCustomObject]@{ x = $standX; y = $standY; z = $standZ; yaw = $yaw; pitch = 0.0 }
+	}
+}
+
+function Invoke-S10 {
+	param($Cfg, $Result)
+	$portA = [int]$Cfg.controlPortA
+	$portB = [int]$Cfg.controlPortB
+	$nickA = [string]$Cfg.playerA
+	$nickB = [string]$Cfg.playerB
+	$baseY = [int]$Cfg.baseY
+	$xs = @($Cfg.geometryRow.xs)
+	$zs = @($Cfg.geometryRow.zs)
+	$sampleEvery = [int]$Cfg.sampleEveryMs
+	$inv = [System.Globalization.CultureInfo]::InvariantCulture
+	$script:s10Samples = New-Object System.Collections.ArrayList
+	$script:s10SampleIndex = 0
+
+	# Commands are generated once and kept in the artifact so the world edit is
+	# reproducible without reading this function.
+	$geometries = New-Object System.Collections.ArrayList
+	foreach ($geo in $Cfg.geometries) {
+		$slot = [int]$geo.slot
+		$col = $slot % $xs.Count
+		$row = [int][Math]::Floor($slot / $xs.Count)
+		$build = Get-S10Build $geo $baseY $xs[$col] $zs[$row]
+		$geometries.Add($build) | Out-Null
+	}
+	$allCommands = New-Object System.Collections.ArrayList
+	foreach ($cmd in @($Cfg.platform)) { $allCommands.Add([string]$cmd) | Out-Null }
+	foreach ($geo in $geometries) { foreach ($cmd in $geo.commands) { $allCommands.Add([string]$cmd) | Out-Null } }
+
+	$watermark = Get-Date
+	$launchA = Start-Client $nickA $portA $watermark
+	if (-not $launchA.uuid) { throw 'S10: could not resolve Alice offline UUID' }
+	$null = Start-Client $nickB $portB (Get-Date)
+	$observer = Wait-ObserverChunksStable $portB 30
+	$script:s7Facts.Add(("S10 B chunk drain: settled={0} loadedChunks={1}" -f $observer.settled, $observer.loadedChunks))
+
+	if (-not $isVanilla) {
+		# Our server has no /fill: the geometry must be pre-baked into the run
+		# world before start. Recorded as an honest gap, like S4/S9.
+		Add-Check $Result 'S10 geometry needs a pre-baked world on our server' $false `
+			'no /fill on our server; bake the s10-samples.json commands into the run world first and use -OursSpawnOverride (see docs/SWIMMING.md)'
+		$null = Invoke-TestCmd $portA (New-SessionCmd 's10-off' 'disconnect')
+		$null = Invoke-TestCmd $portB (New-SessionCmd 's10-offb' 'disconnect')
+		Start-Sleep -Seconds 3
+		return
+	}
+
+	# The build runs only after a client is connected: before that the server
+	# answers every /fill with "That position is not loaded" (first s10 run,
+	# 2026-11-16_1500) and the geometry never exists. forceload keeps the build
+	# area loaded while the commands run.
+	$fl = @($Cfg.forceload)
+	if ($fl.Count -eq 4) {
+		Invoke-VanillaConsole ("forceload add {0} {1} {2} {3}" -f $fl[0], $fl[1], $fl[2], $fl[3]) | Out-Null
+		Start-Sleep -Milliseconds 1000
+	}
+	foreach ($cmd in $allCommands) { Invoke-VanillaConsole $cmd | Out-Null }
+	Start-Sleep -Seconds 2
+
+	# Alice must survive the deep pools: in run r2 (2026-11-16_1526) she drowned
+	# in the 4-deep pool and the death screen froze every later teleport, so the
+	# second half of the run recorded no geometry at all. water_breathing takes
+	# drowning out of the picture and immediate respawn keeps a straggler death
+	# from stalling the loop. Neither changes the pose/flag behaviour under test.
+	Invoke-VanillaConsole ("effect give {0} minecraft:water_breathing infinite 0 true" -f $nickA) | Out-Null
+	Invoke-VanillaConsole 'gamerule doImmediateRespawn true' | Out-Null
+	Start-Sleep -Milliseconds 500
+
+	foreach ($geo in $geometries) {
+		$stand = $geo.stand
+		if ($geo.enterFromTop) {
+			# Entry from above: drop through the water surface before the stand
+			# teleport, so the first samples are the fall-in, not a placement.
+			# dropY stays above the surface: a 4-deep pool otherwise starts the
+			# fall already submerged (run r2, 2026-11-16_1526).
+			$drop = [string]::Format($inv, "tp {0} {1} {2} {3} {4} {5}", `
+					$nickA, $stand.x, $geo.dropY, $stand.z, $stand.yaw, $stand.pitch)
+			Invoke-StandRcon $drop | Out-Null
+			Start-Sleep -Milliseconds 1200
+		}
+		$tp = [string]::Format($inv, "tp {0} {1} {2} {3} {4} {5}", `
+				$nickA, $stand.x, $stand.y, $stand.z, $stand.yaw, $stand.pitch)
+		# The teleport goes through RCON (the path S8 proved); the client is then
+		# probed until it reports the stand point (a geometry with no floor makes
+		# the player fall, and that must be visible as a failed check).
+		Invoke-StandRcon $tp | Out-Null
+		$tpOk = $false
+		$probe = $null
+		$tpDeadline = (Get-Date).AddSeconds(6)
+		while ((Get-Date) -lt $tpDeadline) {
+			Start-Sleep -Milliseconds 200
+			$probe = (Invoke-TestCmd $portA (New-ObserveCmd "s10-$($geo.name)-tp-probe")).result
+			if ($null -eq $probe -or $null -eq $probe.pos) { continue }
+			$dxz = [Math]::Sqrt([Math]::Pow($probe.pos.x - $stand.x, 2) + [Math]::Pow($probe.pos.z - $stand.z, 2))
+			$dy = [Math]::Abs($probe.pos.y - $stand.y)
+			if ($dxz -le 1.0 -and $dy -le 2.0) { $tpOk = $true; break }
+		}
+		if (-not $tpOk) {
+			$probeFact = if ($probe) { "({0},{1},{2})" -f $probe.pos.x, $probe.pos.y, $probe.pos.z } else { 'no observe' }
+			Add-Check $Result ("S10 {0}: A reached the stand point" -f $geo.name) $false `
+				("tp '$tp' did not apply; probe pos=$probeFact")
+			continue
+		}
+		Start-Sleep -Milliseconds ([int]$Cfg.settleMs)
+		$before = (Invoke-TestCmd $portA (New-ObserveCmd "s10-$($geo.name)-pre")).result
+		$script:s7Facts.Add(("S10 {0} stand: pos=({1},{2},{3}) feet={4} head={5} eye={6} inWater={7} pose={8}" -f `
+				$geo.name, $before.pos.x, $before.pos.y, $before.pos.z, `
+				$before.feetBlock.id, $before.headBlock.id, $before.eyeBlock.id, `
+				$before.isInWater, $before.pose))
+
+		foreach ($action in @($Cfg.programs.$($geo.program))) {
+			$id = "$($geo.name)-$($action.phase)"
+			if ($action.key) {
+				$null = Invoke-TestCmd $portA (New-KeyCmd $id ([string]$action.key) ([string]$action.action))
+			}
+			$remaining = [int]$action.ms
+			while ($remaining -gt 0) {
+				$slice = [Math]::Min($sampleEvery, $remaining)
+				Start-Sleep -Milliseconds $slice
+				$remaining -= $slice
+				$elapsed = [int]$action.ms - $remaining
+				$aResp = Invoke-TestCmd $portA (New-ObserveCmd "s10-a-$($script:s10SampleIndex)")
+				$bResp = Invoke-TestCmd $portB (New-ObserveCmd "s10-b-$($script:s10SampleIndex)" $nickA)
+				$script:s10SampleIndex++
+				$script:s10Samples.Add([PSCustomObject]@{
+						geometry  = [string]$geo.name
+						phase     = [string]$action.phase
+						elapsedMs = $elapsed
+						a         = $(if ($aResp.ok) { $aResp.result } else { $null })
+						b         = $(if ($bResp.ok) { $bResp.result } else { $null })
+					}) | Out-Null
+			}
+		}
+
+		# Per-geometry fact: the labels A and B reported across the program.
+		$rows = @($script:s10Samples | Where-Object { $_.geometry -eq $geo.name })
+		$aPoses = @($rows | ForEach-Object { $_.a.pose } | Sort-Object -Unique) -join ','
+		$aInWater = @($rows | Where-Object { $_.a.isInWater -eq $true }).Count
+		$bPoses = @($rows | ForEach-Object { $_.b.pose } | Sort-Object -Unique) -join ','
+		$bSwim = @($rows | Where-Object { $_.b.isSwimming -eq $true }).Count
+		Add-Check $Result ("S10 {0}: samples recorded" -f $geo.name) ($rows.Count -gt 0) `
+			("samples={0}; A poses=[{1}] A isInWater samples={2}; B poses=[{3}] B isSwimming samples={4}" -f `
+				$rows.Count, $aPoses, $aInWater, $bPoses, $bSwim)
+		# Release every key so the next geometry starts from a clean input state.
+		foreach ($key in @('up', 'down', 'left', 'right', 'jump', 'shift', 'sprint')) {
+			$null = Invoke-TestCmd $portA (New-KeyCmd "$($geo.name)-release-$key" $key 'up')
+		}
+	}
+
+	$artifact = [PSCustomObject]@{
+		target        = $Target
+		generated     = (Get-Date).ToString('s')
+		baseY         = $baseY
+		uuidA         = $launchA.uuid
+		nickA         = $nickA
+		nickB         = $nickB
+		platform      = @($Cfg.platform)
+		buildCommands = @($allCommands)
+		geometries    = @($geometries | ForEach-Object { [PSCustomObject]@{ name = $_.name; kind = $_.kind; program = $_.program; enterFromTop = $_.enterFromTop; dropY = $_.dropY; stand = $_.stand; commands = @($_.commands) } })
+		samples       = @($script:s10Samples)
+	}
+	$artifactPath = Join-Path $RunDir 's10-samples.json'
+	$artifact | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $artifactPath -Encoding utf8
+	$script:s7Facts.Add("S10 artifact: $artifactPath ($($script:s10Samples.Count) samples)")
+	Write-Host ("  [info] S10 artifact written: $artifactPath")
+
+	$null = Invoke-TestCmd $portA (New-SessionCmd 's10-off' 'disconnect')
+	$null = Invoke-TestCmd $portB (New-SessionCmd 's10-offb' 'disconnect')
+	Start-Sleep -Seconds 3
+}
+
 $scenarioDir = Join-Path $here 'scenarios'
 $allResults = @()
 try {
@@ -1524,6 +1762,7 @@ try {
 			's7' { Invoke-S7 $cfg $result }
 			's8' { Invoke-S8 $cfg $result }
 			's9' { Invoke-S9 $cfg $result }
+			's10' { Invoke-S10 $cfg $result }
 			default { throw "unknown scenario '$($cfg.id)'" }
 		}
 		Stop-ClientByName $cfg.playerA
