@@ -19,15 +19,17 @@ use crate::store::ChunkStore;
 
 use super::test_support::{join_at, join_at_mode};
 use super::{
-    block_action, BlockAction, PlayerId, Region, Replay, Scheduler, ServerMessage, ToGame,
-    SINGLE_REGION,
+    block_action, movement::MoveUpdate, BlockAction, PlayerId, Region, Replay, Scheduler,
+    ServerMessage, ToGame, SINGLE_REGION,
 };
 
-/// A block report with just air and stone, so the store can classify a write.
+/// A block report with just air, stone and water, so the store can classify a
+/// write and answer the steady-state water check.
 fn test_blocks() -> Arc<BlockStates> {
     let text = r#"{
       "minecraft:air": {"states": [{"id": 0, "default": true}]},
-      "minecraft:stone": {"states": [{"id": 1, "default": true}]}
+      "minecraft:stone": {"states": [{"id": 1, "default": true}]},
+      "minecraft:water": {"states": [{"id": 2, "default": true}]}
     }"#;
     Arc::new(BlockStates::parse(text, "test".to_owned()).expect("a valid report"))
 }
@@ -92,7 +94,28 @@ fn two_players_with_mode(
     let (join_b, _slot_b, receiver_b) = join_at(2, (0, 64, 0));
     scheduler.insert_player(join_a);
     scheduler.insert_player(join_b);
+    // The timer's steady-state gate reads the last movement packet: leave the
+    // digger standing on dry ground, exactly the traced dig condition.
+    set_digger_pose(&mut scheduler, 0.5, 64.0, 0.5, MoveUpdate::ON_GROUND);
     (scheduler, receiver_a, receiver_b)
+}
+
+/// Puts player 1 at `(x, y, z)` with the given movement flags — the state the
+/// steady-state gate in [`block_action::finish`] reads (`on_ground` bit and the
+/// store's fluid surface at the feet).
+fn set_digger_pose(scheduler: &mut Scheduler, x: f64, y: f64, z: f64, flags: u8) {
+    let player = scheduler
+        .region_mut(SINGLE_REGION)
+        .and_then(|region| region.get_mut(1))
+        .expect("the digger is in the region");
+    player.apply_move(&MoveUpdate {
+        x: Some(x),
+        y: Some(y),
+        z: Some(z),
+        yaw: None,
+        pitch: None,
+        flags,
+    });
 }
 
 /// The traced block of the S3 break.
@@ -743,7 +766,13 @@ fn a_quit_mid_dig_resets_the_cracks() {
         hardness: Some(hardness.clone()),
         ..super::GameConfig::default()
     };
-    super::apply(&mut scheduler, &mut replay, 0, ToGame::Quit { id: 1 }, &config);
+    super::apply(
+        &mut scheduler,
+        &mut replay,
+        0,
+        ToGame::Quit { id: 1 },
+        &config,
+    );
 
     expect_stage(&mut receiver_b, 1, traced_position(), 0xFF);
     assert!(
@@ -825,4 +854,149 @@ fn an_instant_block_breaks_without_a_timer() {
     expect_level_event(&mut receiver_b, traced_position(), 1);
     expect_block_update(&mut receiver_b, traced_position());
     assert_eq!(store.block(93, 123, -22), Some(0), "the block is gone");
+}
+
+// === Шаг 16a.4: the steady-state gate =====================================
+
+/// [`store_with_traced_chunk`] plus a chunk `(0, 0)` whose section slot 8
+/// (y 64...79) is water: the digger of [`two_players`] stands at y = 64 with
+/// its feet inside it.
+fn store_with_water_at_the_diggers_feet() -> Arc<ChunkStore> {
+    let mut chunk = solid_chunk(0, 0);
+    chunk.sections[8] = ChunkSection {
+        non_air: 4096,
+        fluid: 4096,
+        blocks: PaletteContainer::Single(2),
+        biomes: PaletteContainer::Single(1),
+    };
+    Arc::new(ChunkStore::new(
+        ReadyChunks::new(vec![chunk, solid_chunk(5, -2)]),
+        test_blocks(),
+    ))
+}
+
+/// A finish while the digger is airborne is trusted even with `tolerance = 0`:
+/// vanilla's client divides its own mining speed by five in the air, so the
+/// bare-hand ground timer cannot judge that dig. The stages still follow the
+/// ground cadence. [hypothesis: no airborne dig trace; plan §6 п.8 option (b),
+/// recorded as debt in `docs/BLOCK-BREAKING.md` §4.3]
+#[test]
+fn an_airborne_finish_is_trusted_and_breaks_the_block() {
+    let store = store_with_traced_chunk();
+    let hardness = test_hardness(2.0);
+    let (mut scheduler, mut receiver_a, mut receiver_b) = two_players();
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(0),
+        PlayerAction::ACTION_START,
+        1,
+    );
+    expect_ack(&mut receiver_a, 1);
+    assert_eq!(dig_tick(&mut scheduler, &mut receiver_b), vec![0]);
+
+    // The client jumped: its last movement packet says "not on the ground".
+    set_digger_pose(&mut scheduler, 0.5, 65.0, 0.5, 0);
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(0),
+        PlayerAction::ACTION_FINISH,
+        2,
+    );
+
+    expect_block_update(&mut receiver_a, traced_position());
+    expect_ack(&mut receiver_a, 2);
+    expect_stage(&mut receiver_b, 1, traced_position(), 0xFF);
+    expect_level_event(&mut receiver_b, traced_position(), 1);
+    expect_block_update(&mut receiver_b, traced_position());
+    assert_eq!(
+        store.block(93, 123, -22),
+        Some(0),
+        "an airborne finish is not rolled back even at tolerance 0"
+    );
+}
+
+/// A finish while the feet are in water is trusted the same way, and the
+/// on-ground bit alone does not hide it: the digger stands on the ground
+/// (`flags = ON_GROUND`) but the store says water at the feet, so the strict
+/// check is skipped. [hypothesis: no water dig trace; plan §6 п.8 option (b)]
+#[test]
+fn a_finish_with_the_feet_in_water_is_trusted() {
+    let store = store_with_water_at_the_diggers_feet();
+    let hardness = test_hardness(2.0);
+    let (mut scheduler, mut receiver_a, mut receiver_b) = two_players();
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(0),
+        PlayerAction::ACTION_START,
+        1,
+    );
+    expect_ack(&mut receiver_a, 1);
+    assert_eq!(dig_tick(&mut scheduler, &mut receiver_b), vec![0]);
+
+    // On the ground, but the feet cell is water (chunk (0, 0), section slot 8).
+    set_digger_pose(&mut scheduler, 0.5, 64.0, 0.5, MoveUpdate::ON_GROUND);
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(0),
+        PlayerAction::ACTION_FINISH,
+        2,
+    );
+
+    expect_block_update(&mut receiver_a, traced_position());
+    expect_ack(&mut receiver_a, 2);
+    expect_stage(&mut receiver_b, 1, traced_position(), 0xFF);
+    expect_level_event(&mut receiver_b, traced_position(), 1);
+    expect_block_update(&mut receiver_b, traced_position());
+    assert_eq!(
+        store.block(93, 123, -22),
+        Some(0),
+        "a water feet finish is not rolled back even at tolerance 0"
+    );
+}
+
+/// The gate's control case: the same pose without the water cell is steady, so
+/// the identical early finish is still refused — water is the only difference
+/// between the two tests. [hypothesis refusal, §4.2]
+#[test]
+fn the_same_pose_on_dry_ground_is_still_refused() {
+    let store = store_with_traced_chunk();
+    let hardness = test_hardness(2.0);
+    let (mut scheduler, mut receiver_a, mut receiver_b) = two_players();
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(0),
+        PlayerAction::ACTION_START,
+        1,
+    );
+    expect_ack(&mut receiver_a, 1);
+    assert_eq!(dig_tick(&mut scheduler, &mut receiver_b), vec![0]);
+
+    set_digger_pose(&mut scheduler, 0.5, 64.0, 0.5, MoveUpdate::ON_GROUND);
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(0),
+        PlayerAction::ACTION_FINISH,
+        2,
+    );
+
+    expect_block_state(&mut receiver_a, traced_position(), 1);
+    expect_ack(&mut receiver_a, 2);
+    expect_stage(&mut receiver_b, 1, traced_position(), 0xFF);
+    assert!(
+        receiver_b.try_recv().is_err(),
+        "a refused break never reaches the observer"
+    );
+    assert_eq!(store.block(93, 123, -22), Some(1), "the block stays");
 }

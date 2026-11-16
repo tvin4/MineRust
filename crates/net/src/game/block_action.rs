@@ -195,6 +195,14 @@ fn step_per_tick(store: &Arc<ChunkStore>, rules: DigRules<'_>, position: Positio
 ///   [`DigRules::tolerance_ticks`] before `1.0` (the soft tolerance of the
 ///   plan §6 п.8: the traces show progress 0.94…1.36 at the reset).
 ///
+/// The time check is skipped while the digger is in a state the bare-hand
+/// ground model does not describe — airborne or standing in water
+/// ([`steady_state`]): the vanilla client itself divides the mining speed by
+/// five there, so our `speed/hardness/30` step is up to five times too fast and
+/// a strict check would roll back a legitimate dig. Trusting the client in
+/// those states is the plan's option (b) and is recorded as debt — the stages
+/// we broadcast there still follow the ground cadence.
+///
 /// A finish for a block with no timed dig (no report, unknown state, instant
 /// block, or a different position) falls back to the pre-16a.3 trust path.
 fn finish(
@@ -227,8 +235,11 @@ fn finish(
     let dig = dig::take(scheduler, id);
     if let Some(dig) = dig {
         dig::reset(scheduler, id, dig.position);
+        // The client's own mining speed drops by a factor of five while it is
+        // airborne or in water, so the ground step cannot judge those digs.
+        let steady = steady_state(scheduler, id, store);
         let too_early = rules.tolerance_ticks.is_some_and(|tolerance| {
-            dig.position == position && dig.progress + tolerance as f32 * dig.step < 1.0
+            steady && dig.position == position && dig.progress + tolerance as f32 * dig.step < 1.0
         });
         if too_early {
             debug!(
@@ -268,6 +279,40 @@ fn finish(
             ack(scheduler, id, sequence);
         }
     }
+}
+
+/// Whether the digger is in the state the bare-hand ground model describes:
+/// on the ground and not standing in water.
+///
+/// Vanilla's `Player.getDestroySpeed` divides the mining speed by five while
+/// the player is airborne and again while it is in water, so a dig there takes
+/// up to `5 × 30·hardness` ticks. The five vanilla digs of 2026-11-14 are all
+/// on dry ground (`docs/BLOCK-BREAKING.md` §1.7), so no trace measures that
+/// penalty yet: until one does, the finish in those states is trusted and the
+/// time check is skipped (plan §6 п.8, option b) while the stages still follow
+/// the ground cadence. This is **debt**, not parity.
+///
+/// The state comes from the last movement packet the client sent
+/// ([`PlayerPos::on_ground`](super::region::PlayerPos::on_ground)) and the
+/// store's fluid surface at the feet ([`ChunkStore::feet_in_water`]) — the same
+/// pair the swimming gate uses. A player missing from the regions (already
+/// disconnected) counts as steady, so the check stays on; the dig is dropped
+/// with the player anyway.
+fn steady_state(scheduler: &Scheduler, id: PlayerId, store: &ChunkStore) -> bool {
+    let position = scheduler
+        .region_of(id)
+        .and_then(|region| scheduler.region(region))
+        .and_then(|region| region.get(id))
+        .map(|player| player.position());
+    let Some(position) = position else {
+        return true;
+    };
+    position.on_ground()
+        && !store.feet_in_water(
+            position.x.floor() as i32,
+            position.y,
+            position.z.floor() as i32,
+        )
 }
 
 /// Aborts the survival dig: clears the cracks and acknowledges.
