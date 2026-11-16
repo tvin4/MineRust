@@ -59,6 +59,21 @@ try {
 	if ($audit.files.Count -lt 1 -or $audit.files[0].sha256 -notmatch '^[A-F0-9]{64}$') { throw 'world audit is missing SHA-256 records' }
 	if ($audit.playerData.Count -ne 0 -or $audit.unexpectedPlayerData.Count -ne 0) { throw 'world audit reports unexpected playerdata after copy' }
 
+	# Stale-world pruning (keep the two newest): two more prepares must age
+	# out the first stale world (the one with the preserved alice.dat).
+	Start-Sleep -Milliseconds 5
+	Prepare-RunWorld
+	Start-Sleep -Milliseconds 5
+	Prepare-RunWorld
+	$staleAfter = @(Get-ChildItem -LiteralPath $vanilla -Directory -Filter 'world.stale-*')
+	if ($staleAfter.Count -ne 2) { throw ('stale worlds were not pruned to two, found: ' + $staleAfter.Count) }
+	$withAlice = @($staleAfter | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'players\data\alice.dat') })
+	if ($withAlice.Count -ne 0) { throw 'the oldest stale world survived pruning' }
+	if (@($staleAfter | Where-Object { -not (Test-Path -LiteralPath (Join-Path $_.FullName 'level.dat')) }).Count -ne 0) {
+		throw 'a kept stale world is missing its template copy'
+	}
+	if (-not (Test-Path -LiteralPath (Join-Path $template 'level.dat'))) { throw 'the source template was touched by pruning' }
+
 	$oursWorld = Join-Path $root 'world'
 	New-Item -ItemType Directory -Path (Join-Path $oursWorld 'players\data') -Force | Out-Null
 	Set-Content -LiteralPath (Join-Path $oursWorld 'level.dat') -Value 'old ours world'

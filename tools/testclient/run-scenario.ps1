@@ -115,6 +115,35 @@ function Assert-WorldPlayerData {
 	return $true
 }
 
+# Removes old world.stale-<timestamp> siblings of the active world, keeping
+# the newest $Keep. Path check before every delete: the leaf must match
+# '<active leaf>.stale-<yyyyMMdd-HHmmss-fff>', the resolved parent must be the
+# active world's parent, and the target must be neither the template nor the
+# active world itself.
+function Prune-StaleWorlds {
+	param([string]$ActiveWorldDir, [int]$Keep = 2)
+	$leaf = Split-Path -Leaf $ActiveWorldDir
+	$parent = (Resolve-Path -LiteralPath (Split-Path -Parent $ActiveWorldDir)).Path
+	$pattern = '^' + [regex]::Escape($leaf) + '\.stale-\d{8}-\d{6}-\d{3}$'
+	$stampPrefix = $leaf + '.stale-'
+	$stale = @(Get-ChildItem -LiteralPath $parent -Directory | Where-Object { $_.Name -match $pattern })
+	if ($stale.Count -le $Keep) { return }
+	$inv = [System.Globalization.CultureInfo]::InvariantCulture
+	$ordered = $stale | Sort-Object -Property @{ Expression = {
+		[datetime]::ParseExact($_.Name.Substring($stampPrefix.Length), 'yyyyMMdd-HHmmss-fff', $inv)
+	} } -Descending
+	foreach ($dir in ($ordered | Select-Object -Skip $Keep)) {
+		$full = (Resolve-Path -LiteralPath $dir.FullName).Path
+		if ((Split-Path -Leaf $full) -notmatch $pattern) {
+			throw "refusing to prune: stale world name does not match the pattern: $full"
+		}
+		if (-not $full.StartsWith($parent + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+			throw "refusing to prune: stale world escaped the world parent: $full"
+		}
+		Remove-Item -LiteralPath $full -Recurse -Force
+	}
+}
+
 function Prepare-RunWorld {
 	if (-not (Test-Path -LiteralPath $templateWorldDir -PathType Container)) {
 		throw "world template does not exist: $templateWorldDir"
@@ -133,6 +162,7 @@ function Prepare-RunWorld {
 		if (Test-Path -LiteralPath $staleDir) { throw "stale world destination already exists: $staleDir" }
 		Rename-Item -LiteralPath $script:activeWorldDir -NewName (Split-Path -Leaf $staleDir)
 	}
+	Prune-StaleWorlds -ActiveWorldDir $script:activeWorldDir -Keep 2
 	New-Item -ItemType Directory -Path $script:activeWorldDir | Out-Null
 	Get-ChildItem -LiteralPath $templateWorldDir -Force | Copy-Item -Destination $script:activeWorldDir -Recurse -Force
 
