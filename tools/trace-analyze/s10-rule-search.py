@@ -1,19 +1,30 @@
 #!/usr/bin/env python
-"""Шаг 14e: score candidate swim rules against the r3 vanilla observation.
+"""Шаг 15: score the swim rule against the r3 vanilla observation, in ticks.
 
-Input is the dataset written by `s10-swim-table.py` (one row per B-side
-flags/pose transition, with A's aligned input bits and the fluid at feet,
-head and the standing eye). The candidates differ only in the *start*
-condition of the swim state:
+Input is the dataset written by `s10-swim-table.py`: one row per B-side
+flags/pose transition (with A's aligned input bits, the corrected sprint state
+and the fluid at the feet) plus a 50 ms tick grid over the observed window.
 
-  simple   swim = feet_in_fluid and sprint
-  eye      swim = eye_in_fluid and sprint        (start and continue)
-  hyst     swim starts on eye_in_fluid and sprint, then continues while
-           feet_in_fluid and sprint              (vanilla hysteresis shape)
+The rule (`docs/SWIMMING.md` §2.1) is
+    swim = feet_in_water and sprint
+    flags = sneak?0x02 | sprint?0x08 | swim?0x10
+    pose = swim?3 : sneak?5 : 0
 
-A row matches exactly when the candidate's flags equal the observed flags,
-and matches within +-1 event when the candidate equals the previous or next
-observed flags in the same geometry (the metadata lag).
+Two bases and two tolerances are reported (the owner's Шаг 15 п.1):
+
+* by **transition** — at each recorded flags event;
+* by **sample** — at every 50 ms tick of the observed window;
+
+each with an **exact** and a **±1 tick** (50 ms) tolerance, and each split
+into samples before and after the geometry entry teleport (the nearest-stand
+label can already point at the next geometry while A is still at the previous
+one).
+
+The candidates differ only in the *start* condition of the swim state; the
+remaining lines of the rule are fixed.
+
+`--emit-rust` writes the recorded events and the RLE tick grid as a Rust
+fixture for the crate's oracle test.
 """
 
 import argparse
@@ -26,39 +37,21 @@ M_SNEAK = 0x02
 M_SPRINT = 0x08
 M_SWIM = 0x10
 
+# tick input bit packing
+T_SPRINT = 0x01
+T_SNEAK = 0x02
+T_FEET = 0x04
+T_POST = 0x08
+# observed sentinel: no flags transition had arrived yet
+T_NO_OBS = 0x100
 
-def predict(row, swim):
-    flags = (M_SNEAK if row['sneak'] else 0) | (M_SPRINT if row['sprint'] else 0)
+
+def predict(feet, sprint, sneak, swim):
+    flags = (M_SNEAK if sneak else 0) | (M_SPRINT if sprint else 0)
     if swim:
         flags |= M_SWIM
-    pose = 3 if swim else (5 if row['sneak'] else 0)
+    pose = 3 if swim else (5 if sneak else 0)
     return flags, pose
-
-
-def score(rows_by_geom, rule):
-    exact = tol = total = 0
-    beyond = []
-    for geom, rows in sorted(rows_by_geom.items()):
-        swim_prev = False
-        flags = [r['flags'] for r in rows]
-        for i, row in enumerate(rows):
-            total += 1
-            swim = rule(row, swim_prev)
-            swim_prev = swim
-            pred, _ = predict(row, swim)
-            if pred == row['flags']:
-                exact += 1
-                tol += 1
-            else:
-                neighbours = [flags[j] for j in (i - 1, i + 1) if 0 <= j < len(rows)]
-                if pred in neighbours:
-                    tol += 1
-                else:
-                    beyond.append((geom, round(row['t_ms'], 1),
-                                   row['feet_water'], row['eye_water'],
-                                   row['sprint'], row['sneak'],
-                                   hex(row['flags']), hex(pred)))
-    return exact, tol, total, beyond
 
 
 def rule_simple(row, _prev):
@@ -77,23 +70,85 @@ def rule_hyst(row, prev):
 
 RULES = {'simple': rule_simple, 'eye': rule_eye, 'hyst': rule_hyst}
 
+
+def score_transitions(by_geom, rule):
+    """Per observed flags event: exact and ±1 tick (observed at t±50 ms)."""
+    exact = tol = total = 0
+    beyond = []
+    for geom, rows in sorted(by_geom.items()):
+        swim_prev = False
+        flags = [r['flags'] for r in rows]
+        for i, row in enumerate(rows):
+            total += 1
+            swim = rule(row, swim_prev)
+            swim_prev = swim
+            pred, _ = predict(row['feet_water'], row['sprint'], row['sneak'], swim)
+            if pred == row['flags']:
+                exact += 1
+                tol += 1
+            else:
+                neighbours = [flags[j] for j in (i - 1, i + 1) if 0 <= j < len(rows)]
+                if pred in neighbours:
+                    tol += 1
+                else:
+                    beyond.append((geom, round(row['t_ms'], 1),
+                                   hex(row['flags']), hex(pred)))
+    return exact, tol, total, beyond
+
+
+def score_ticks(ticks, rule):
+    """Per 50 ms sample: exact and ±1 tick; keyed by the observed flags."""
+    observed = [t['observed_flags'] for t in ticks]
+    exact = tol = total = 0
+    beyond = []
+    swim_prev = False
+    for i, t in enumerate(ticks):
+        if t['observed_flags'] is None:
+            continue
+        total += 1
+        swim = rule(t, swim_prev)
+        swim_prev = swim
+        pred, _ = predict(t['feet_water'], t['sprint'], t['sneak'], swim)
+        if pred == t['observed_flags']:
+            exact += 1
+            tol += 1
+            continue
+        neighbours = [observed[j] for j in (i - 1, i + 1)
+                      if 0 <= j < len(observed) and observed[j] is not None]
+        if pred in neighbours:
+            tol += 1
+        else:
+            beyond.append((t['geometry'], round(t['t_ms'], 1),
+                           t['feet_water'], t['sprint'], t['sneak'],
+                           hex(t['observed_flags']), hex(pred)))
+    return exact, tol, total, beyond
+
+
+def split_ticks(ticks):
+    pre = [t for t in ticks if not t['post_teleport']]
+    post = [t for t in ticks if t['post_teleport']]
+    return {'all': ticks, 'pre': pre, 'post': post}
+
+
 RUST_HEADER = '''\
-//! Recorded vanilla flags transitions for the Шаг 14e oracle test.
+//! Recorded vanilla flags transitions for the swimming oracle test.
 //!
 //! Generated by `tools/trace-analyze/s10-rule-search.py` from the r3 S10
 //! dataset (`E:\\MineRust-data\\autotests\\s10-vanilla-r3\\s10-dataset.json`),
-//! NOT hand-written. Each entry is one `set_entity_data` flags byte (index 0)
-//! of Alice that Bob observed, with Alice's input bits and the fluid at her
-//! feet at the aligned instant. The entries are in time order, so entries
-//! that share a `geometry` are one contiguous run.
+//! NOT hand-written. `S10_EVENTS` is one row per `set_entity_data` flags byte
+//! (index 0) of Alice that Bob observed, in time order. `S10_TICKS` is the
+//! same run as a run-length encoded 50 ms grid; see the field docs.
 
 /// One observed flags transition (see the module docs).
 pub struct S10Event {
-    /// Geometry the sample belongs to.
-    pub geometry: &\'static str,
-    /// Whether Alice\'s feet were strictly inside a water surface.
+    /// Geometry of the nearest stand at the instant.
+    pub geometry: &'static str,
+    /// Whether the sample is after the geometry entry teleport (a `false`
+    /// means A had not been teleported in yet and the label is the neighbour).
+    pub post_teleport: bool,
+    /// Whether Alice's feet were strictly inside a water surface.
     pub feet_in_water: bool,
-    /// Sprint input bit at the instant of the transition.
+    /// Effective sprint state (the `player_command` start/stop stream).
     pub sprint: bool,
     /// Sneak input bit at the instant of the transition.
     pub sneak: bool,
@@ -105,27 +160,65 @@ pub struct S10Event {
 pub const S10_EVENTS: &[S10Event] = &[
 '''
 
+RUST_TICK_HEADER = '''
+/// Geometry names indexed by the tick runs.
+pub const S10_GEOMETRY: &[&str] = &[
+'''
 
-def emit_rust(path, rows):
-    """Write the recorded (feet, sprint, sneak) -> flags sequence as Rust."""
+RUST_TICK_BODY = '''];
+
+/// Run-length encoded 50 ms tick grid: `(repeats, geometry index, input bits,
+/// observed flags)`.
+///
+/// Input bits: `0x01` sprint, `0x02` sneak, `0x04` feet in water, `0x08` after
+/// the entry teleport. `observed flags` is `0x100` until the first flags
+/// transition has arrived. Expanding the runs reproduces one sample per 50 ms.
+pub const S10_TICKS: &[(u32, u8, u8, u16)] = &[
+'''
+
+
+def emit_rust(path, rows, ticks, geoms):
     ordered = sorted(rows, key=lambda r: r['t_ms'])
+    geom_index = {name: i for i, name in enumerate(geoms)}
     with open(path, 'w', encoding='utf-8', newline='\n') as handle:
         handle.write(RUST_HEADER)
         for r in ordered:
             handle.write(
-                '    S10Event {{ geometry: "{}", feet_in_water: {}, '
-                'sprint: {}, sneak: {}, flags: 0x{:02x} }},\n'.format(
-                    r['geometry'], str(bool(r['feet_water'])).lower(),
+                '    S10Event {{ geometry: "{}", post_teleport: {}, '
+                'feet_in_water: {}, sprint: {}, sneak: {}, flags: 0x{:02x} }},\n'.format(
+                    r['geometry'], str(bool(r['post_teleport'])).lower(),
+                    str(bool(r['feet_water'])).lower(),
                     str(bool(r['sprint'])).lower(), str(bool(r['sneak'])).lower(),
                     r['flags']))
         handle.write('];\n')
+        handle.write(RUST_TICK_HEADER)
+        for name in geoms:
+            handle.write('    "{}",\n'.format(name))
+        handle.write(RUST_TICK_BODY)
+        # RLE the tick grid.
+        runs = []
+        for t in ticks:
+            bits = ((T_SPRINT if t['sprint'] else 0)
+                    | (T_SNEAK if t['sneak'] else 0)
+                    | (T_FEET if t['feet_water'] else 0)
+                    | (T_POST if t['post_teleport'] else 0))
+            obs = T_NO_OBS if t['observed_flags'] is None else t['observed_flags']
+            g = geom_index.get(t['geometry'], len(geoms))
+            if runs and runs[-1][1] == g and runs[-1][2] == bits and runs[-1][3] == obs:
+                runs[-1][0] += 1
+            else:
+                runs.append([1, g, bits, obs])
+        for length, g, bits, obs in runs:
+            handle.write('    ({}, {}, 0x{:02x}, 0x{:03x}),\n'.format(length, g, bits, obs))
+        handle.write('];\n')
+    return len(runs)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('dataset')
     parser.add_argument('--emit-rust', default=None,
-                        help='write the recorded events as a Rust fixture')
+                        help='write the recorded events and ticks as a Rust fixture')
     args = parser.parse_args()
 
     data = json.load(open(args.dataset, encoding='utf-8'))
@@ -136,27 +229,60 @@ def main():
         by_geom[r['geometry']].append(r)
     for geom in by_geom:
         by_geom[geom].sort(key=lambda r: r['t_ms'])
+    ticks = data.get('ticks') or []
 
     print('== per-geometry input -> observed flags (index 0 events) ==')
-    print(f'{"geometry":<22} {"t_ms":>10} snk spr  feet head eye  observed')
+    print(f'{"geometry":<22} {"t_ms":>10} {"post":>5} snk spr  feet head eye  observed')
     for geom, rs in sorted(by_geom.items()):
         for r in rs:
-            print(f'{geom:<22} {r["t_ms"]:>10.1f}  {int(r["sneak"])}   {int(r["sprint"])}   '
+            print(f'{geom:<22} {r["t_ms"]:>10.1f} {str(r["post_teleport"]):>5}  '
+                  f'{int(r["sneak"])}   {int(r["sprint"])}   '
                   f'{"W" if r["feet_water"] else "-":>4} {"W" if r["head_water"] else "-":>4} '
                   f'{"W" if r["eye_water"] else "-":>3}  0x{r["flags"]:02x}')
     print()
 
-    print('== candidate scores (flags) ==')
+    print('== candidate scores ==')
     for name, rule in RULES.items():
-        exact, tol, total, beyond = score(by_geom, rule)
-        print(f'{name:<8} exact {exact:>3}/{total} ({100 * exact / total:5.1f}%)  '
-              f'+-1 {tol:>3}/{total} ({100 * tol / total:5.1f}%)  beyond={len(beyond)}')
+        exact, tol, total, beyond = score_transitions(by_geom, rule)
+        print(f'{name:<8} transitions: exact {exact:>3}/{total} ({100 * exact / total:5.1f}%)  '
+              f'±1event {tol:>3}/{total} ({100 * tol / total:5.1f}%)  beyond={len(beyond)}')
         for item in beyond:
             print(f'           {item}')
 
+    if ticks:
+        print()
+        print('== tick-level metric (50 ms samples, rule = simple) ==')
+        print(f'{"basis":<12} {"n":>5} {"exact":>12} {"±1tick":>14}')
+        groups = split_ticks(ticks)
+        for part in ('all', 'pre', 'post'):
+            ex, tol, total, beyond = score_ticks(groups[part], rule_simple)
+            print(f'{part:<12} {total:>5} '
+                  f'{ex:>5} ({100 * ex / max(total, 1):5.1f}%) '
+                  f'{tol:>5} ({100 * tol / max(total, 1):5.1f}%)')
+        # transition basis, in ticks: prediction at the event vs the observed
+        # flags one 50 ms tick away.
+        for part in ('all', 'pre', 'post'):
+            rs = [r for r in rows if part == 'all'
+                  or (part == 'post') == bool(r['post_teleport'])]
+            by = collections.defaultdict(list)
+            for r in rs:
+                by[r['geometry']].append(r)
+            for geom in by:
+                by[geom].sort(key=lambda r: r['t_ms'])
+            ex, tol, total, beyond = score_transitions(by, rule_simple)
+            print(f'trans-{part:<7}{total:>5} '
+                  f'{ex:>5} ({100 * ex / max(total, 1):5.1f}%) '
+                  f'{tol:>5} ({100 * tol / max(total, 1):5.1f}%)')
+        ex, tol, total, beyond = score_ticks(ticks, rule_simple)
+        for item in beyond[:20]:
+            print(f'  beyond: {item}')
+
     if args.emit_rust:
-        emit_rust(args.emit_rust, rows)
-        print(f'\nrust fixture: {args.emit_rust} ({len(rows)} events)')
+        geoms = sorted({t['geometry'] for t in ticks}) or \
+            sorted({r['geometry'] for r in rows})
+        nruns = emit_rust(args.emit_rust, rows, ticks, geoms)
+        print(f'\nrust fixture: {args.emit_rust} ({len(rows)} events, '
+              f'{len(ticks)} ticks in {nruns} runs)')
     return 0
 
 

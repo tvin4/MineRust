@@ -28,10 +28,10 @@ fn player(slot: &Arc<MoveSlot>) -> Player {
     player
 }
 
-/// The `player_input` flags byte is the source of truth for sneak and
-/// sprint: the two bits land in the player state.
+/// The `player_input` byte drives sneak, the `player_command` action drives
+/// sprint (Шаг 15): the two sources land in the player state independently.
 #[test]
-fn the_input_flags_set_sneak_and_sprint() {
+fn the_input_byte_sets_sneak_and_the_command_sets_sprint() {
     let slot = Arc::new(MoveSlot::default());
     let mut player = player(&slot);
     assert!(!player.sneak());
@@ -41,13 +41,16 @@ fn the_input_flags_set_sneak_and_sprint() {
     assert!(player.sneak());
     assert!(!player.sprint());
 
-    player.apply_input(protocol::PlayerInput::SPRINT);
-    assert!(!player.sneak());
-    assert!(player.sprint());
-
+    // The sprint key bit alone does not set the flag (Шаг 15): the vanilla
+    // server keeps sprinting after the key release until the stop action.
     player.apply_input(protocol::PlayerInput::SNEAK | protocol::PlayerInput::SPRINT);
     assert!(player.sneak());
+    assert!(!player.sprint());
+
+    player.apply_command(true);
     assert!(player.sprint());
+    player.apply_command(false);
+    assert!(!player.sprint());
 
     player.apply_input(0);
     assert!(!player.sneak());
@@ -74,6 +77,32 @@ fn the_slot_stores_input_and_swings_beside_movement() {
     assert_eq!(slot.take_swings(), 2);
     assert_eq!(slot.take_swings(), 0, "the swing count is reset");
     assert_eq!(slot.take(), None, "movement is untouched by input/swings");
+}
+
+/// The `player_command` sprint toggle is its own slot entry (Шаг 15): it
+/// survives unrelated packets, the newest action wins and it is taken once.
+#[test]
+fn the_slot_stores_the_sprint_command_separately() {
+    let slot = Arc::new(MoveSlot::default());
+    slot.store_input(protocol::PlayerInput::SNEAK);
+    slot.store_command(true);
+    slot.store(MoveState {
+        kind: MoveKind::Pos,
+        payload: Vec::new(),
+    });
+    slot.store_command(false); // a newer action wins
+
+    assert_eq!(slot.take_command(), Some(false));
+    assert_eq!(
+        slot.take_command(),
+        None,
+        "the command entry is empty after take"
+    );
+    assert_eq!(slot.take_input(), Some(protocol::PlayerInput::SNEAK));
+    assert!(
+        slot.take().is_some(),
+        "movement is untouched by the command"
+    );
 }
 
 /// A movement packet does not swallow the pending input or swings (the
@@ -139,7 +168,8 @@ fn the_tick_applies_input_without_movement() {
         .expect("the player is registered")
         .confirm_teleport();
 
-    slot.store_input(protocol::PlayerInput::SNEAK | protocol::PlayerInput::SPRINT);
+    slot.store_input(protocol::PlayerInput::SNEAK);
+    slot.store_command(true);
     slot.store_swing();
     let outcome = region.tick(0, std::time::Instant::now(), super::RegionGrid::new(2));
     assert!(outcome.moves.is_empty(), "no movement was sent");

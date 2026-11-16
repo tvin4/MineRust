@@ -144,11 +144,13 @@ pub struct Player {
     ticks_since_broadcast: u32,
     /// Whether the player is sneaking (M4.5 step 8). The source of truth is
     /// the `player_input` flags byte ([`MoveSlot::take_input`]); the
-    /// `player_command` packet is a secondary signal for sprint and is not
-    /// stored here.
+    /// `player_command` packet carries only sprint actions in the trace.
     sneak: bool,
-    /// Whether the player is sprinting (M4.5 step 8). Same source as
-    /// `sneak`, plus the `player_command` start/stop actions (Шаг 14d).
+    /// Whether the player is sprinting (M4.5 step 8, corrected by Шаг 15).
+    /// The source of truth is the `player_command` start/stop action
+    /// ([`MoveSlot::take_command`]); the `player_input` `0x40` bit is only the
+    /// held key and is not used for the flag (the r3 trace keeps the flag after
+    /// the key release, until the stop action arrives).
     sprint: bool,
     /// Whether the player's feet are in water (Шаг 14d, `docs/SWIMMING.md`).
     /// Recomputed every tick from the shared `ChunkStore` by the scheduler's
@@ -391,12 +393,23 @@ impl Player {
     }
     /// Applies the newest `player_input` flags byte (M4.5 step 8).
     ///
-    /// Sneak (`0x20`) and sprint (`0x40`) are the bits the step-8 report
-    /// correlates with the client's crouch and run speed; the other bits are
-    /// movement keys and stay inside the byte in the connection only.
+    /// The sneak bit (`0x20`) is the crouch state. The sprint bit (`0x40`) is
+    /// the held sprint key only; after Шаг 15 the sprint flag is driven by
+    /// [`Self::apply_command`] instead, so the bit is deliberately not applied
+    /// here. The other bits are movement keys and stay inside the byte in the
+    /// connection only.
     pub fn apply_input(&mut self, flags: u8) {
         self.sneak = flags & protocol::PlayerInput::SNEAK != 0;
-        self.sprint = flags & protocol::PlayerInput::SPRINT != 0;
+    }
+
+    /// Applies a `player_command` sprint toggle (Шаг 15).
+    ///
+    /// The r3 trace pairs action 1 with every observed `0x08` and action 2 with
+    /// every `0x00`, so the command — not the `player_input` bit — is the
+    /// sprint state. Called after [`Self::apply_input`] in the tick, so a
+    /// command and a bit in the same tick settle on the command.
+    pub fn apply_command(&mut self, sprint: bool) {
+        self.sprint = sprint;
     }
 
     /// The connection's outbound queue.
@@ -418,6 +431,12 @@ impl Player {
     /// (M4.5 step 8).
     pub fn take_input(&self) -> Option<u8> {
         self.connection.last_move.take_input()
+    }
+
+    /// Takes the newest `player_command` sprint toggle, leaving the entry
+    /// empty (Шаг 15).
+    pub fn take_command(&self) -> Option<bool> {
+        self.connection.last_move.take_command()
     }
 
     /// Takes and resets the swing count of the slot (M4.5 step 8).
@@ -743,6 +762,11 @@ impl Region {
             // accepted swings queue for the visibility pass broadcast.
             if let Some(flags) = player.take_input() {
                 player.apply_input(flags);
+            }
+            // The `player_command` sprint toggle is applied after the input
+            // byte (Шаг 15): the command, not the `0x40` key bit, is the flag.
+            if let Some(sprint) = player.take_command() {
+                player.apply_command(sprint);
             }
             let punches = player.take_swings();
             if punches > 0 {

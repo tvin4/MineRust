@@ -246,18 +246,25 @@ pub struct MoveState {
 
 /// Everything the connection last saw for one player (M4.5 Шаг 8).
 ///
-/// Movement keeps its "newest wins" rule; the input flags byte and the swing
-/// events are independent slots, so a `player_input` arriving between two
-/// movement packets cannot swallow the movement (and vice versa). `swings`
-/// counts the `punch` packets since the last [`MoveSlot::take_swings`]; the
-/// tick drains it and the count feeds the swing rule (M4.5 Шаг 11), whose
-/// accepted punches become `swing_animation` broadcasts to the observers.
+/// Movement keeps its "newest wins" rule; the input flags byte, the
+/// `player_command` sprint toggle and the swing events are independent slots,
+/// so a `player_input` arriving between two movement packets cannot swallow the
+/// movement (and vice versa). `swings` counts the `punch` packets since the
+/// last [`MoveSlot::take_swings`]; the tick drains it and the count feeds the
+/// swing rule (M4.5 Шаг 11), whose accepted punches become `swing_animation`
+/// broadcasts to the observers.
 #[derive(Debug, Default)]
 struct SlotValue {
     /// The newest movement packet, if any.
     movement: Option<MoveState>,
     /// The newest `player_input` flags byte, if any.
     input: Option<u8>,
+    /// The newest `player_command` sprint toggle: `Some(true)` after an action
+    /// 1 (start), `Some(false)` after an action 2 (stop). Шаг 15: the r3 trace
+    /// shows the `player_input` sprint bit (`0x40`) is only the held key, while
+    /// these actions are what the vanilla server tracks — the flag survives the
+    /// key release until the stop action arrives.
+    command: Option<bool>,
     /// `punch` packets since the last drain.
     swings: u32,
 }
@@ -285,6 +292,14 @@ impl MoveSlot {
         self.lock().input = Some(flags);
     }
 
+    /// Stores the newest `player_command` sprint toggle (Шаг 15).
+    ///
+    /// `true` is the start action (1), `false` the stop action (2); the caller
+    /// maps the action id, so the slot stays protocol-agnostic.
+    pub fn store_command(&self, sprint: bool) {
+        self.lock().command = Some(sprint);
+    }
+
     /// Records one `punch` (swing) event (M4.5 Шаг 8).
     pub fn store_swing(&self) {
         let mut slot = self.lock();
@@ -299,6 +314,12 @@ impl MoveSlot {
     /// Takes the newest input flags byte, leaving the entry empty.
     pub fn take_input(&self) -> Option<u8> {
         self.lock().input.take()
+    }
+
+    /// Takes the newest `player_command` sprint toggle, leaving the entry
+    /// empty (Шаг 15).
+    pub fn take_command(&self) -> Option<bool> {
+        self.lock().command.take()
     }
 
     /// Takes and resets the swing count.

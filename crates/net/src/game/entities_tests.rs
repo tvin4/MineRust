@@ -233,13 +233,19 @@ fn traced_sneak_and_sprint_state_changes_are_streamed_to_observers() {
 
 fn assert_state_transitions(regions: &mut [Region]) {
     let transitions = [
-        (PlayerInput::SNEAK, 0x02, Some(true), None),
-        (0, 0x00, Some(false), None),
-        (PlayerInput::SPRINT, 0x08, None, Some(true)),
-        (0, 0x00, None, Some(false)),
+        (PlayerInput::SNEAK, None, 0x02, Some(true), None),
+        (0, None, 0x00, Some(false), None),
+        (0, Some(true), 0x08, None, Some(true)),
+        (0, Some(false), 0x00, None, Some(false)),
     ];
-    for (input, expected_flags, sneaking, sprinting) in transitions {
-        regions[0].get_mut(1).expect("subject").apply_input(input);
+    for (input, command, expected_flags, sneaking, sprinting) in transitions {
+        {
+            let player = regions[0].get_mut(1).expect("subject");
+            player.apply_input(input);
+            if let Some(sprint) = command {
+                player.apply_command(sprint);
+            }
+        }
         let events = visibility_pass(regions);
         let event = event_of(&events, 2).expect("state transition is streamed");
         assert_eq!(event.states.len(), 1);

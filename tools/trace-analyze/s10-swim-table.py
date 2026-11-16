@@ -317,15 +317,30 @@ def main():
     if a_eid is None:
         return 1
 
-    # A's input timeline and position timeline (serverbound moves + the
-    # clientbound teleports the server sent, which override the client).
+    # A's input timeline and position timeline. Two serverbound streams carry
+    # the sprint state: `player_input` (the held-key bitmask) and
+    # `player_command` (action 1 = start sprinting, 2 = stop sprinting — the r3
+    # trace shows one at every sprint toggle). The client sends the stop command
+    # before the next `player_input` bit change, so the input byte alone
+    # over-predicts sprint; the later of the two streams wins. Sneak is carried
+    # only by `player_input` (holding shift produced no `player_command`).
     inputs = []
+    sprint_commands = []
     positions = []
+    teleports = []
     for row in sorted(a_rows, key=lambda r: r['read_ms']):
         t = row['read_ms']
         if row['dir'] == 'serverbound':
             if row['name'] == 'minecraft:player_input' and row['payload']:
                 inputs.append((t, row['payload'][0]))
+            elif row['name'] == 'minecraft:player_command' and row['payload']:
+                try:
+                    _, pos = varint(row['payload'], 0)
+                    action, _ = varint(row['payload'], pos)
+                except IndexError:
+                    continue
+                if action in (1, 2):
+                    sprint_commands.append((t, action == 1))
             elif row['name'] in ('minecraft:move_player_pos', 'minecraft:move_player_pos_rot') \
                     and len(row['payload']) >= 24:
                 positions.append((t, struct.unpack_from('>ddd', row['payload'], 0)))
@@ -333,19 +348,40 @@ def main():
             try:
                 _, pos = varint(row['payload'], 0)
                 if len(row['payload']) >= pos + 24:
-                    positions.append((t, struct.unpack_from('>ddd', row['payload'], pos)))
+                    where = struct.unpack_from('>ddd', row['payload'], pos)
+                    positions.append((t, where))
+                    teleports.append((t, where))
             except IndexError:
                 pass
-    print(f'A input events: {len(inputs)}  position events: {len(positions)}')
+    print(f'A input events: {len(inputs)}  sprint commands: {len(sprint_commands)}  '
+          f'position events: {len(positions)}  teleports: {len(teleports)}')
 
-    def last_before(seq, when):
+    def last_event(seq, when):
         found = None
         for t, value in seq:
             if t <= when:
-                found = value
+                found = (t, value)
             else:
                 break
         return found
+
+    def last_before(seq, when):
+        event = last_event(seq, when)
+        return None if event is None else event[1]
+
+    def sprint_at(when):
+        """Effective sprint: the `player_command` start/stop stream.
+
+        The r3 trace shows the `player_input` sprint bit (`0x40`) is only the
+        *key*: A held it for 300 ms while standing still and vanilla never set
+        the flag, then released it while still moving and vanilla kept the flag
+        until the `player_command` stop arrived. The `player_command` actions
+        (1 = start, 2 = stop) bracket the observed `0x08`/`0x00` exactly, so
+        they, not the input bit, are the sprint state. Before the first command
+        the state is "not sprinting" (A was standing).
+        """
+        command_event = last_event(sprint_commands, when)
+        return command_event[1] if command_event is not None else False
 
     # B's metadata transitions for A.
     transitions = []
@@ -370,7 +406,7 @@ def main():
         # the head block and the standing eye column.
         head = fluid_at(model, bx, by + 1, bz)
         eye = fluid_at(model, bx, int((pos[1] + 1.62) // 1), bz)
-        sprint = bool(flags & P_SPRINT)
+        sprint = sprint_at(when)
         sneak = bool(flags & P_SNEAK)
         return pos, flags, feet, head, eye, sprint, sneak
 
@@ -393,12 +429,29 @@ def main():
                 best, best_d = name, d
         return best if best_d <= 8.0 else 'outside'
 
+    # Every geometry is entered by a server teleport onto its stand; the
+    # clientbound `player_position` that lands within a block of the stand is
+    # the entry. Before it A is still at the previous geometry, but the nearest
+    # stand can already be the next one (the slabs walked to z=-26.3, 2.8 blocks
+    # from the bubble-column stand), so those "pre-teleport" samples carry the
+    # wrong label. They are flagged, not dropped.
+    def match_times(gx, gy, gz):
+        return [t for t, (x, y, z) in teleports
+                if abs(x - gx) < 1.5 and abs(z - gz) < 1.5 and abs(y - gy) < 3.0]
+
+    geom_entry = {name: (min(match_times(gx, gy, gz)) if match_times(gx, gy, gz) else None)
+                  for name, gx, gy, gz in geoms}
+
+    def post_teleport(geom, when):
+        entry = geom_entry.get(geom)
+        return entry is not None and when >= entry
+
     # The authoritative server output: the flags byte (index 0) and the pose
     # (index 6, serializer 20). Health (9), air (1) and the game-mode byte (16)
     # are noise for this question.
     print()
     print('== B flags/pose transitions with A state at that instant ==')
-    print(f'{"t_ms":>10} {"field":<6} {"value":>5}  {"geom":<18} '
+    print(f'{"t_ms":>10} {"field":<6} {"value":>5}  {"geom":<18} {"post":>4} '
           f'{"pos":<24} {"in":>2} {"snk":>3} {"spr":>3}  feet / head / eye1.62')
     rows_out = []
     state_flags = None
@@ -410,11 +463,12 @@ def main():
             state_flags = value
         elif index == 6:
             state_pose = value
+        geom = label_geom(pos)
         if index in (0, 6):
-            geom = label_geom(pos)
             label = 'flags' if index == 0 else 'pose'
             pos_s = f'({pos[0]:.2f},{pos[1]:.2f},{pos[2]:.2f})'
-            print(f'{t_a:>10.1f} {label:<6} {value:>5}  {geom:<18} {pos_s:<24} '
+            print(f'{t_a:>10.1f} {label:<6} {value:>5}  {geom:<18} '
+                  f'{str(post_teleport(geom, t_a)):>4} {pos_s:<24} '
                   f'{flags:>2x} {str(sneak):>3} {str(sprint):>3}  '
                   f'{feet[1]:<12} {head[1]:<12} {eye[1]}')
         rows_out.append({
@@ -424,9 +478,29 @@ def main():
             'feet_water': feet[0], 'feet_kind': feet[1],
             'head_water': head[0] is not None, 'head_kind': head[1],
             'eye_water': eye[0] is not None, 'eye_kind': eye[1],
-            'geometry': label_geom(pos),
+            'geometry': geom, 'post_teleport': post_teleport(geom, t_a),
             'flags': state_flags, 'pose': state_pose,
         })
+
+    # A 50 ms tick grid over the observed window: our rule's prediction from A's
+    # position/inputs at each tick against the flags B had last received. This
+    # is the sample-level metric; the rows above are the transition-level one.
+    flags_timeline = sorted((t + offset, v) for (t, idx, _pt, v) in transitions if idx == 0)
+    ticks = []
+    if flags_timeline:
+        step = 50.0
+        t = flags_timeline[0][0]
+        end = flags_timeline[-1][0]
+        while t <= end:
+            pos, flags, feet, head, eye, sprint, sneak = sample_at(t)
+            geom = label_geom(pos)
+            ticks.append({
+                't_ms': t, 'geometry': geom,
+                'post_teleport': post_teleport(geom, t),
+                'sprint': sprint, 'sneak': sneak, 'feet_water': feet[0],
+                'observed_flags': last_before(flags_timeline, t),
+            })
+            t += step
 
     # Summary map of the confirmed pairs, keyed by the input conditions that a
     # candidate rule can read: the fluid at feet, head and the standing eye,
@@ -453,8 +527,8 @@ def main():
 
     out_path = args.out or os.path.join(args.run, 's10-dataset.json')
     with open(out_path, 'w', encoding='utf-8') as handle:
-        json.dump({'rows': rows_out, 'aEid': a_eid}, handle, indent=1)
-    print(f'\ndataset: {out_path} ({len(rows_out)} rows)')
+        json.dump({'rows': rows_out, 'ticks': ticks, 'aEid': a_eid}, handle, indent=1)
+    print(f'\ndataset: {out_path} ({len(rows_out)} rows, {len(ticks)} ticks)')
     return 0
 
 

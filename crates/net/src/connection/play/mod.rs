@@ -574,17 +574,24 @@ where
                         trace!(flags = input.flags, "player_input stored");
                     }
                     id if id == ids.id(PlayerCommand::KEY) => {
-                        // Secondary signal only (the live trace correlates
-                        // its second VarInt with the sprint key of
-                        // `player_input`); nothing is stored.
+                        // Sprint toggle (Шаг 15): the r3 trace shows action 1
+                        // at every sprint start and action 2 at every stop, so
+                        // the action — not the `player_input` `0x40` bit — is
+                        // the sprint state. Other actions are logged and
+                        // ignored. SOURCE: live trace; the public action list
+                        // of this client version was not available offline.
                         let command = PlayerCommand::decode_payload(&mut payload)?;
                         payload.ensure_empty()?;
-                        debug!(
-                            entity_id = command.entity_id,
-                            action = command.action,
-                            data = command.data,
-                            "player_command seen, secondary signal"
-                        );
+                        match command.action {
+                            1 => last_move.store_command(true),
+                            2 => last_move.store_command(false),
+                            _ => debug!(
+                                entity_id = command.entity_id,
+                                action = command.action,
+                                data = command.data,
+                                "player_command action not mapped, ignored"
+                            ),
+                        }
                     }
                     id if id == ids.id(Punch::KEY) => {
                         Punch::decode_payload(&mut payload)?;
