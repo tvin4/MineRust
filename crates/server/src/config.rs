@@ -141,6 +141,10 @@ pub struct ServerConfig {
     /// creative.
     #[serde(default)]
     pub game_mode: i32,
+    /// Optional development-only player spawn as `x,y,z` block coordinates.
+    /// Does not change the world's default spawn or save files.
+    #[serde(default)]
+    pub spawn_override: Option<String>,
     /// Optional path to a saved world directory (step 3.3, M3).
     ///
     /// The directory is a world save: it holds `level.dat` (whose
@@ -249,8 +253,33 @@ impl ServerConfig {
                 self.game_mode
             )));
         }
+        if let Some(value) = self.spawn_override.as_deref() {
+            parse_spawn_override(value)?;
+        }
         Ok(())
     }
+}
+
+/// Parses the development-only integer `x,y,z` spawn tuple.
+pub(crate) fn parse_spawn_override(value: &str) -> Result<protocol::Position, ConfigError> {
+    let coordinates: Vec<_> = value.split(',').map(str::trim).collect();
+    if coordinates.len() != 3 {
+        return Err(ConfigError::Invalid(
+            "spawn_override must contain exactly x,y,z integer coordinates".to_owned(),
+        ));
+    }
+    let parse = |axis: &str, coordinate: &str| {
+        coordinate.parse::<i32>().map_err(|_| {
+            ConfigError::Invalid(format!(
+                "spawn_override {axis} coordinate is not a 32-bit integer: {coordinate}"
+            ))
+        })
+    };
+    Ok(protocol::Position {
+        x: parse("x", coordinates[0])?,
+        y: parse("y", coordinates[1])?,
+        z: parse("z", coordinates[2])?,
+    })
 }
 
 /// Loads and validates a configuration file from `path`.
@@ -366,6 +395,34 @@ simulation_distance = 4
         let config: ServerConfig = toml::from_str(&text).expect("valid toml");
         assert_eq!(config.game_mode, 1, "creative");
         config.validate().expect("valid");
+    }
+
+    #[test]
+    fn spawn_override_is_optional_and_parses_explicit_coordinates() {
+        let config: ServerConfig = toml::from_str(&example_toml()).expect("valid toml");
+        assert_eq!(config.spawn_override, None);
+
+        let text = example_toml() + "spawn_override = \"106,41,-31\"\n";
+        let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+        config.validate().expect("valid override");
+        assert_eq!(
+            parse_spawn_override(config.spawn_override.as_deref().expect("override"))
+                .expect("parsed"),
+            protocol::Position {
+                x: 106,
+                y: 41,
+                z: -31
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_spawn_override_coordinates() {
+        for value in ["106,41", "106.5,41,-31", "106,41,999999999999"] {
+            let text = example_toml() + &format!("spawn_override = \"{value}\"\n");
+            let config: ServerConfig = toml::from_str(&text).expect("toml string");
+            assert!(config.validate().is_err(), "accepted {value}");
+        }
     }
 
     #[test]

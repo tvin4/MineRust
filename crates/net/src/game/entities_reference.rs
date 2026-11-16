@@ -51,8 +51,8 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
     let mut name: BTreeMap<PlayerId, String> = BTreeMap::new();
     let mut uuid: BTreeMap<PlayerId, Uuid> = BTreeMap::new();
     let mut game_mode: BTreeMap<PlayerId, i32> = BTreeMap::new();
-    let mut state: BTreeMap<PlayerId, (bool, bool)> = BTreeMap::new();
-    let mut broadcast_state: BTreeMap<PlayerId, Option<(bool, bool)>> = BTreeMap::new();
+    let mut state: BTreeMap<PlayerId, (bool, bool, bool)> = BTreeMap::new();
+    let mut broadcast_state: BTreeMap<PlayerId, Option<(bool, bool, bool)>> = BTreeMap::new();
     let mut visible_before: BTreeMap<PlayerId, BTreeMap<PlayerId, Uuid>> = BTreeMap::new();
     let mut baseline: BTreeMap<PlayerId, Option<PlayerPos>> = BTreeMap::new();
     let mut ticks: BTreeMap<PlayerId, u32> = BTreeMap::new();
@@ -69,7 +69,7 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
             name.insert(id, player.name().to_owned());
             uuid.insert(id, offline_uuid(player.name()));
             game_mode.insert(id, player.game_mode());
-            state.insert(id, (player.sneak(), player.sprint()));
+            state.insert(id, (player.sneak(), player.sprint(), player.swimming()));
             broadcast_state.insert(id, player.broadcast_state());
             visible_before.insert(id, player.visible().clone());
             baseline.insert(id, player.last_broadcast());
@@ -145,6 +145,7 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
                     position: position[&id],
                     game_mode: game_mode[&id],
                     sneaking: state[&id].0,
+                    swimming: state[&id].2,
                 });
                 next_baseline.insert(id, Some(position[&id]));
                 next_broadcast_state.insert(id, Some(state[&id]));
@@ -154,9 +155,18 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
                     if previous != state[&id] {
                         states.push(EntityStateUpdate {
                             id,
-                            flags: state_flags(state[&id].0, state[&id].1),
+                            flags: state_flags(state[&id].0, state[&id].1, state[&id].2),
                             sneaking: (previous.0 != state[&id].0).then_some(state[&id].0),
                             sprinting: (previous.1 != state[&id].1).then_some(state[&id].1),
+                            swimming: (previous.2 != state[&id].2).then_some(state[&id].2),
+                            pose: ((previous.0 != state[&id].0) || (previous.2 != state[&id].2))
+                                .then_some(if state[&id].2 {
+                                    3
+                                } else if state[&id].0 {
+                                    5
+                                } else {
+                                    0
+                                }),
                         });
                         next_broadcast_state.insert(id, Some(state[&id]));
                     }

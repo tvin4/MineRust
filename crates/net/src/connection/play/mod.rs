@@ -76,6 +76,10 @@ pub struct WorldInfo {
     /// Block the player joins at; the teleport target and the chunk cache
     /// centre are derived from it (`Set Center Chunk` of the join).
     pub spawn: Position,
+    /// Optional development-only player spawn override. The default spawn
+    /// packet and world data remain unchanged; the server applies this only
+    /// to the joining player's teleport after checking the ready chunk store.
+    pub player_spawn_override: Option<Position>,
     /// `hashed_seed` of Login (play): the seed's hash, zero without a world.
     pub hashed_seed: i64,
     /// View distance announced in Login (play) (`server.toml`,
@@ -98,6 +102,7 @@ impl Default for WorldInfo {
     fn default() -> Self {
         Self {
             spawn: EMPTY_SPAWN,
+            player_spawn_override: None,
             hashed_seed: 0,
             view_distance: DEFAULT_DISTANCES,
             simulation_distance: DEFAULT_DISTANCES,
@@ -218,7 +223,7 @@ where
         id: player_id,
         name: player_name.to_owned(),
         view_distance: radius,
-        spawn: world.info.spawn,
+        spawn: world.info.player_spawn_override.unwrap_or(world.info.spawn),
         game_mode,
         connection: PlayerConnection {
             outbound,
@@ -264,8 +269,8 @@ where
     // the chunk of every `StreamChunks` event. The join window is built from
     // it once the world is ready, so a player that moved before the read
     // finished still gets exactly its current window.
-    let mut stream_center =
-        chunk_of_position(f64::from(world.info.spawn.x), f64::from(world.info.spawn.z));
+    let join_spawn = world.info.player_spawn_override.unwrap_or(world.info.spawn);
+    let mut stream_center = chunk_of_position(f64::from(join_spawn.x), f64::from(join_spawn.z));
 
     // Frames are read on a background task: reading must survive the
     // select-loop branches below (a cancelled frame read would drop bytes

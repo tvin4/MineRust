@@ -8,7 +8,7 @@
 //! 1. Login (play) — dimension, view distance, hashed seed;
 //! 2. Set Default Spawn Position — the save's spawn;
 //! 3. Player Info Update — the player into the tab list;
-//! 4. Set Center Chunk — the chunk cache centre, from the spawn;
+//! 4. Set Center Chunk — the chunk cache centre, from the join spawn;
 //! 5. Game Event 13 — "start waiting for chunks" (closes the loading
 //!    screen);
 //! 6. Synchronize Player Position — the join teleport.
@@ -29,6 +29,14 @@ use crate::error::ConnectionError;
 use crate::frame::write_tracked;
 
 use super::{WorldInfo, DIMENSION_TYPE_REGISTRY, JOIN_TELEPORT_ID, OVERWORLD, SEA_LEVEL};
+
+/// The block the player joins at: the dev-only spawn override when set,
+/// otherwise the save's spawn. The default spawn packet still carries the
+/// save's spawn (`info.spawn`); only the join teleport and the cache centre
+/// follow the override.
+fn player_spawn(info: &WorldInfo) -> protocol::Position {
+    info.player_spawn_override.unwrap_or(info.spawn)
+}
 
 /// Sends the whole join sequence described in the module documentation.
 ///
@@ -150,9 +158,10 @@ where
 
     // Centre of the cache: the position the player joined at (`spawn`),
     // expressed in chunks — vanilla keeps its view centred on the player.
+    let player_spawn = player_spawn(info);
     let center = SetCenterChunk {
-        chunk_x: info.spawn.x >> 4,
-        chunk_z: info.spawn.z >> 4,
+        chunk_x: player_spawn.x >> 4,
+        chunk_z: player_spawn.z >> 4,
     };
     write_tracked(
         writer,
@@ -185,9 +194,9 @@ where
 
     let teleport = SynchronizePlayerPosition {
         teleport_id: JOIN_TELEPORT_ID,
-        x: f64::from(info.spawn.x) + 0.5,
-        y: f64::from(info.spawn.y),
-        z: f64::from(info.spawn.z) + 0.5,
+        x: f64::from(player_spawn.x) + 0.5,
+        y: f64::from(player_spawn.y),
+        z: f64::from(player_spawn.z) + 0.5,
         velocity_x: 0.0,
         velocity_y: 0.0,
         velocity_z: 0.0,

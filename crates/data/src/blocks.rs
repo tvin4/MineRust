@@ -156,6 +156,19 @@ impl BlockStates {
             .is_some_and(|value| value == "true")
     }
 
+    /// Whether a state id is a water block (`minecraft:water`, any level).
+    ///
+    /// This is the swimming check (Шаг 14d), deliberately narrower than
+    /// [`Self::is_fluid`]: lava, waterlogged blocks and the five water-shaped
+    /// plants do not make a player swim, only water does. The names come from
+    /// the same report `is_fluid` reads.
+    ///
+    /// SOURCE: owner's S8 trace + `reports/blocks.json` ids 89..=104
+    /// (`minecraft:water`, `level` 0..=15).
+    pub fn is_water(&self, state_id: i32) -> bool {
+        matches!(self.block_name(state_id), Some(name) if name.ends_with(":water"))
+    }
+
     /// Number of blocks the report describes.
     pub fn len(&self) -> usize {
         self.states.len()
@@ -251,6 +264,11 @@ mod tests {
         assert!(!states.is_fluid(41), "a dry slab does not");
         assert!(!states.is_fluid(2), "stone does not");
         assert!(!states.is_fluid(999), "an unknown id does not");
+        // The swimming check is water only: a waterlogged slab is fluid but
+        // does not put a player in the swimming pose (Шаг 14d).
+        assert!(states.is_water(1), "water is water");
+        assert!(!states.is_water(42), "a waterlogged slab is not water");
+        assert!(!states.is_water(999), "an unknown id is not water");
     }
 
     #[test]

@@ -172,6 +172,8 @@ fn traced_sneak_transition_poses_are_exactly_five_then_zero() {
         flags: 0x02,
         sneaking: Some(true),
         sprinting: None,
+        swimming: None,
+        pose: Some(5),
     };
     let exited = EntityStateUpdate {
         sneaking: Some(false),
@@ -179,6 +181,26 @@ fn traced_sneak_transition_poses_are_exactly_five_then_zero() {
     };
     assert_eq!(entered.sneak_pose(), Some(5));
     assert_eq!(exited.sneak_pose(), Some(0));
+}
+
+#[test]
+fn traced_swimming_pose_is_three_and_exit_is_standing() {
+    let entered = EntityStateUpdate {
+        id: 1,
+        flags: 0x10,
+        sneaking: None,
+        sprinting: None,
+        swimming: Some(true),
+        pose: Some(3),
+    };
+    let exited = EntityStateUpdate {
+        flags: 0x00,
+        swimming: Some(false),
+        pose: Some(0),
+        ..entered
+    };
+    assert_eq!(entered.pose, Some(3));
+    assert_eq!(exited.pose, Some(0));
 }
 
 #[test]
@@ -225,6 +247,11 @@ fn assert_state_transitions(regions: &mut [Region]) {
         assert_eq!(event.states[0].flags, expected_flags);
         assert_eq!(event.states[0].sneaking, sneaking);
         assert_eq!(event.states[0].sprinting, sprinting);
+        assert_eq!(event.states[0].swimming, None);
+        assert_eq!(
+            event.states[0].pose,
+            sneaking.map(|value| if value { 5 } else { 0 })
+        );
         if let Some(sneaking) = sneaking {
             assert_eq!(
                 event.states[0].sneak_pose(),

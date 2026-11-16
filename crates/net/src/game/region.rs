@@ -144,15 +144,22 @@ pub struct Player {
     ticks_since_broadcast: u32,
     /// Whether the player is sneaking (M4.5 step 8). The source of truth is
     /// the `player_input` flags byte ([`MoveSlot::take_input`]); the
-    /// `player_command` packet is a secondary signal and is not stored here.
+    /// `player_command` packet is a secondary signal for sprint and is not
+    /// stored here.
     sneak: bool,
-    /// Whether the player is sprinting (M4.5 step 8). Same source as `sneak`.
+    /// Whether the player is sprinting (M4.5 step 8). Same source as
+    /// `sneak`, plus the `player_command` start/stop actions (Шаг 14d).
     sprint: bool,
-    /// The sneak/sprint state currently represented in each viewer's metadata.
-    /// `None` means no observer state has been sent yet; an initial sneaking
-    /// spawn carries the trace-confirmed flags and pose (S7), while sprint
-    /// spawn encoding is not established.
-    broadcast_state: Option<(bool, bool)>,
+    /// Whether the player's feet are in water (Шаг 14d, `docs/SWIMMING.md`).
+    /// Recomputed every tick from the shared `ChunkStore` by the scheduler's
+    /// update pass — a region owns only players, the store is the
+    /// scheduler's field.
+    swimming: bool,
+    /// The sneak/sprint/swim state currently represented in each viewer's
+    /// metadata. `None` means no observer state has been sent yet; an initial
+    /// sneaking spawn carries the trace-confirmed flags and pose (S7), while
+    /// sprint spawn encoding is not established.
+    broadcast_state: Option<(bool, bool, bool)>,
     /// Swing animation state (M4.5 Шаг 11): whether a swing is in progress
     /// and how many ticks it has run. The rule and the constants are a
     /// vanilla-memory hypothesis confirmed by the tick model against the S3
@@ -188,6 +195,7 @@ impl Player {
             ticks_since_broadcast: 0,
             sneak: false,
             sprint: false,
+            swimming: false,
             broadcast_state: None,
             swinging: false,
             swing_time: 0,
@@ -300,13 +308,24 @@ impl Player {
         self.sprint
     }
 
+    /// Whether the player's feet are in water (Шаг 14d).
+    pub fn swimming(&self) -> bool {
+        self.swimming
+    }
+
+    /// Sets the water state from the scheduler's store pass (Шаг 14d); the
+    /// visibility pass turns a change into flags/pose metadata.
+    pub(crate) fn set_swimming(&mut self, swimming: bool) {
+        self.swimming = swimming;
+    }
+
     /// State flags last sent to observers, if initialized by a spawn.
-    pub(crate) fn broadcast_state(&self) -> Option<(bool, bool)> {
+    pub(crate) fn broadcast_state(&self) -> Option<(bool, bool, bool)> {
         self.broadcast_state
     }
 
     /// Updates the observer-state baseline after the visibility pass.
-    pub(crate) fn set_broadcast_state(&mut self, state: Option<(bool, bool)>) {
+    pub(crate) fn set_broadcast_state(&mut self, state: Option<(bool, bool, bool)>) {
         self.broadcast_state = state;
     }
 

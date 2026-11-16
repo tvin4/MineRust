@@ -61,6 +61,14 @@ client_jar = "path/to/client.jar"
 # falls through the world.
 # world_dir = "path/to/world-template"
 
+# Optional development-only player spawn as `x,y,z` block coordinates. It
+# changes only the join position of a new player (the join teleport and the
+# cache centre); the save's default spawn and all world files stay untouched.
+# The scenario runner passes it as -OursSpawnOverride to place a joining
+# player above open water for the S8 swimming check (our server has no RCON
+# to teleport in game). Leave it out for the save's spawn.
+# spawn_override = "112,64,24"
+
 # Optional: vanilla server 26.3 installation used by the ignored parity
 # tests (crates/parity): an official server.jar from Mojang's version
 # manifest and the directory it runs in (eula.txt, server.properties,

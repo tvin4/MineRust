@@ -60,12 +60,19 @@ fn metadata_second(game_mode: i32) -> &'static [u8] {
 /// Builds the confirmed survival sneak spawn snapshot; sprint spawn state
 /// remains unchanged because the traces do not establish it.
 // SOURCE: S7 held-sneak trace, B seq 176: flags `02`, pose `05`, then snapshot.
-fn spawn_metadata(sneaking: bool, game_mode: i32) -> Vec<u8> {
+fn spawn_metadata(sneaking: bool, swimming: bool, game_mode: i32) -> Vec<u8> {
     let include_sneak = sneaking && game_mode == 0;
-    let extra_len = if include_sneak { 6 } else { 0 };
+    let include_swimming = swimming && matches!(game_mode, 0 | 1);
+    let flags = (if include_sneak { 0x02 } else { 0 }) | (if include_swimming { 0x10 } else { 0 });
+    let extra_len =
+        usize::from(flags != 0) * 4 + usize::from(include_sneak || include_swimming) * 3;
     let mut metadata = Vec::with_capacity(METADATA_SNAPSHOT.len() + extra_len);
-    if include_sneak {
-        metadata.extend_from_slice(&[0x00, 0x00, 0x02, 0x06, 0x14, 0x05]);
+    if flags != 0 {
+        metadata.extend_from_slice(&[0x00, 0x00, flags]);
+    }
+    if include_sneak || include_swimming {
+        let pose = if include_swimming { 3 } else { 5 };
+        metadata.extend_from_slice(&[0x06, 0x14, pose]);
     }
     metadata.extend_from_slice(METADATA_SNAPSHOT);
     metadata
@@ -140,7 +147,7 @@ pub fn push_spawn(
 
     let snapshot = SetEntityData {
         entity_id: entity.id,
-        metadata: spawn_metadata(entity.sneaking, entity.game_mode),
+        metadata: spawn_metadata(entity.sneaking, entity.swimming, entity.game_mode),
     };
     out.push((SetEntityData::KEY, snapshot.encode_payload()?));
 
@@ -304,7 +311,7 @@ pub fn push_remove(
     Ok(())
 }
 
-/// Pushes one traced sneak/sprint state transition.
+/// Pushes one traced sneak/sprint/swim state transition.
 ///
 /// The metadata payload is exact for entity ids that fit the observed one-byte
 /// VarInt. Sprint transitions additionally carry the traced `sprinting`
@@ -323,7 +330,7 @@ fn push_state_update(
     metadata.write_u8(0xff);
     out.push((SetEntityData::KEY, metadata.into_bytes()));
 
-    if let Some(pose_value) = update.sneak_pose() {
+    if let Some(pose_value) = update.pose {
         let mut pose = PacketWriter::new();
         pose.write_varint(update.id);
         pose.write_u8(0x06);
@@ -467,6 +474,7 @@ mod tests {
             },
             game_mode: 0,
             sneaking: false,
+            swimming: false,
         };
         let mut out = Vec::new();
         push_spawn(&entity, &mut out).expect("encodable");
@@ -545,6 +553,8 @@ mod tests {
                 flags,
                 sneaking,
                 sprinting,
+                swimming: None,
+                pose: sneaking.map(|value| if value { 5 } else { 0 }),
             };
             let mut packets = Vec::new();
             push_state_update(&update, &mut packets).expect("encodable");
@@ -578,6 +588,50 @@ mod tests {
         // Combination not confirmed by trace: only the OR formula is checked.
         let combined_flags = 0x02 | 0x08;
         assert_eq!(combined_flags, 0x0a, "combination not confirmed by trace");
+    }
+
+    /// S8 water transitions are encoded as observer flags plus pose 3 on entry
+    /// and pose 0 on exit; no sprint attribute is implied by swimming alone.
+    // SOURCE: owner's vanilla S8 trace 2026-11-16_0918, entity 76.
+    #[test]
+    fn swimming_transitions_match_the_s8_metadata_bytes() {
+        for (flags, swimming, pose, expected_flags, expected_pose) in [
+            (
+                0x10,
+                Some(true),
+                Some(3),
+                "21 00 00 10 ff",
+                "21 06 14 03 ff",
+            ),
+            (
+                0x00,
+                Some(false),
+                Some(0),
+                "21 00 00 00 ff",
+                "21 06 14 00 ff",
+            ),
+            (
+                0x18,
+                Some(true),
+                Some(3),
+                "21 00 00 18 ff",
+                "21 06 14 03 ff",
+            ),
+        ] {
+            let update = EntityStateUpdate {
+                id: 0x21,
+                flags,
+                sneaking: None,
+                sprinting: None,
+                swimming,
+                pose,
+            };
+            let mut packets = Vec::new();
+            push_state_update(&update, &mut packets).expect("encodable");
+            assert_eq!(packets.len(), 2);
+            assert_eq!(packets[0].1, parse_hex(expected_flags));
+            assert_eq!(packets[1].1, parse_hex(expected_pose));
+        }
     }
 
     fn parse_hex(value: &str) -> Vec<u8> {
@@ -694,6 +748,7 @@ mod tests {
             position,
             game_mode: 0,
             sneaking: false,
+            swimming: false,
         };
         let mut out = Vec::new();
         push_spawn(&spawn, &mut out).expect("encodable");
@@ -780,6 +835,7 @@ mod tests {
             },
             game_mode: 0,
             sneaking: true,
+            swimming: false,
         };
         let mut out = Vec::new();
         push_spawn(&spawn, &mut out).expect("encodable");
@@ -807,22 +863,22 @@ mod tests {
             "adventure is untraced"
         );
         assert_eq!(
-            spawn_metadata(true, 0),
+            spawn_metadata(true, false, 0),
             parse_hex("00 00 02 06 14 05 09 03 41 a0 00 00 10 00 7f"),
             "S7 spawn snapshot carries only observed sneak flag and pose"
         );
         assert_eq!(
-            spawn_metadata(true, 1),
+            spawn_metadata(true, false, 1),
             METADATA_SNAPSHOT,
             "untraced creative spawn metadata remains unchanged"
         );
         assert_eq!(
-            spawn_metadata(true, 2),
+            spawn_metadata(true, false, 2),
             METADATA_SNAPSHOT,
             "untraced adventure mode does not get assumed sneak metadata"
         );
         assert_eq!(
-            spawn_metadata(false, 0),
+            spawn_metadata(false, false, 0),
             METADATA_SNAPSHOT,
             "standing spawn metadata remains unchanged"
         );
@@ -848,6 +904,7 @@ mod tests {
             },
             game_mode: 1,
             sneaking: false,
+            swimming: false,
         };
         push_spawn(&spawn, &mut out).expect("encodable");
         let mut reader = PacketReader::new(&out[0].1);

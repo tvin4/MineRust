@@ -23,6 +23,8 @@ use std::time::Instant;
 
 use tracing::warn;
 
+use crate::store::ChunkStore;
+
 use super::grid::RegionGrid;
 use super::messages::{PlayerId, PlayerJoin, ServerMessage};
 use super::pool::{Job, Pool};
@@ -41,6 +43,8 @@ pub struct Scheduler {
     pool: Option<Pool>,
     /// The chunk → region grid used to route joins and to detect transfers.
     grid: RegionGrid,
+    /// Ready block snapshot used to derive swimming metadata.
+    store: Option<std::sync::Arc<ChunkStore>>,
     /// Tests measure the dispatch on a single region; production always
     /// ticks one region inline (the transfer costs more than it saves).
     #[cfg(test)]
@@ -90,6 +94,7 @@ impl Scheduler {
             owners,
             pool,
             grid,
+            store: None,
             #[cfg(test)]
             force_dispatch: false,
         }
@@ -126,6 +131,11 @@ impl Scheduler {
     /// The chunk → region grid of this scheduler.
     pub fn grid(&self) -> RegionGrid {
         self.grid
+    }
+
+    /// Attaches the ready chunk snapshot used by the swimming state pass.
+    pub fn set_store(&mut self, store: Option<std::sync::Arc<ChunkStore>>) {
+        self.store = store;
     }
 
     /// Registers a joining player in the region of its spawn chunk and returns
@@ -207,8 +217,34 @@ impl Scheduler {
         // so a player that crossed a boundary this tick is already in its new
         // region. Entity streaming is transport state: it never touches the
         // replay journal.
+        self.update_swimming();
         outcome.entities = self.refresh_entities();
         outcome
+    }
+
+    /// Recomputes feet-in-water from the current immutable chunk snapshot.
+    fn update_swimming(&mut self) {
+        let Some(store) = self.store.as_ref() else {
+            return;
+        };
+        for region in &mut self.regions {
+            let ids: Vec<_> = region.player_ids().collect();
+            for id in ids {
+                if let Some(player) = region.get_mut(id) {
+                    let position = player.position();
+                    // The feet block: `floor(y)` is the block the player's
+                    // bounding box starts in, so a swimmer standing on the
+                    // bottom of a pond still samples water, not the floor
+                    // below (the bug the 14d live run hit with `y - 0.1`).
+                    let (x, y, z) = (
+                        position.x.floor() as i32,
+                        position.y.floor() as i32,
+                        position.z.floor() as i32,
+                    );
+                    player.set_swimming(store.is_water_at(x, y, z));
+                }
+            }
+        }
     }
 
     /// The part of the tick before the visibility pass: ticks every region

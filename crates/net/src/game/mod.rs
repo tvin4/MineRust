@@ -402,6 +402,7 @@ fn game_loop(
         RegionGrid::new(config.region_side),
         config.workers,
     );
+    scheduler.set_store(config.store.clone());
     let mut recorder = Recorder::new(config.period);
     let mut replay = Replay::new(open_replay());
     let started = Instant::now();

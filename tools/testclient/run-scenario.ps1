@@ -26,6 +26,12 @@ param(
 	# leaves the generated server-ours.toml untouched (survival). The S9
 	# creative run uses 1: our server has no RCON to switch modes in game.
 	[int]$OursGameMode = -1,
+	# Development-only spawn override for our server (Шаг 14d): "x,y,z" is
+	# written into the generated server-ours.toml as spawn_override. Empty
+	# (the default) leaves the config untouched (the save's spawn). S8 uses it
+	# to place the joining player above open water, since our server has no
+	# RCON to teleport the player in game.
+	[string]$OursSpawnOverride = '',
 	[switch]$KeepStand
 )
 $ErrorActionPreference = 'Stop'
@@ -245,6 +251,13 @@ function Start-Stand {
 				$config = $config -replace '(?m)^game_mode\s*=\s*\d+', "game_mode = $OursGameMode"
 			} else {
 				$config = $config.TrimEnd() + "`r`ngame_mode = $OursGameMode`r`n"
+			}
+		}
+		if ($OursSpawnOverride) {
+			if ($config -match '(?m)^spawn_override\s*=') {
+				$config = $config -replace '(?m)^spawn_override\s*=\s*"[^"]*"', "spawn_override = `"$OursSpawnOverride`""
+			} else {
+				$config = $config.TrimEnd() + "`r`nspawn_override = `"$OursSpawnOverride`"`r`n"
 			}
 		}
 		$config | Set-Content $oursConfig -Encoding utf8
@@ -1233,6 +1246,44 @@ function Invoke-S8 {
 	$script:s7Facts.Add(("S8 B chunk drain: settled={0} loadedChunks={1}" -f `
 			$observer.settled, $observer.loadedChunks))
 
+	if (-not $isVanilla) {
+		# Ours (Шаг 14d): no RCON, so the water run uses the dev-only spawn
+		# override. -OursSpawnOverride puts the joining player above open water
+		# (config only, the save and the template stay untouched); A falls in
+		# and B observes the swimming metadata our server computes from the
+		# shared ChunkStore.
+		if (-not $OursSpawnOverride) {
+			Add-Check $Result 'water entry needs -OursSpawnOverride on our server' $false `
+				'no RCON on our server and no -OursSpawnOverride was set - the water run is a vanilla-trace fact'
+			$null = Invoke-TestCmd $portA (New-SessionCmd 's8-off' 'disconnect')
+			$null = Invoke-TestCmd $portB (New-SessionCmd 's8-offb' 'disconnect')
+			Start-Sleep -Seconds 3
+			return
+		}
+		# Let A (and B, both spawned at the override) fall from the air into
+		# the water column before sampling.
+		Start-Sleep -Milliseconds ([int]$Cfg.fallMs)
+		$wet = (Invoke-TestCmd $portA (New-ObserveCmd 's8-wet')).result
+		Add-Check $Result 'A is in water after falling from the spawn override' `
+			($null -ne $wet -and ($wet.feetBlock.id -eq 'minecraft:water' -or $wet.headBlock.id -eq 'minecraft:water')) `
+			("feet={0} head={1} pose={2} onGround={3} y={4}" -f `
+				$wet.feetBlock.id, $wet.headBlock.id, $wet.pose, $wet.onGround, $wet.pos.y)
+
+		$swim = (Invoke-TestCmd $portB (New-ObserveCmd 's8-swim' $nickA)).result
+		Add-Check $Result 'B sees A swimming (pose SWIMMING) via the spawn override' ($swim.pose -eq 'SWIMMING') `
+			("pose={0} isSprinting={1} pos=({2},{3},{4})" -f `
+				$swim.pose, $swim.isSprinting, $swim.pos.x, $swim.pos.y, $swim.pos.z)
+
+		$script:s7Facts.Add(("S8 ours in water: feet={0} head={1} pose={2} y={3}" -f `
+				$wet.feetBlock.id, $wet.headBlock.id, $wet.pose, $wet.pos.y))
+		$script:s7Facts.Add(("S8 ours observed by B: pose={0} isSprinting={1}" -f $swim.pose, $swim.isSprinting))
+
+		$null = Invoke-TestCmd $portA (New-SessionCmd 's8-off' 'disconnect')
+		$null = Invoke-TestCmd $portB (New-SessionCmd 's8-offb' 'disconnect')
+		Start-Sleep -Seconds 3
+		return
+	}
+
 	$start = (Invoke-TestCmd $portA (New-ObserveCmd 's8-start')).result
 	Add-Check $Result 'A is on dry land before the water run' `
 		($null -ne $start -and $start.inGame -and $start.onGround) `
@@ -1249,15 +1300,6 @@ function Invoke-S8 {
 			$land.pose, $land.isSprinting, $land.pos.x, $land.pos.y, $land.pos.z)
 	$null = Invoke-TestCmd $portA (New-KeyCmd 's8-forward-off' 'up' 'up')
 	$null = Invoke-TestCmd $portA (New-KeyCmd 's8-sprint-off' 'sprint' 'up')
-
-	if (-not $isVanilla) {
-		Add-Check $Result 'water entry is a vanilla RCON teleport' $false `
-			'no RCON on our server - the water run is a vanilla-trace fact'
-		$null = Invoke-TestCmd $portA (New-SessionCmd 's8-off' 'disconnect')
-		$null = Invoke-TestCmd $portB (New-SessionCmd 's8-offb' 'disconnect')
-		Start-Sleep -Seconds 3
-		return
-	}
 
 	# 2) Into the water column, at rest first (the entry observation).
 	$wx = ([double]$Cfg.water.x).ToString($inv)

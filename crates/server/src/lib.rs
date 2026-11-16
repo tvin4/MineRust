@@ -169,6 +169,7 @@ pub fn build_world(
     // vanilla 10 of the `login_fields` recording).
     let info = net::WorldInfo {
         spawn: level.spawn,
+        player_spawn_override: None,
         hashed_seed: protocol::hashed_seed(settings.seed),
         view_distance: config.view_distance,
         simulation_distance: config.simulation_distance,
@@ -224,11 +225,37 @@ pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> Result<(), R
     // connection arrives.
     net::trace::start();
     net::trace::install_names(net::trace::names_for(&packet_ids));
-    let (loader, world) = build_world(&config, Arc::clone(&game_data))?;
+    let (loader, mut world) = build_world(&config, Arc::clone(&game_data))?;
     let store = match &loader {
         Some(loader) => warm_world(loader).await,
         None => None,
     };
+    if let Some(raw_override) = config.spawn_override.as_deref() {
+        match config::parse_spawn_override(raw_override) {
+            Ok(position)
+                if store.as_ref().is_some_and(|store| {
+                    store.position(position.x >> 4, position.z >> 4).is_some()
+                }) =>
+            {
+                world.player_spawn_override = Some(position);
+                tracing::info!(
+                    x = position.x,
+                    y = position.y,
+                    z = position.z,
+                    "development player spawn override enabled"
+                );
+            }
+            Ok(position) => tracing::warn!(
+                x = position.x,
+                y = position.y,
+                z = position.z,
+                "development player spawn override chunk is not ready; using world spawn"
+            ),
+            Err(error) => {
+                tracing::warn!(%error, "invalid development player spawn override; using world spawn")
+            }
+        }
+    }
     let listener = TcpListener::bind(&config.listen).await?;
     let local = listener.local_addr()?;
     tracing::info!(
@@ -318,6 +345,7 @@ mod tests {
             workers: 0,
             region_side: 0,
             game_mode: 0,
+            spawn_override: None,
         }
     }
 
@@ -461,6 +489,7 @@ mod tests {
                     y: 145,
                     z: -32
                 },
+                player_spawn_override: None,
                 hashed_seed: protocol::hashed_seed(12345),
                 view_distance: config.view_distance,
                 simulation_distance: config.simulation_distance,

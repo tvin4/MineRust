@@ -3,7 +3,7 @@
 Полный план: `ARCHITECTURE.md` (раздел 8 — этапы M0–M10).
 Правила для агента: `AGENTS.md`.
 
-**Текущий этап: M4.5, Шаг 12 (возврат к серверу: реестр механик и планы ломания/плавания).** Код только для ручного клиента и документации; сервер и тест (в) не меняются. Ручная проверка владельца подтвердила A, B, C; D (плавание/ползание) и ломание блока — не реализованы. Реестр — `docs/MECHANICS.md`, планы — `docs/BLOCK-BREAKING.md` и `docs/SWIMMING.md`. Исторические результаты M0–M3 описаны ниже.
+**Текущий этап: M4.5, Шаг 14 (серверное ломание блока и плавание).** Закрыты 13a–13c (ломание блока: `ChunkStore`, survival/creative, `level_event` 2001), 14b (автоочистка `world.stale`) и 14d (плавание: water state у ног → pose/flags наблюдателям). Ручная проверка владельца подтвердила A, B, C; D (плавание) и ломание реализованы на сервере. Реестр — `docs/MECHANICS.md`, планы — `docs/BLOCK-BREAKING.md` и `docs/SWIMMING.md`. Исторические результаты M0–M3 описаны ниже.
 
 Историческая запись M3/Шаг 3.3: коммиты `504de49..192a806` закрыли owner 6-point checklist (live-vs-vanilla отчёт, chunk-diff матрица, причина block entities (7,−2) в `docs/DECISIONS.md`, flake guard и SOURCES/PROGRESS); live проверка 08.11.2026 подтвердила M1/M2/3.3 настоящим клиентом 26.3. Следующий этап M4 был затем принят и выполнен; движок света оставался вне scope этого исторического шага.
 
@@ -2120,6 +2120,43 @@ runner `-OursGameMode`. Детали и байты: `docs/BLOCK-BREAKING.md` §1
   air-`block_update` (ordered=True)**. Байты B совпали с ванильным S9.
   Прогоны 1107/1145 — все модовые чеки PASS (B-trace 57 МБ читался python'ом;
   чек порядка в runner поправлен на попарное сравнение).
+
+## Шаг 14d: плавание — water state у ног → поза/flags (16.11.2026)
+
+Код: `crates/data` (`BlockStates::is_water` — только `minecraft:water`, не
+waterlogged), `crates/net/src/store.rs` (`ChunkStore::is_water_at`),
+`crates/net/src/game/scheduler.rs` (`update_swimming` — проба `floor(x),
+floor(y), floor(z)` по общему снимку перед visibility pass),
+`crates/net/src/game/region.rs` (`Player::swimming`),
+`crates/net/src/game/entities.rs` (`EntitySpawn::swimming`, pose/flags при
+спавне и переходе), `crates/net/src/entity_packets.rs` (побайтные тесты),
+`crates/server` (dev-параметр `spawn_override`), runner `-OursSpawnOverride`.
+
+- Правило (`docs/SWIMMING.md` §2): swimming = блок у ног — вода; pose `3` в
+  воде / `0` вне; flags = sneak `0x02` | sprint `0x08` | swimming `0x10`. Первый
+  покойный сэмпл S8 у ванили был `0x00`, у нас выходит `0x10` — расхождение
+  задокументировано явно, без одноразового исключения.
+- Проба у ног — `floor(y)` (блок, где начинается AABB игрока). Первая попытка
+  использовала `floor(y − 0.1)` и на live-прогоне ошиблась: у пловца, стоящего
+  на дне пруда, берётся блок *под* ногами (твёрдый), swimming ложно `false`.
+- Побайтные юнит-тесты:
+  `entity_packets::tests::swimming_transitions_match_the_s8_metadata_bytes`
+  (flags `0x10`/`0x18` + pose `03`, сброс `00` + pose `00`) и
+  `entities_tests::traced_swimming_pose_is_three_and_exit_is_standing`.
+- **Живой прогон S8 на нашем сервере** (`2026-11-16_1420`,
+  `-OursSpawnOverride 112,64,24`, 2/2 PASS): A входит из воздуха в воду
+  (feet/head = `minecraft:water`, `y=48`), B видит A `pose=SWIMMING`. Байты B:
+  `01 00 00 10 06 14 03 ...` (flags SWIMMING + pose 3) и отдельный
+  `... 09 03 41 a0 00 00 10 00 7f ff`. Точка входа выбрана по NBT копии мира:
+  океан `y=59..62`, воздух с `y=63`; ориентир плана `(106,41,−31)` — закрытый
+  пруд (вода `y=37..41`, камень `y=42`, глубина 5), над ним в воздух не встать.
+- `spawn_override` меняет **только** стартовую позицию нового игрока (join
+  teleport и центр окна); `Set Default Spawn Position` остаётся спавном
+  сохранения, шаблон v3 и файлы мира не трогаются. Точка проверяется по
+  готовому `ChunkStore`; при неготовом чанке — warning и обычный спавн.
+- **Не реализовано (явно):** таймер воздуха и урон, подводность глаз,
+  `oxygen_bonus`/`water_movement_efficiency`, всплытие прыжком, звуки/частицы
+  всплесков, ползание.
 
 ## Остаточные факты и блокеры
 

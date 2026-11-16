@@ -116,6 +116,8 @@ pub struct EntitySpawn {
     pub game_mode: i32,
     /// Whether the player was sneaking when it became visible.
     pub sneaking: bool,
+    /// Whether the player's feet were in water when it became visible.
+    pub swimming: bool,
 }
 
 /// An entity a viewer stops seeing this tick.
@@ -213,17 +215,20 @@ pub struct StreamEntities {
     pub swings: Vec<PlayerId>,
 }
 
-/// Entity metadata flags of a confirmed sneak/sprint state.
+/// Entity metadata flags of the confirmed sneak/sprint/swim state.
 ///
 /// The value is the OR of the two bits the S5 trace shows separately (sneak
-/// `0x02`, sprint `0x08`). The combination `0x0a` is formula-derived: a
-/// simultaneously sneaking and sprinting player was not observed.
-// SOURCE: owner's S5 trace, transition metadata payloads.
-pub fn state_flags(sneak: bool, sprint: bool) -> u8 {
-    (if sneak { 0x02 } else { 0 }) | if sprint { 0x08 } else { 0 }
+/// `0x02`, sprint `0x08`, swimming `0x10`. Combined values are the OR of
+/// these state bits; see `docs/SWIMMING.md` for the observed S8 sequence and
+/// its initial idle-water discrepancy.
+// SOURCE: owner's S5 and S8 traces, transition metadata payloads.
+pub fn state_flags(sneak: bool, sprint: bool, swimming: bool) -> u8 {
+    (if sneak { 0x02 } else { 0 })
+        | (if sprint { 0x08 } else { 0 })
+        | if swimming { 0x10 } else { 0 }
 }
 
-/// A traced sneak/sprint metadata transition for a survival or creative player.
+/// A traced sneak/sprint/swim metadata transition for a survival or creative player.
 ///
 /// Combined flag values such as `0x0a` are the OR of confirmed bits but the
 /// combination is not confirmed by trace.
@@ -240,12 +245,21 @@ pub struct EntityStateUpdate {
     pub sneaking: Option<bool>,
     /// Sprint transition, which also changes the traced sprinting attribute.
     pub sprinting: Option<bool>,
+    /// Swimming transition, which changes pose metadata to/from SWIMMING.
+    pub swimming: Option<bool>,
+    /// Resulting pose value when sneak or swimming changes.
+    pub pose: Option<u8>,
 }
 
 impl EntityStateUpdate {
     /// Returns the confirmed pose metadata value for a sneak transition.
     pub fn sneak_pose(&self) -> Option<u8> {
         self.sneaking.map(|sneaking| if sneaking { 5 } else { 0 })
+    }
+
+    /// Returns the pose value for a swimming transition (3 or standing 0).
+    pub fn swim_pose(&self) -> Option<u8> {
+        self.swimming.map(|swimming| if swimming { 3 } else { 0 })
     }
 }
 
@@ -286,14 +300,15 @@ fn motion_from(previous: &PlayerPos, now: &PlayerPos) -> EntityMotion {
 fn spawn_of(region: &Region, id: PlayerId, position: PlayerPos) -> EntitySpawn {
     // The id is in this tick's snapshot, so the player exists; the fallback is
     // defensive only and is never hit.
-    let (name, uuid, game_mode, sneaking) = match region.get(id) {
+    let (name, uuid, game_mode, sneaking, swimming) = match region.get(id) {
         Some(player) => (
             player.name().to_owned(),
             offline_uuid(player.name()),
             player.game_mode(),
             player.sneak(),
+            player.swimming(),
         ),
-        None => (String::new(), Uuid::default(), 0, false),
+        None => (String::new(), Uuid::default(), 0, false, false),
     };
     EntitySpawn {
         id,
@@ -302,6 +317,7 @@ fn spawn_of(region: &Region, id: PlayerId, position: PlayerPos) -> EntitySpawn {
         position,
         game_mode,
         sneaking,
+        swimming,
     }
 }
 
@@ -331,8 +347,8 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
     let mut baseline: Vec<Option<PlayerPos>> = Vec::new();
     let mut ticks: Vec<u32> = Vec::new();
     let mut game_mode: Vec<i32> = Vec::new();
-    let mut state: Vec<(bool, bool)> = Vec::new();
-    let mut broadcast_state: Vec<Option<(bool, bool)>> = Vec::new();
+    let mut state: Vec<(bool, bool, bool)> = Vec::new();
+    let mut broadcast_state: Vec<Option<(bool, bool, bool)>> = Vec::new();
     let mut swings: Vec<u32> = Vec::new();
     let mut before: Vec<Vec<PlayerId>> = Vec::new();
     let mut index: BTreeMap<PlayerId, usize> = BTreeMap::new();
@@ -350,7 +366,7 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
             baseline.push(player.last_broadcast());
             ticks.push(player.ticks_since_broadcast());
             game_mode.push(player.game_mode());
-            state.push((player.sneak(), player.sprint()));
+            state.push((player.sneak(), player.sprint(), player.swimming()));
             broadcast_state.push(player.broadcast_state());
             swings.push(player.pending_swings());
             before.push(player.visible().keys().copied().collect());
@@ -442,11 +458,26 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
                             if previous != state[subject] {
                                 states.push(EntityStateUpdate {
                                     id: left,
-                                    flags: state_flags(state[subject].0, state[subject].1),
+                                    flags: state_flags(
+                                        state[subject].0,
+                                        state[subject].1,
+                                        state[subject].2,
+                                    ),
                                     sneaking: (previous.0 != state[subject].0)
                                         .then_some(state[subject].0),
                                     sprinting: (previous.1 != state[subject].1)
                                         .then_some(state[subject].1),
+                                    swimming: (previous.2 != state[subject].2)
+                                        .then_some(state[subject].2),
+                                    pose: ((previous.0 != state[subject].0)
+                                        || (previous.2 != state[subject].2))
+                                        .then_some(if state[subject].2 {
+                                            3
+                                        } else if state[subject].0 {
+                                            5
+                                        } else {
+                                            0
+                                        }),
                                 });
                                 next_broadcast_state[subject] = Some(state[subject]);
                             }

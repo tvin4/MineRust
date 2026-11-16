@@ -163,6 +163,25 @@ impl ChunkStore {
         self.blocks.is_air(state_id)
     }
 
+    /// Whether a state id is water (`minecraft:water`, any level).
+    ///
+    /// The swimming check (Шаг 14d) goes through this: the store is the only
+    /// thing in the tick that can turn a wire state id into a block name.
+    pub fn is_water(&self, state_id: i32) -> bool {
+        self.blocks.is_water(state_id)
+    }
+
+    /// Whether the block at `(x, y, z)` is water; a missing chunk/section is
+    /// "not water" (never an error — an unloaded cell cannot submerge anyone).
+    ///
+    /// The caller picks `y`; the swimming rule samples the block the player's
+    /// feet start in (`floor(y)`, the bounding-box bottom block — an
+    /// approximation flagged in `docs/SWIMMING.md` §2).
+    pub fn is_water_at(&self, x: i32, y: i32, z: i32) -> bool {
+        self.block(x, y, z)
+            .is_some_and(|state| self.is_water(state))
+    }
+
     /// The state id of the block at `(x, y, z)`, or `None` when the store
     /// holds no chunk or no section for it.
     pub fn block(&self, x: i32, y: i32, z: i32) -> Option<i32> {
