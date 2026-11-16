@@ -18,6 +18,7 @@
 mod blocks;
 mod collision;
 mod error;
+mod hardness;
 mod load;
 mod packets;
 mod registry_ids;
@@ -32,6 +33,7 @@ mod tests;
 pub use blocks::{BlockStates, Properties};
 pub use collision::CollisionShapes;
 pub use error::DataError;
+pub use hardness::BlockHardness;
 pub use load::{load_from_jar, load_from_zip, SYNCHRONIZED_REGISTRIES};
 pub use packets::{load_packets_report, packets_from_json, PacketIds};
 pub use registry_ids::{load_registries_report, registries_from_json, RegistryIds};

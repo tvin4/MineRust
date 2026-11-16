@@ -2432,3 +2432,19 @@ proxy-conn-N.jsonl` в `mcproxy-err.log` (сдвиг B→A = +35944.8 мс).
   журнале. Долги: симуляция жидкости, модель коллизий, воздух (`air supply`),
   утопление, звук всплеска, подводность глаз — все с указанием, есть ли данные
   и где раздел `docs/SWIMMING.md`.
+
+- **16a.1 — экспорт твёрдости мод-командой + серверная настройка
+  `hardness_report`.** В `tools/testclient/mod` добавлена команда `hardness`
+  (`HardnessReportCommand.java`, зарегистрирована в `TestClientMod`): для
+  каждого состояния пишет `hardness` = `BlockState.getDestroySpeed(level,pos)`
+  (твёрдость; `< 0` — неразрушимо), `handSpeed` =
+  `Player.getDestroySpeed(state)` (скорость держащим пустую руку) и список
+  `unbreakable` — в `reports/hardness.json` вне репозитория. Только публичный
+  API; мод скомпилирован `javac` против named-jar 26.3. В `crates/data` —
+  загрузчик `BlockHardness` (`hardness.rs`) + варианты `DataError`; сервер
+  читает файл настройкой `hardness_report` (как `collision_report`) через
+  `load_hardness`: без неё `GameConfig.hardness = None` и `warn` («таймер
+  копания доверяет клиенту»), с битым путём — отказ старта. Тесты: 5 в
+  `data::hardness`, 1 в `config` (настройка опциональна/валидируется), 1 в
+  `server::lib` (отсутствие + битый путь). `cargo test -p data -p server -p net`
+  зелёный.

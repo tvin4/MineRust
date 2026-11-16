@@ -186,6 +186,11 @@ pub struct GameConfig {
     /// `None` means no world is attached and a `player_action` only gets its
     /// `block_changed_ack`.
     pub store: Option<Arc<ChunkStore>>,
+    /// Hardness and bare-hand dig speed of every block state (Шаг 16a), read
+    /// from the optional `hardness_report`. `None` means no report was loaded,
+    /// so the mining timer has nothing to measure a dig against and keeps
+    /// trusting the client about when a block is broken.
+    pub hardness: Option<Arc<data::BlockHardness>>,
 }
 
 impl Default for GameConfig {
@@ -201,6 +206,7 @@ impl Default for GameConfig {
             tick_thread_priority: false,
             default_game_mode: 0,
             store: None,
+            hardness: None,
         }
     }
 }

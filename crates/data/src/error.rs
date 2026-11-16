@@ -141,6 +141,23 @@ pub enum DataError {
         path: String,
     },
 
+    /// The hardness report file cannot be read.
+    #[error("cannot read hardness report {path}: {source}")]
+    HardnessReportRead {
+        /// Path of the report file.
+        path: String,
+        /// Underlying I/O error.
+        source: io::Error,
+    },
+
+    /// The hardness report describes no state: it is not a report the test
+    /// client's `hardness` command wrote.
+    #[error("hardness report {path} contains no block states")]
+    EmptyHardnessReport {
+        /// Path of the report file.
+        path: String,
+    },
+
     /// The registries report describes no registries: it is not a
     /// `reports/registries.json` of this game version.
     #[error("registries report {path} contains no registries")]

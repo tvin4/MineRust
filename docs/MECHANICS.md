@@ -22,7 +22,7 @@
 | 2 | Присед и спринт (`set_entity_data` flags/pose + `update_attributes`) | сделано | ванильные S5 `2026-11-14_1843`, `2026-11-14_s5-creative`; наш live S5 `2026-11-15_s5-live-clean`, `2026-11-15_step10-live-ours-s5-observe` | flags index 0 type 0: `02` sneak, `08` sprint, `00` сброс; pose index 6 type 0x14: `05` sneaking, `00` standing; sprint `update_attributes` (`01 01 1a … minecraft:sprinting …`); порядок «движение → metadata → attribute» (sprint) | комбинация флагов `0x0a` не подтверждена трейсом; режимы кроме survival (и creative-перехода) не проверялись |
 | 3 | Взмах руки (`swing_animation` наблюдателям) | сделано (коммит `c2011c2`) | ванильный S3 `2026-11-14_1644` (B: `8a 08 00 01 06`), наш live S3-air `2026-11-15_1857` — 3/3 PASS | payload = VarInt entity id + `00 01 06`; рассылка только наблюдателям (сам A swings не получает); юнит-тесты `entities_tests`, `state_tests`, `swing_live_tests` | смысл хвоста `00 01 06`; правило «punch → swing» (в ванили 22 `punch` на 11 `swing_animation` — связи нет) |
 | 4 | Ломание блока (серверное подтверждение) | сделано (survival, шаг 13b); creative-байты подтверждены (13c) | ванильные S3 `2026-11-14_1644` и S9 `2026-11-16_0932` (A: `player_action` 41 — `00`/`03`; B: `block_update` 8; creative: только `00` на каждый блок, ответ сразу) | `PlayerAction`/`BlockUpdate`/`BlockChangedAck` в `crates/protocol` (побайтные тесты S3); `ToGame::BlockAction` → `net::game::block_action`; финиш пишет воздух в `ChunkStore` (13a), шлёт `block_update` всем (включая копающего) и затем ack копающему; тесты `block_action_tests`, `a_sender_after_a_block_change_reads_the_new_block` | в creative ваниль ломает на каждый start (`0x03` не шлётся) — у нас creative-клиент не получит мгновенного ломания (нет game mode на сервере); отказ (`block_update` с реальным состоянием / только ack) — гипотеза; серверного таймера копания и проверки дальности нет; тап attack не даёт пакетов даже на ванили (стенд-факт) |
-| 5 | Трещины (`block_destruction`) | не начато | ванильный S3 `2026-11-14_1644` (стадии и интервалы — `docs/BLOCK-BREAKING.md`) | стадии наблюдаются в трейсе B; в creative не шлётся вовсе (S9, 13c) | твёрдость/время копания, точные интервалы стадий, привязка к `player_action` |
+| 5 | Трещины (`block_destruction`) | в работе (16a.1: источник твёрдости готов) | ванильный S3 `2026-11-14_1644` (стадии и интервалы — `docs/BLOCK-BREAKING.md`); `reports/hardness.json` от команды `hardness` тест-клиента (16a.1) | стадии наблюдаются в трейсе B; в creative не шлётся вовсе (S9, 13c); твёрдость (`BlockState.getDestroySpeed`) и скорость держащим пустую руку экспортируются в `hardness_report`, сервер читает её как `GameConfig.hardness` (без файла — `None` + warn) | формула стадии/времени из данных 16a.2; точные интервалы; привязка к `player_action`; реализация таймера (16a.3) |
 | 6 | Звук и частицы ломания (`level_event` и др.) | не начато | ванильные S3 `2026-11-14_1644`, S9 `2026-11-16_0932` (`level_event`) | раскладка установлена: event int32 BE + packed pos + data int32 BE + лишний байт `00`; у события 2001 (разрушение) data = block state id ломаемого блока (`9` = grass_block, `450` = dark_oak_leaves); `sound` (119) при ломании не приходит ни в survival, ни в creative | смысл `data` у 2019/2020; лишний байт; какие частицы |
 | 7 | Освещение после удаления/установки блока | не начато | — | движка света нет: свет копируется из NBT (`crates/world/src/wire_light.rs`), секция без sky light отправляется как 15; решение — `docs/DECISIONS.md` §141/89/105–108/164–186 | пересчёт света, затухание, обновление соседних секций |
 | 8 | Выпадение и подбор предметов | не начато | частично ванильный S3 (`add_entity` предмета — `docs/BLOCK-BREAKING.md`) | предмет как сущность в трейсе наблюдался (n*a — уточнить по трейсу) | инвентарь, стопки, правитла подбора, `collect_item`/`set_entity_data` предмета |
@@ -61,14 +61,22 @@
   (`crates/net/src/store.rs`, `docs/DECISIONS.md` «Шаг 13a/13b»).
 - **Движка света нет** (см. п. 7).
 - **`blocks.json` не содержит твёрдости:** полей `hardness`/`resistance` в отчёте
-  нет (1286 состояний, только `id`/`property`/`states`). Источник твёрдости и
-  времени копания — не установлен; нужен ответ владельца (см. вопросы в
-  `docs/BLOCK-BREAKING.md`).
+  нет (1286 состояний, только `id`/`property`/`states`). Источник твёрдости —
+  отдельный `reports/hardness.json` от команды `hardness` тест-клиента (16a.1),
+  который сервер читает настройкой `hardness_report` (без неё таймер копания
+  выключен и сервер доверяет клиенту). Полнота формулы времени копания — по
+  данным 16a.2 (`docs/BLOCK-BREAKING.md`).
 - **Реестр блоков:** `E:\MineRust-data\reports\registries.json` (реестр
   `minecraft:block`, имя → protocol_id).
 - **Планируемый этап:** `ARCHITECTURE.md` — M5 «блоки + свет (+ чат/команды)».
 
 ## Журнал изменений
+
+- **16.11.2026, шаг 16a.1.** Твёрдость как данные: команда `hardness` тест-клиента
+  пишет `reports/hardness.json` (`BlockState.getDestroySpeed` + `Player.getDestroySpeed`
+  пустой рукой) только через публичный API; `crates/data::BlockHardness` парсит
+  его; сервер читает настройкой `hardness_report` — без неё таймер копания
+  выключен (`GameConfig.hardness = None`, `warn`). Заготовка под трещины (16a).
 
 - **16.11.2026, шаг 16.0.** Подготовка к трещинам. 16.0a: `collision.json`,
   `reports/` и `E:\MineRust-data` не в индексе; сервер без `collision_report`

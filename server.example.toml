@@ -70,6 +70,13 @@ client_jar = "path/to/client.jar"
 # the sneak/swim bits alone.
 # collision_report = "path/to/generated/reports/collision.json"
 
+# Optional: reports/hardness.json generated from your game copy by the test
+# client's `hardness` command. It maps every block state id to its hardness
+# (destroy speed) and the bare-hand dig speed, which the server-side mining
+# timer needs to estimate how long a dig lasts. Without it the server keeps
+# trusting the client about when a block is broken.
+# hardness_report = "path/to/generated/reports/hardness.json"
+
 # REQUIRED at startup: a saved world directory (M3): the folder that
 # contains `level.dat` and `dimensions/minecraft/overworld/region/`. The
 # server sends the ready chunks of that world on join; without this field
