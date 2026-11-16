@@ -8,8 +8,8 @@
 //! tolerance.
 
 use super::entities::{
-    is_swimming, pose_and_flags, pose_of, state_flags, Forced, CRAWLING_HEIGHT, CROUCHING_HEIGHT,
-    STANDING_HEIGHT,
+    is_swimming, pose_and_flags, pose_of, starts_swimming, state_flags, Forced, CRAWLING_HEIGHT,
+    CROUCHING_HEIGHT, STANDING_HEIGHT,
 };
 use super::s10_fixture::{S10_EVENTS, S10_GEOMETRY, S10_TICKS};
 use super::s11_fixture::S11_SAMPLES;
@@ -207,6 +207,22 @@ fn only_sprinting_with_wet_feet_swims() {
     assert!(!is_swimming(false, true), "sprinting on dry land");
     assert!(!is_swimming(true, false), "standing in water");
     assert!(is_swimming(true, true), "sprinting in water");
+}
+
+/// The start gate: a player must put the eyes under water to begin swimming,
+/// so sprinting through shallow water (feet wet, eyes dry) does not start the
+/// swim pose and cannot flicker it on every surface bob.
+#[test]
+fn a_swim_starts_only_with_the_eyes_under_water() {
+    assert!(starts_swimming(true, true), "eyes under, sprinting");
+    assert!(
+        !starts_swimming(false, true),
+        "feet wet but eyes above the surface: wading, not swimming"
+    );
+    assert!(!starts_swimming(true, false), "eyes under, not sprinting");
+    // Once started, the maintain rule keeps the pose with only the feet wet.
+    assert!(is_swimming(true, true), "the surface does not end the swim");
+    assert!(!is_swimming(false, true), "leaving the water ends it");
 }
 
 /// The pose is the swim pose when swimming, else the sneak pose, else the

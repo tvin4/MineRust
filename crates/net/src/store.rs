@@ -216,9 +216,20 @@ impl ChunkStore {
     /// block or a water plant is wet. This replaces the Шаг 14d "the feet
     /// block is `minecraft:water`" check (`docs/SWIMMING.md` §4).
     pub fn feet_in_water(&self, x: i32, feet_y: f64, z: i32) -> bool {
-        let block_y = feet_y.floor() as i32;
+        self.point_in_water(x, feet_y, z)
+    }
+
+    /// Whether the point at continuous height `y` in column `(x, z)` is
+    /// inside water — the same surface test [`Self::feet_in_water`] applies
+    /// at the feet.
+    ///
+    /// The swimming start gate reads this at the eye height
+    /// (`y + STANDING_EYE_HEIGHT`); a missing block or a dry surface is
+    /// `false`, never an error.
+    pub fn point_in_water(&self, x: i32, y: f64, z: i32) -> bool {
+        let block_y = y.floor() as i32;
         self.water_surface_at(x, block_y, z)
-            .is_some_and(|surface| (feet_y - f64::from(block_y)) < f64::from(surface))
+            .is_some_and(|surface| (y - f64::from(block_y)) < f64::from(surface))
     }
 
     /// Free space above the feet of a player standing at `(x, feet_y, z)`,
@@ -739,6 +750,11 @@ mod tests {
         assert!(!store.feet_in_water(0, 65.0, 0), "on top of the block");
         assert!(!store.feet_in_water(1, 64.0, 0), "stone holds no water");
         assert!(!store.feet_in_water(0, 200.0, 0), "no section, no water");
+        // The same test at any continuous height (the swimming start gate
+        // reads it at the eye): inside the source yes, above the surface no.
+        assert!(store.point_in_water(0, 64.2, 0), "inside the source");
+        assert!(!store.point_in_water(0, 64.95, 0), "above the surface");
+        assert!(!store.point_in_water(0, 65.0, 0), "the cell above");
     }
 
     /// The free-headroom query (Шаг 15 п.5): the lowest collision box above the

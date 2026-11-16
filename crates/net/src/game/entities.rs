@@ -230,18 +230,39 @@ pub fn state_flags(sneak: bool, sprint: bool, swimming: bool) -> u8 {
         | if swimming { 0x10 } else { 0 }
 }
 
-/// The Шаг 14e swimming rule: a player swims exactly when sprinting with the
-/// feet in water.
+/// Height of the eyes above the feet while standing, in blocks.
+///
+/// SOURCE: the value the S10 analysis tool uses to build its `eye_water`
+/// column (`tools/trace-analyze/s10-swim-table.py`). The crouching offset is
+/// not measured on this project's traces (a crouching player cannot sprint in
+/// vanilla, so the start gate below never sees it in practice); see the TODO in
+/// `docs/SWIMMING.md` §2.1.
+pub const STANDING_EYE_HEIGHT: f64 = 1.62;
+
+/// The *maintaining* half of the swimming rule: an already swimming player
+/// keeps the state exactly while sprinting with the feet in water.
 ///
 /// SOURCE: the S10 vanilla trace (2026-11-16, r3), 68 flags transitions across
 /// the sixteen geometries — `state_flags` composed with this rule reproduces
-/// 50/68 exactly and 66/68 (97.1%) within one event; see the oracle test
-/// `swim_tests`. The two residual events are sprint-flag transients at a
-/// geometry teleport. The two other candidate shapes (also require the eyes
-/// submerged, or a start-only hysteresis) scored identically on this trace and
-/// are not distinguished by it, so the simplest consistent rule is kept.
+/// 52/68 exactly and 68/68 within one event; see the oracle test `swim_tests`.
+/// The residuals are sprint-flag transients at a geometry teleport.
 pub fn is_swimming(feet_in_water: bool, sprint: bool) -> bool {
     feet_in_water && sprint
+}
+
+/// The *entering* half of the swimming rule: a player only starts swimming
+/// once the eyes are under water, then [`is_swimming`] takes over.
+///
+/// SOURCE: the S10 r3 trace cannot separate this shape from [`is_swimming`]
+/// alone — all three candidates score 52/68 exact and 68/68 within one event
+/// (`tools/trace-analyze/s10-rule-search.py`, candidates simple/eye/hyst).
+/// The owner's live two-client check of 2026-11-16 showed the swim animation
+/// restarting while a player moved through shallow/surface water with the
+/// simple rule, so the hysteresis shape was chosen; it is still
+/// **[hypothesis]** against vanilla live. The S10 rows that start a swim all
+/// have the eyes submerged, so this does not change the oracle.
+pub fn starts_swimming(eyes_in_water: bool, sprint: bool) -> bool {
+    eyes_in_water && sprint
 }
 
 /// The pose metadata value for the confirmed sneak/swim state.

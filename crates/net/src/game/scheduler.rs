@@ -226,12 +226,16 @@ impl Scheduler {
     /// immutable chunk snapshot.
     ///
     /// Шаг 14e: the swim bit follows the rule derived from the S10 vanilla trace
-    /// (`docs/SWIMMING.md` §4) — a player swims exactly when sprinting with the
-    /// feet in water. Two changes from the Шаг 14d pass: the feet check reads
+    /// (`docs/SWIMMING.md` §4) — a swimming player stays swimming while
+    /// sprinting with the feet in water, and a player starts only once the eyes
+    /// are under water. Two changes from the Шаг 14d pass: the feet check reads
     /// the *fluid surface* of the feet block (`ChunkStore::feet_in_water`) so a
     /// waterlogged block the player stands on top of no longer counts, and the
     /// sprint requirement is now the confirmed rule rather than the temporary
-    /// 14e gate.
+    /// 14e gate. The eye start gate is the hysteresis shape the S10 trace
+    /// cannot separate from the simple rule; the owner's live check of
+    /// 2026-11-16 selected it (the simple rule restarted the swim animation in
+    /// shallow/surface water).
     ///
     /// Шаг 15 п.5: the same pass reads the free headroom above the feet
     /// (`ChunkStore::free_headroom`). A player that no longer fits standing is
@@ -258,8 +262,21 @@ impl Scheduler {
                         position.y,
                         position.z.floor() as i32,
                     );
-                    player
-                        .set_swimming(super::entities::is_swimming(feet_in_water, player.sprint()));
+                    // Vanilla-shaped entry/exit asymmetry (Шаг 15, live
+                    // 2026-11-16): enter only with the eyes under water, stay
+                    // while the feet are.
+                    let was_swimming = player.swimming();
+                    let swimming = if was_swimming {
+                        super::entities::is_swimming(feet_in_water, player.sprint())
+                    } else {
+                        let eyes_in_water = store.point_in_water(
+                            position.x.floor() as i32,
+                            position.y + super::entities::STANDING_EYE_HEIGHT,
+                            position.z.floor() as i32,
+                        );
+                        super::entities::starts_swimming(eyes_in_water, player.sprint())
+                    };
+                    player.set_swimming(swimming);
                     let headroom = store.free_headroom(position.x, position.y, position.z);
                     player.set_forced(super::entities::Forced::from_headroom(headroom));
                 }
