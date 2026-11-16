@@ -2372,3 +2372,23 @@ proxy-conn-N.jsonl` в `mcproxy-err.log` (сдвиг B→A = +35944.8 мс).
   напоминание фактически не срабатывает; оно включится на версиях с `ctx.tool`.
   Конфиг сведён к одному авто-обнаруженному плагину; самовольные правки
   `server.toml` не затрагивались.
+
+## Шаг 16: закрытие плавания/ползания, затем трещины и серверный таймер копания (16.11.2026)
+
+Плюс отдельный побочный фикс `tick_thread_priority` (см. ниже, раздел «Опоздания
+тика»).
+
+- **16.0a — `collision.json`/`E:\MineRust-data` не коммитятся; сервер без
+  `collision_report` работает.** `git ls-files` по `collision|reports/|hardness|
+  MineRust-data` даёт единственную строку `crates/data/src/collision.rs`
+  (загрузчик, не данные); ни `reports/`, ни `collision.json`, ни файлов из
+  `E:\MineRust-data` в индексе нет — этот каталог вне репозитория
+  (`git rev-parse --show-toplevel` = `E:/projects/MineRust`). Загрузка
+  коллизий вынесена в `load_collisions` (`crates/server/src/lib.rs`);
+  отсутствие настройки даёт пустой `CollisionShapes` (тогда
+  `ChunkStore::free_headroom` = `None`, `Forced::from_headroom(None)` =
+  `Forced::None` — ползание выключено) и `warn` с именем настройки и правила.
+  Тест `a_server_without_the_collision_report_disables_the_crawl_rule_and_warns`
+  ловит `tracing`-строку на этом же потоке (свой `Sink`-writer, без новых
+  зависимостей) и прогоняет `build_world` на минимальном сейве — старт
+  принимает отсутствующий отчёт. `cargo test -p server`: 46 passed.
