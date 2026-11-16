@@ -1,9 +1,22 @@
 # HANDOFF (state for the next session)
 
-**Шаг 16, подшаг 16.0 закрыт** — 16.11.2026. Ветка `main` опережает
-`origin/main` на 2 коммита: пуш не прошёл (сеть недоступна,
-`Could not resolve host: github.com`) — повторить `git push`, когда сеть
-вернётся. Коммиты: `6577ef3` (16.0a), `0ecedd3` (16.0c).
+**Шаг 16: 16.0a–d и 16a.1 закрыты; 16a.2 готов наполовину и ждёт владельца.**
+16.11.2026. Пуш прошёл: `main` в синхроне с `origin/main` (последний коммит
+16a.1 — `fb1d771`).
+
+**Блокер 16a.2 (одно действие владельца):** нужен
+`E:\MineRust-data\reports\hardness.json` — запустить подключённым тест-клиентом
+команду `hardness` (мод-джар уже пересобран с ней):
+
+```powershell
+. E:\projects\MineRust\tools\testclient\scenario-lib.ps1
+Invoke-TestCmd -Port 25571 -Json '{"id":1,"cmd":"hardness","args":{"path":"E:/MineRust-data/reports/hardness.json"}}'
+```
+
+Новый ванильный прогон, судя по данным, **не нужен**: в трейсах 14.11.2026 уже
+есть 4 блока разной твёрдости (листва, dirt, grass, dark_oak_log). После файла
+16a.2 закрывается сверкой `T ≈ 30·hardness` (детали —
+`docs/BLOCK-BREAKING.md` §1.7).
 
 - **16.0a — `collision.json`/`reports/`/`E:\MineRust-data` не в репозитории;
   сервер без `collision_report` работает.** `git ls-files` даёт только
@@ -21,11 +34,22 @@
   команда `observe`, таблицы ожидаемого поведения B). По умолчанию **не
   включаются**; тест `shipped_dev_geometry_files_parse`.
 - **16.0d — сводка долгов механик** (таблица ниже).
-- **Дальше (16a): трещины (`block_destruction`) + серверный таймер копания.**
-  16a.1 — экспорт твёрдости мод-командой (шаблон `ShapeReportCommand.java`) и
-  серверный `hardness_report`; 16a.2 — новый ванильный прогон владельца по 2–3
-  твёрдостям, из которого выводится формула стадии/времени. План —
-  `docs/BLOCK-BREAKING.md`; реестр — `docs/MECHANICS.md`.
+- **16a.1 — экспорт твёрдости + серверная настройка `hardness_report`.**
+  Команда `hardness` тест-клиента пишет `reports/hardness.json`
+  (`BlockState.getDestroySpeed` + `Player.getDestroySpeed` пустой рукой);
+  загрузчик `crates/data::BlockHardness`; без настройки `GameConfig.hardness =
+  None` + `warn`, с битым путём — отказ старта.
+- **16a.2 — модель стадий/времени выведена из трейсов.** `stage` =
+  `floor(progress·10)` без клиппинга (0..13 в трейсах), `0xFF` — сброс (и при
+  прерывании), шлётся только при смене стадии; прогресс +`speed/hardness/30` за
+  тик; **сервер не ломает блок сам** — блок убирает клиентский
+  `player_action 0x03`. Длительности: листва ≈6 тиков, dirt ≈15, grass ≈16,
+  dark_oak_log ≈60. Таблица — `docs/BLOCK-BREAKING.md` §1.7, проверка гипотез —
+  §5 п.7.
+- **Дальше:** 16a.2 закрыть по `hardness.json` (см. блокер выше), затем 16a.3 —
+  серверный таймер + рассылка стадий наблюдателям, 16a.4 — тесты/оракул/live,
+  16a.5 — не делать дропы/инструменты/звук (кроме уже сделанного `level_event`
+  2001). План — `docs/BLOCK-BREAKING.md`; реестр — `docs/MECHANICS.md`.
 
 ## Долги механик плавания/ползания (16.0d)
 
