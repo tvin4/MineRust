@@ -226,10 +226,27 @@ impl ChunkStore {
     /// The swimming start gate reads this at the eye height
     /// (`y + STANDING_EYE_HEIGHT`); a missing block or a dry surface is
     /// `false`, never an error.
+    ///
+    /// A water block with water directly above it is one continuous column:
+    /// the source's own `8/9` surface is only the *visible* top when air is
+    /// above, so the top `1/9` of a submerged cell is water too. Without this
+    /// the feet (or eyes) crossed a fake `1/9` gap at every block boundary and
+    /// the swim bit toggled on each rising block — the surface-swim flicker of
+    /// the 2026-11-16 live test (see the store unit test). SOURCE: the live
+    /// session trace `E:\MineRust-data\live-repro-p2\session.json`, where the
+    /// swim flag toggled (`24 08`) exactly as the feet's fractional height
+    /// crossed `8/9` inside a full water column.
     pub fn point_in_water(&self, x: i32, y: f64, z: i32) -> bool {
         let block_y = y.floor() as i32;
-        self.water_surface_at(x, block_y, z)
-            .is_some_and(|surface| (y - f64::from(block_y)) < f64::from(surface))
+        let Some(surface) = self.water_surface_at(x, block_y, z) else {
+            return false;
+        };
+        if (y - f64::from(block_y)) < f64::from(surface) {
+            return true;
+        }
+        // In the source's own 8/9 "shadow": still water when the column
+        // continues into the cell above.
+        self.is_water_at(x, block_y + 1, z)
     }
 
     /// Free space above the feet of a player standing at `(x, feet_y, z)`,
@@ -755,6 +772,35 @@ mod tests {
         assert!(store.point_in_water(0, 64.2, 0), "inside the source");
         assert!(!store.point_in_water(0, 64.95, 0), "above the surface");
         assert!(!store.point_in_water(0, 65.0, 0), "the cell above");
+    }
+
+    /// A water block with water directly above it is one continuous column:
+    /// the source's own `8/9` surface is only the *visible* top when air is
+    /// above, so the top `1/9` of a submerged cell is still water.
+    ///
+    /// This is the surface-swim flicker of 2026-11-16 (live two-client test):
+    /// a player rising through a water column crossed the fake gap at every
+    /// block boundary, the swim bit toggled on and off (`24 08` in the server
+    /// session trace `E:\MineRust-data\live-repro-p2\session.json`) and the
+    /// observer saw the swim animation reset and restart.
+    #[test]
+    fn a_water_block_under_water_fills_its_cell() {
+        let store = store_with(vec![test_chunk(0, 0)]);
+        store.set_block(0, 64, 0, 4).expect("a source");
+        store.set_block(0, 65, 0, 4).expect("a source above");
+        // The top 1/9 of the lower cell is water, not the 8/9 surface shadow.
+        assert!(store.point_in_water(0, 64.95, 0), "inside the column");
+        assert!(store.feet_in_water(0, 64.95, 0), "feet in the column");
+        // The column's own top cell still tops out at 8/9 (air above it).
+        assert!(store.point_in_water(0, 65.5, 0), "inside the top cell");
+        assert!(!store.point_in_water(0, 65.95, 0), "above the column");
+        assert!(!store.feet_in_water(0, 65.95, 0), "feet above the column");
+        // A lone source with air above keeps its own 8/9 surface.
+        store.set_block(0, 65, 0, 0).expect("clear the cell above");
+        assert!(
+            !store.point_in_water(0, 64.95, 0),
+            "a lone source tops at 8/9"
+        );
     }
 
     /// The free-headroom query (Шаг 15 п.5): the lowest collision box above the
