@@ -25,6 +25,10 @@ if not exist "server.toml" (
     echo The reports are produced from the client jar by
     echo tools\generate-reports.ps1. See server.example.toml for every field.
     echo.
+    echo Optional: collision_report = "...\reports\collision.json" enables the
+    echo forced crouch/crawl; without it a crawling player looks standing to
+    echo the other clients.
+    echo.
     pause
     exit /b 1
 )
