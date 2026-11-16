@@ -174,12 +174,34 @@ impl ChunkStore {
     /// Whether the block at `(x, y, z)` is water; a missing chunk/section is
     /// "not water" (never an error — an unloaded cell cannot submerge anyone).
     ///
-    /// The caller picks `y`; the swimming rule samples the block the player's
-    /// feet start in (`floor(y)`, the bounding-box bottom block — an
-    /// approximation flagged in `docs/SWIMMING.md` §2).
+    /// This is the block-name check of Шаг 14d. The Шаг 14e swimming rule no
+    /// longer uses it: it reads the fluid surface through
+    /// [`Self::feet_in_water`] so a waterlogged block the player stands on top
+    /// of does not count.
     pub fn is_water_at(&self, x: i32, y: i32, z: i32) -> bool {
         self.block(x, y, z)
             .is_some_and(|state| self.is_water(state))
+    }
+
+    /// Height of the water surface above the block base at `(x, y, z)`, or
+    /// `None` when the cell holds no water (or the chunk is not loaded).
+    pub fn water_surface_at(&self, x: i32, y: i32, z: i32) -> Option<f32> {
+        self.block(x, y, z)
+            .and_then(|state| self.blocks.water_surface(state))
+    }
+
+    /// Whether a player whose feet are at the continuous height `feet_y` is in
+    /// water at column `(x, z)`.
+    ///
+    /// The Шаг 14e rule: the feet block must carry water whose surface is
+    /// *above* the feet, so a player standing on top of a source, a top slab
+    /// or a stair is dry, while one standing inside a source, a waterlogged
+    /// block or a water plant is wet. This replaces the Шаг 14d "the feet
+    /// block is `minecraft:water`" check (`docs/SWIMMING.md` §4).
+    pub fn feet_in_water(&self, x: i32, feet_y: f64, z: i32) -> bool {
+        let block_y = feet_y.floor() as i32;
+        self.water_surface_at(x, block_y, z)
+            .is_some_and(|surface| (feet_y - f64::from(block_y)) < f64::from(surface))
     }
 
     /// The state id of the block at `(x, y, z)`, or `None` when the store
@@ -611,6 +633,24 @@ mod tests {
         assert_eq!(store.block(3, 64, 5), Some(1), "the old cell is kept");
         assert_eq!(store.block(4, 64, 5), Some(1), "the new one landed");
         assert_eq!(store.snapshot().chunks()[0].sections[8].non_air, 2);
+    }
+
+    /// The Шаг 14e feet check reads the water *surface*, not the block name:
+    /// feet inside a source are wet, feet above it are dry, and a missing cell
+    /// is dry.
+    #[test]
+    fn the_feet_check_reads_the_water_surface() {
+        let store = store_with(vec![test_chunk(0, 0)]);
+        store.set_block(0, 64, 0, 4).expect("a source");
+        assert!(store.feet_in_water(0, 64.0, 0), "feet at the base");
+        assert!(store.feet_in_water(0, 64.5, 0), "half a block up");
+        assert!(
+            !store.feet_in_water(0, 64.9, 0),
+            "above the 8/9 surface is dry"
+        );
+        assert!(!store.feet_in_water(0, 65.0, 0), "on top of the block");
+        assert!(!store.feet_in_water(1, 64.0, 0), "stone holds no water");
+        assert!(!store.feet_in_water(0, 200.0, 0), "no section, no water");
     }
 
     /// The number of chunks the store holds, and the air classification of

@@ -222,15 +222,16 @@ impl Scheduler {
         outcome
     }
 
-    /// Recomputes feet-in-water from the current immutable chunk snapshot.
+    /// Recomputes the swimming bit from the current immutable chunk snapshot.
     ///
-    /// TEMPORARY (Шаг 14e): the swimming bit additionally requires sprint, so
-    /// a player merely standing in water is no longer reported as swimming —
-    /// the owner's complaint about the 14d rule. This is **not** confirmed by
-    /// any trace: the one positive S8 sample showed pose 3 at rest too, and no
-    /// negative (dry-feet) water sample exists. It only suppresses the known
-    /// false positives until the Шаг 14e decision table (from G1..G7 vanilla
-    /// traces) replaces it; do not treat it as the original behaviour.
+    /// Шаг 14e: the bit follows the rule derived from the S10 vanilla trace
+    /// (`docs/SWIMMING.md` §4) — a player swims exactly when sprinting with the
+    /// feet in water. Two changes from the Шаг 14d pass: the feet check reads
+    /// the *fluid surface* of the feet block (`ChunkStore::feet_in_water`) so a
+    /// waterlogged block the player stands on top of no longer counts, and the
+    /// sprint requirement is now the confirmed rule rather than the temporary
+    /// 14e gate. The pose and flags follow from the bit in the visibility pass
+    /// (`entities::pose_of` / `entities::state_flags`).
     fn update_swimming(&mut self) {
         let Some(store) = self.store.as_ref() else {
             return;
@@ -239,19 +240,19 @@ impl Scheduler {
             let ids: Vec<_> = region.player_ids().collect();
             for id in ids {
                 if let Some(player) = region.get_mut(id) {
+                    // The feet block is `floor(y)`: the block the player's
+                    // bounding box starts in, so a swimmer on the bottom of a
+                    // pond samples water, not the floor below (the bug the 14d
+                    // live run hit with `y - 0.1`). The fractional part against
+                    // the fluid surface decides whether the feet are inside.
                     let position = player.position();
-                    // The feet block: `floor(y)` is the block the player's
-                    // bounding box starts in, so a swimmer standing on the
-                    // bottom of a pond still samples water, not the floor
-                    // below (the bug the 14d live run hit with `y - 0.1`).
-                    let (x, y, z) = (
+                    let feet_in_water = store.feet_in_water(
                         position.x.floor() as i32,
-                        position.y.floor() as i32,
+                        position.y,
                         position.z.floor() as i32,
                     );
-                    // TEMPORARY gate (see the method docs): sprint-only.
-                    let sprinting = player.sprint();
-                    player.set_swimming(store.is_water_at(x, y, z) && sprinting);
+                    player
+                        .set_swimming(super::entities::is_swimming(feet_in_water, player.sprint()));
                 }
             }
         }

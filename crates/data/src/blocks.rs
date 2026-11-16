@@ -22,6 +22,18 @@ use crate::error::DataError;
 /// (`{"facing": "north"}` → `{"facing": "north"}`).
 pub type Properties = BTreeMap<String, String>;
 
+/// The five water-shaped plant blocks that hold a water source.
+///
+/// SOURCE: the very list `world::wire_section::counts_as_fluid` uses and the
+/// S10 geometry sweep confirms as water at the feet (`docs/SWIMMING.md` §4).
+const WATER_PLANTS: [&str; 5] = [
+    "minecraft:seagrass",
+    "minecraft:tall_seagrass",
+    "minecraft:kelp",
+    "minecraft:kelp_plant",
+    "minecraft:bubble_column",
+];
+
 /// State ids of every block of the game copy, read from `reports/blocks.json`.
 #[derive(Debug, Default, Clone)]
 pub struct BlockStates {
@@ -137,23 +149,52 @@ impl BlockStates {
     /// because the wire palette, the only thing a chunk store over the wire
     /// sees, carries state ids rather than names.
     pub fn is_fluid(&self, state_id: i32) -> bool {
-        const AQUATIC: [&str; 5] = [
-            "minecraft:seagrass",
-            "minecraft:tall_seagrass",
-            "minecraft:kelp",
-            "minecraft:kelp_plant",
-            "minecraft:bubble_column",
-        ];
         let Some(name) = self.block_name(state_id) else {
             return false;
         };
-        if name.ends_with(":water") || name.ends_with(":lava") || AQUATIC.contains(&name) {
+        if name.ends_with(":water") || name.ends_with(":lava") || WATER_PLANTS.contains(&name) {
             return true;
         }
+        self.is_waterlogged(state_id)
+    }
+
+    /// Whether a state id carries a `waterlogged=true` property.
+    fn is_waterlogged(&self, state_id: i32) -> bool {
         self.properties
             .get(&state_id)
             .and_then(|props| props.get("waterlogged"))
             .is_some_and(|value| value == "true")
+    }
+
+    /// Height of the water surface above the block's base (`0..=1`), or `None`
+    /// when the block carries no water.
+    ///
+    /// A player counts as "in water" exactly when this surface is above the
+    /// feet (`net::ChunkStore::feet_in_water`). SOURCE: the S10 geometry sweep
+    /// (2026-11-16, r3) together with the observer mod's own
+    /// `FluidState.getOwnHeight()` readings — a water source tops out at
+    /// `(8 - level) / 9` (level 0 = source = `8/9`), a waterlogged block and
+    /// the five water-shaped plants carry a full source (`8/9`, the value
+    /// `getOwnHeight()` returns for them), and lava carries no water.
+    pub fn water_surface(&self, state_id: i32) -> Option<f32> {
+        let name = self.block_name(state_id)?;
+        if name.ends_with(":lava") {
+            return None;
+        }
+        if name.ends_with(":water") {
+            let level = self
+                .properties
+                .get(&state_id)
+                .and_then(|props| props.get("level"))
+                .and_then(|level| level.parse::<i32>().ok())
+                .unwrap_or(0)
+                .clamp(0, 7);
+            return Some((8 - level) as f32 / 9.0);
+        }
+        if WATER_PLANTS.contains(&name) || self.is_waterlogged(state_id) {
+            return Some(8.0 / 9.0);
+        }
+        None
     }
 
     /// Whether a state id is a water block (`minecraft:water`, any level).
@@ -269,6 +310,53 @@ mod tests {
         assert!(states.is_water(1), "water is water");
         assert!(!states.is_water(42), "a waterlogged slab is not water");
         assert!(!states.is_water(999), "an unknown id is not water");
+    }
+
+    /// The Шаг 14e fluid surface: a source, a waterlogged block and a water
+    /// plant carry water; lava, stone and a dry slab do not.
+    #[test]
+    fn the_water_surface_says_where_the_water_tops_out() {
+        let text = r#"{
+          "minecraft:water": {"states": [
+            {"id": 1, "properties": {"level": "0"}},
+            {"id": 2, "properties": {"level": "7"}}
+          ]},
+          "minecraft:lava": {"states": [{"id": 3, "properties": {"level": "0"}}]},
+          "minecraft:stone_slab": {"states": [
+            {"id": 4, "properties": {"type": "bottom", "waterlogged": "true"}},
+            {"id": 5, "properties": {"type": "top", "waterlogged": "false"}}
+          ]},
+          "minecraft:oak_fence": {"states": [
+            {"id": 6, "properties": {"waterlogged": "true"}}
+          ]},
+          "minecraft:seagrass": {"states": [{"id": 7}]},
+          "minecraft:kelp_plant": {"states": [{"id": 8}]},
+          "minecraft:stone": {"states": [{"id": 9}]}
+        }"#;
+        let states = BlockStates::parse(text, "test".to_owned()).expect("valid report");
+        let full = 8.0_f32 / 9.0;
+        assert_eq!(states.water_surface(1), Some(full), "a source tops at 8/9");
+        assert_eq!(
+            states.water_surface(2),
+            Some(1.0_f32 / 9.0),
+            "level 7 is shallow"
+        );
+        assert_eq!(states.water_surface(3), None, "lava is not water");
+        assert_eq!(
+            states.water_surface(4),
+            Some(full),
+            "a waterlogged slab holds a source"
+        );
+        assert_eq!(states.water_surface(5), None, "a dry slab holds no water");
+        assert_eq!(
+            states.water_surface(6),
+            Some(full),
+            "a waterlogged fence holds a source"
+        );
+        assert_eq!(states.water_surface(7), Some(full), "seagrass holds water");
+        assert_eq!(states.water_surface(8), Some(full), "kelp holds water");
+        assert_eq!(states.water_surface(9), None, "stone holds no water");
+        assert_eq!(states.water_surface(999), None, "an unknown id holds none");
     }
 
     #[test]
