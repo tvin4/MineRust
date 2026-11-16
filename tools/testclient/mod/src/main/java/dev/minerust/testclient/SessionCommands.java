@@ -1,14 +1,12 @@
 package dev.minerust.testclient;
 
 import java.io.File;
-import java.util.HashMap;
 import java.util.concurrent.CompletableFuture;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.ConnectScreen;
 import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.client.multiplayer.resolver.ServerAddress;
-import net.minecraft.client.multiplayer.TransferState;
 import net.minecraft.client.Screenshot;
 import net.minecraft.network.chat.Component;
 
@@ -65,7 +63,10 @@ final class SessionCommands {
 	 *
 	 * <p>Args: {@code host} - address without port; {@code port} - optional
 	 * (default 25565). The fifth startConnecting argument is false and the
-	 * TransferState is empty (SOURCE: signatures only, unverified).
+	 * TransferState is {@code null}: a non-null transfer state makes the
+	 * client send intention 3 (transfer), which the server closes; null is the
+	 * ordinary multiplayer login (SOURCE: signatures only, verified live by the
+	 * handshake intention in the server log).
 	 */
 	private JsonElement connect(JsonObject args) {
 		String host = Json.requireString(args, "host", "connect needs host (and optional port)");
@@ -82,7 +83,7 @@ final class SessionCommands {
 				address,
 				data,
 				false,
-				new TransferState(new HashMap<>(), new HashMap<>(), false));
+				null);
 		JsonObject out = new JsonObject();
 		out.addProperty("host", address.getHost());
 		out.addProperty("port", address.getPort());
