@@ -145,6 +145,15 @@ pub struct ServerConfig {
     /// Does not change the world's default spawn or save files.
     #[serde(default)]
     pub spawn_override: Option<String>,
+    /// Optional development-only geometry command file (Шаг 15 п.2).
+    ///
+    /// Off by default. When set, the server warns at startup and applies the
+    /// `/setblock` and `/fill` commands of the file to the in-memory chunk
+    /// store before the port is bound; the world directory is never written.
+    /// The file holds one command per line, blank lines and `#` comments
+    /// allowed (the format the S10 vanilla stand used).
+    #[serde(default)]
+    pub dev_geometry: Option<String>,
     /// Optional path to a saved world directory (step 3.3, M3).
     ///
     /// The directory is a world save: it holds `level.dat` (whose
@@ -255,6 +264,13 @@ impl ServerConfig {
         }
         if let Some(value) = self.spawn_override.as_deref() {
             parse_spawn_override(value)?;
+        }
+        if self
+            .dev_geometry
+            .as_deref()
+            .is_some_and(|path| path.trim().is_empty())
+        {
+            return Err(ConfigError::Invalid("dev_geometry is empty".to_owned()));
         }
         Ok(())
     }
@@ -423,6 +439,25 @@ simulation_distance = 4
             let config: ServerConfig = toml::from_str(&text).expect("toml string");
             assert!(config.validate().is_err(), "accepted {value}");
         }
+    }
+
+    #[test]
+    fn dev_geometry_is_optional_and_validated() {
+        let config: ServerConfig = toml::from_str(&example_toml()).expect("valid toml");
+        assert_eq!(config.dev_geometry, None, "absent means disabled");
+        config.validate().expect("valid");
+
+        let text = example_toml() + "dev_geometry = \"E:/data/s10-commands.txt\"\n";
+        let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+        assert_eq!(
+            config.dev_geometry.as_deref(),
+            Some("E:/data/s10-commands.txt")
+        );
+        config.validate().expect("valid");
+
+        let blank = example_toml() + "dev_geometry = \" \"\n";
+        let config: ServerConfig = toml::from_str(&blank).expect("valid toml");
+        assert!(matches!(config.validate(), Err(ConfigError::Invalid(_))));
     }
 
     #[test]

@@ -69,6 +69,17 @@ client_jar = "path/to/client.jar"
 # to teleport in game). Leave it out for the save's spawn.
 # spawn_override = "112,64,24"
 
+# Optional development-only geometry: a file of `/setblock` and `/fill`
+# commands applied to the in-memory chunk store at startup, so a scenario
+# stand can build the same geometry it feeds the vanilla server. Off unless
+# set; the server warns once when it is. The world directory on disk is never
+# written. One command per line; blank lines and `#` comments are ignored:
+#   setblock 100 201 -24 minecraft:bubble_column[drag=true]
+#   fill 99 201 -25 101 202 -23 minecraft:water
+# An unknown block name or an unknown state stops startup with the line
+# number. The scenario runner passes it as -OursDevGeometry.
+# dev_geometry = "path/to/s10-commands.txt"
+
 # Optional: vanilla server 26.3 installation used by the ignored parity
 # tests (crates/parity): an official server.jar from Mojang's version
 # manifest and the directory it runs in (eula.txt, server.properties,

@@ -5,6 +5,7 @@
 //! an ephemeral port without spawning a subprocess.
 
 mod config;
+mod geometry;
 mod template;
 
 pub use config::{load_config, ConfigError, ServerConfig};
@@ -60,6 +61,10 @@ pub enum RunError {
         /// What the field must point at.
         hint: &'static str,
     },
+    /// The development geometry file could not be read, parsed or applied
+    /// (Шаг 15 п.2).
+    #[error(transparent)]
+    Geometry(#[from] geometry::GeometryError),
 }
 
 /// What each required chunk-serving path must point at (see
@@ -256,6 +261,12 @@ pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> Result<(), R
             }
         }
     }
+    // Development geometry (Шаг 15 п.2): off unless configured; applied to
+    // the in-memory store before the port is bound, never written to the
+    // world directory.
+    if let Some(path) = config.dev_geometry.as_deref() {
+        apply_dev_geometry(path, store.as_deref())?;
+    }
     let listener = TcpListener::bind(&config.listen).await?;
     let local = listener.local_addr()?;
     tracing::info!(
@@ -283,6 +294,31 @@ pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> Result<(), R
         world,
     )
     .await?;
+    Ok(())
+}
+
+/// Applies the configured development geometry file to the in-memory store.
+///
+/// Warns once when enabled (the flag is development-only), then reads,
+/// resolves and writes each command. A missing store (a world that failed to
+/// warm up) skips the step with a warning rather than failing a server that
+/// has nothing to write into. Any bad line aborts startup with its number.
+fn apply_dev_geometry(path: &str, store: Option<&net::ChunkStore>) -> Result<(), RunError> {
+    tracing::warn!(
+        path,
+        "development geometry enabled: applying setblock/fill in memory only \
+         (the world directory is not written)"
+    );
+    let Some(store) = store else {
+        tracing::warn!("no world store is ready; development geometry skipped");
+        return Ok(());
+    };
+    let touched = geometry::apply_file(store, store.blocks(), path)?;
+    tracing::info!(
+        path,
+        blocks = touched,
+        "development geometry applied to the in-memory store"
+    );
     Ok(())
 }
 
@@ -346,6 +382,7 @@ mod tests {
             region_side: 0,
             game_mode: 0,
             spawn_override: None,
+            dev_geometry: None,
         }
     }
 

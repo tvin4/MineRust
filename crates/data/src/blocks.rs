@@ -122,6 +122,28 @@ impl BlockStates {
             .map(|(id, _)| *id)
     }
 
+    /// State id of `name` with `overrides` laid over the block's default
+    /// state — the way `/setblock name[key=value]` fills the properties the
+    /// command leaves out (`docs/SWIMMING.md` geometries, Шаг 15).
+    ///
+    /// `None` when the report does not list `name` or no state accepts the
+    /// merged values. An empty override set is the plain default state.
+    pub fn state_id_with_overrides(&self, name: &str, overrides: &Properties) -> Option<i32> {
+        let default_id = self.default_id(name)?;
+        if overrides.is_empty() {
+            return Some(default_id);
+        }
+        let mut merged = self
+            .properties
+            .get(&default_id)
+            .cloned()
+            .unwrap_or_default();
+        for (key, value) in overrides {
+            merged.insert(key.clone(), value.clone());
+        }
+        self.state_id(name, Some(&merged))
+    }
+
     /// Block name of a state id, if the report knows the id.
     pub fn block_name(&self, state_id: i32) -> Option<&str> {
         self.names.get(&state_id).map(String::as_str)
@@ -271,6 +293,59 @@ mod tests {
         // A property no state accepts resolves to nothing, not to a guess.
         let middle = Properties::from([("type".to_owned(), "middle".to_owned())]);
         assert_eq!(states.state_id("minecraft:oak_slab", Some(&middle)), None);
+    }
+
+    /// A `/setblock name[key=value]` spec resolves by laying the given
+    /// properties over the block's default state (Шаг 15).
+    #[test]
+    fn overrides_lay_over_the_default_state() {
+        let text = r#"{
+          "minecraft:bubble_column": {"states": [
+            {"id": 50, "default": true,
+             "properties": {"drag": "false", "waterlogged": "true"}},
+            {"id": 51, "default": false,
+             "properties": {"drag": "true", "waterlogged": "true"}},
+            {"id": 52, "default": false,
+             "properties": {"drag": "true", "waterlogged": "false"}}
+          ]},
+          "minecraft:stone": {"states": [{"id": 1, "default": true}]}
+        }"#;
+        let states = BlockStates::parse(text, "test".to_owned()).expect("valid report");
+
+        // No overrides: the plain default state.
+        assert_eq!(
+            states.state_id_with_overrides("minecraft:stone", &Properties::new()),
+            Some(1)
+        );
+        assert_eq!(
+            states.state_id_with_overrides("minecraft:bubble_column", &Properties::new()),
+            Some(50)
+        );
+        // `drag=true` alone fills `waterlogged=true` from the default state.
+        let drag = Properties::from([("drag".to_owned(), "true".to_owned())]);
+        assert_eq!(
+            states.state_id_with_overrides("minecraft:bubble_column", &drag),
+            Some(51)
+        );
+        // An explicit second property overrides the default fill.
+        let dry = Properties::from([
+            ("drag".to_owned(), "true".to_owned()),
+            ("waterlogged".to_owned(), "false".to_owned()),
+        ]);
+        assert_eq!(
+            states.state_id_with_overrides("minecraft:bubble_column", &dry),
+            Some(52)
+        );
+        // An unknown name or an unaccepted combination is not a guess.
+        assert_eq!(
+            states.state_id_with_overrides("minecraft:nope", &drag),
+            None
+        );
+        let bad = Properties::from([("drag".to_owned(), "maybe".to_owned())]);
+        assert_eq!(
+            states.state_id_with_overrides("minecraft:bubble_column", &bad),
+            None
+        );
     }
 
     #[test]
