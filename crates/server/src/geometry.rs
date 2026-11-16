@@ -241,6 +241,9 @@ pub fn load(path: impl AsRef<Path>) -> Result<Vec<(usize, Command)>, GeometryErr
         path: display,
         source,
     })?;
+    // A file written by Windows PowerShell starts with a UTF-8 BOM; it is not
+    // part of the first command.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
     let mut commands = Vec::new();
     for (index, raw) in text.lines().enumerate() {
         let line = index + 1;
@@ -486,6 +489,17 @@ mod tests {
             Some(0),
             "outside the fill stays air"
         );
+    }
+
+    #[test]
+    fn apply_file_accepts_a_utf8_bom() {
+        let store = store_with_chunk(0, 0);
+        let path = std::env::temp_dir().join("minerust-dev-geometry-bom.txt");
+        std::fs::write(&path, "\u{feff}setblock 7 200 7 stone\n").expect("write geometry file");
+        let touched = apply_file(&store, store.blocks(), &path).expect("BOM is not a command");
+        assert_eq!(touched, 1);
+        assert_eq!(store.block(7, 200, 7), Some(1));
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
