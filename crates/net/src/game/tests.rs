@@ -264,7 +264,7 @@ fn run_scenario(messages: Vec<ToGame>, tick: u64) -> String {
         tick,
         &mut incoming,
         &mut disconnected,
-        None,
+        &GameConfig::default(),
     );
     assert!(disconnected, "the scenario drains and then sees the end");
     let bytes = replay.into_sink().expect("the sink was enabled");
@@ -337,7 +337,7 @@ fn run_movement_scenario(
         tick,
         &mut incoming,
         &mut disconnected,
-        None,
+        &GameConfig::default(),
     );
     slot.store(movement);
     let outcome = scheduler.tick(tick, Instant::now());

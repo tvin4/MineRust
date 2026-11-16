@@ -69,19 +69,34 @@ impl LiveRun {
                     let (join, slot, _receiver) = join_at(id, spawn);
                     self.slots.insert(id, slot);
                     let message = ToGame::Join(Box::new(join));
-                    super::apply(&mut self.scheduler, &mut self.replay, tick, message, None);
+                    let config = GameConfig::default();
+                    super::apply(
+                        &mut self.scheduler,
+                        &mut self.replay,
+                        tick,
+                        message,
+                        &config,
+                    );
                 }
                 Action::Ack(id) => {
                     let message = ToGame::TeleportAck { id, teleport_id: 1 };
-                    super::apply(&mut self.scheduler, &mut self.replay, tick, message, None);
+                    let config = GameConfig::default();
+                    super::apply(
+                        &mut self.scheduler,
+                        &mut self.replay,
+                        tick,
+                        message,
+                        &config,
+                    );
                 }
                 Action::Quit(id) => {
+                    let config = GameConfig::default();
                     super::apply(
                         &mut self.scheduler,
                         &mut self.replay,
                         tick,
                         ToGame::Quit { id },
-                        None,
+                        &config,
                     );
                 }
                 Action::Move(id, (x, y, z)) => {
@@ -213,7 +228,8 @@ fn playback(journal: &[u8], workers: usize) -> Vec<String> {
                     let (join, slot, _receiver) = join_at(line.src, spawn);
                     slots.insert(line.src, slot);
                     let message = ToGame::Join(Box::new(join));
-                    super::apply(&mut scheduler, &mut replay, tick, message, None);
+                    let config = GameConfig::default();
+                    super::apply(&mut scheduler, &mut replay, tick, message, &config);
                 }
                 "teleport_ack" => {
                     let teleport_id = line.payload["teleport_id"].as_i64().unwrap_or(0) as i32;
@@ -221,15 +237,17 @@ fn playback(journal: &[u8], workers: usize) -> Vec<String> {
                         id: line.src,
                         teleport_id,
                     };
-                    super::apply(&mut scheduler, &mut replay, tick, message, None);
+                    let config = GameConfig::default();
+                    super::apply(&mut scheduler, &mut replay, tick, message, &config);
                 }
                 "quit" => {
+                    let config = GameConfig::default();
                     super::apply(
                         &mut scheduler,
                         &mut replay,
                         tick,
                         ToGame::Quit { id: line.src },
-                        None,
+                        &config,
                     );
                 }
                 "move" => {

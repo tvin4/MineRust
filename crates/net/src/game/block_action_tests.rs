@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use data::BlockStates;
+use data::{BlockHardness, BlockStates};
 use protocol::{
     ChunkSection, HeightmapRecord, LevelChunkWithLight, LightData, PaletteContainer, PlayerAction,
     Position,
@@ -19,7 +19,8 @@ use crate::store::ChunkStore;
 
 use super::test_support::{join_at, join_at_mode};
 use super::{
-    block_action, BlockAction, Region, Replay, Scheduler, ServerMessage, ToGame, SINGLE_REGION,
+    block_action, BlockAction, PlayerId, Region, Replay, Scheduler, ServerMessage, ToGame,
+    SINGLE_REGION,
 };
 
 /// A block report with just air and stone, so the store can classify a write.
@@ -103,14 +104,30 @@ fn traced_position() -> Position {
     }
 }
 
-/// Applies one action as player 1.
+/// Applies one action as player 1, with the timer off (no hardness report).
 fn act(scheduler: &mut Scheduler, store: &Arc<ChunkStore>, action: i32, sequence: i32) {
+    act_with(scheduler, store, None, None, action, sequence);
+}
+
+/// Applies one action as player 1 with explicit timer rules (Шаг 16a.3).
+fn act_with(
+    scheduler: &mut Scheduler,
+    store: &Arc<ChunkStore>,
+    hardness: Option<&BlockHardness>,
+    tolerance_ticks: Option<u32>,
+    action: i32,
+    sequence: i32,
+) {
     let mut replay = Replay::<Vec<u8>>::new(None);
     block_action::apply(
         scheduler,
         &mut replay,
         0,
         Some(store),
+        super::dig::DigRules {
+            hardness,
+            tolerance_ticks,
+        },
         BlockAction {
             id: 1,
             action,
@@ -258,6 +275,7 @@ fn a_finish_in_a_missing_chunk_only_acknowledges() {
         &mut replay,
         0,
         Some(&store),
+        super::dig::DigRules::trusting(),
         BlockAction {
             id: 1,
             action: PlayerAction::ACTION_FINISH,
@@ -317,6 +335,7 @@ fn without_a_store_the_action_is_only_acknowledged() {
         &mut replay,
         0,
         None,
+        super::dig::DigRules::trusting(),
         BlockAction {
             id: 1,
             action: PlayerAction::ACTION_FINISH,
@@ -347,7 +366,14 @@ fn the_tick_accepts_the_traced_break_message() {
     });
     match message {
         ToGame::BlockAction(action) => {
-            block_action::apply(&mut scheduler, &mut replay, 0, Some(&store), action);
+            block_action::apply(
+                &mut scheduler,
+                &mut replay,
+                0,
+                Some(&store),
+                super::dig::DigRules::trusting(),
+                action,
+            );
         }
         other => panic!("expected a block action, got {other:?}"),
     }
@@ -414,4 +440,389 @@ fn a_survival_start_still_only_acknowledges() {
     expect_ack(&mut receiver_a, 1);
     assert!(receiver_a.try_recv().is_err(), "no update to the digger");
     assert!(receiver_b.try_recv().is_err(), "nothing for the observer");
+}
+
+// === Шаг 16a.3: the server-side mining timer ==============================
+
+/// A hardness report for the test store: state 1 (stone) gets `hardness` and
+/// a bare-hand speed of 1.0; air (0) is instant.
+fn test_hardness(hardness: f64) -> Arc<BlockHardness> {
+    let text = format!(
+        r#"{{"states": 2, "hardness": {{"1": {hardness}, "0": 0.0}}, "handSpeed": {{"1": 1.0, "0": 1.0}}}}"#
+    );
+    Arc::new(BlockHardness::parse(&text, "test".to_owned()).expect("a valid report"))
+}
+
+/// Advances the mining timer one tick and returns the stage bytes the observer
+/// (player 2) received this tick.
+fn dig_tick(scheduler: &mut Scheduler, observer: &mut mpsc::Receiver<ServerMessage>) -> Vec<u8> {
+    super::dig::tick(scheduler);
+    let mut stages = Vec::new();
+    while let Ok(message) = observer.try_recv() {
+        match message {
+            ServerMessage::BlockDestruction { stage, .. } => stages.push(stage),
+            other => panic!("only crack stages reach the observer here, got {other:?}"),
+        }
+    }
+    stages
+}
+
+/// Expects one `block_destruction` on the queue.
+fn expect_stage(
+    receiver: &mut mpsc::Receiver<ServerMessage>,
+    digger: PlayerId,
+    position: Position,
+    stage: u8,
+) {
+    match receiver.try_recv().expect("a block_destruction") {
+        ServerMessage::BlockDestruction {
+            digger: got_digger,
+            position: got_position,
+            stage: got_stage,
+        } => {
+            assert_eq!(got_digger, digger, "the digging player's entity id");
+            assert_eq!(got_position, position, "the block being dug");
+            assert_eq!(got_stage, stage, "the crack stage");
+        }
+        other => panic!("expected block_destruction, got {other:?}"),
+    }
+}
+
+/// Expects `block_update(position, state)` — the rollback of a refused break
+/// carries the block's real state, not air.
+fn expect_block_state(
+    receiver: &mut mpsc::Receiver<ServerMessage>,
+    position: Position,
+    state: i32,
+) {
+    match receiver.try_recv().expect("a block_update") {
+        ServerMessage::BlockUpdate {
+            position: got,
+            state: got_state,
+        } => {
+            assert_eq!(got, position, "the traced position");
+            assert_eq!(got_state, state, "the block's real state");
+        }
+        other => panic!("expected block_update, got {other:?}"),
+    }
+}
+
+/// The leaves dig of the trace (hardness 0.2, `T = 6` ticks): the observer
+/// sees stages 1, 3, 5, 6, 8, 10, 11 — `floor(progress·10)` unclamped — while
+/// the digger only gets its start ack. Progress passes 1.0 without the server
+/// breaking the block; the client's finish does. [traced stages, §1.7]
+#[test]
+fn a_timed_leaves_dig_sends_the_traced_stage_sequence() {
+    let store = store_with_traced_chunk();
+    let hardness = test_hardness(0.2);
+    let (mut scheduler, mut receiver_a, mut receiver_b) = two_players();
+
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(3),
+        PlayerAction::ACTION_START,
+        1,
+    );
+    expect_ack(&mut receiver_a, 1);
+    assert!(
+        receiver_b.try_recv().is_err(),
+        "no stage before the first tick"
+    );
+
+    for stage in [1u8, 3, 5, 6, 8, 10, 11] {
+        assert_eq!(
+            dig_tick(&mut scheduler, &mut receiver_b),
+            vec![stage],
+            "the traced stage sequence"
+        );
+        assert!(
+            receiver_a.try_recv().is_err(),
+            "the digger never receives its own cracks"
+        );
+    }
+    assert_eq!(
+        store.block(93, 123, -22),
+        Some(1),
+        "the timer alone never breaks the block"
+    );
+
+    // Progress is 7/6: the finish is on time within the 3-tick tolerance. The
+    // observer sees the reset before the break effect, as the trace does.
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(3),
+        PlayerAction::ACTION_FINISH,
+        2,
+    );
+    expect_block_update(&mut receiver_a, traced_position());
+    expect_ack(&mut receiver_a, 2);
+    expect_stage(&mut receiver_b, 1, traced_position(), 0xFF);
+    expect_level_event(&mut receiver_b, traced_position(), 1);
+    expect_block_update(&mut receiver_b, traced_position());
+    assert_eq!(
+        store.block(93, 123, -22),
+        Some(0),
+        "the finish removes the block"
+    );
+}
+
+/// Dirt (0.5, `T = 15`) starts at stage 0: the first tick's progress is
+/// 1/15, so `floor(progress·10)` is 0; the second tick crosses to 1.
+#[test]
+fn a_slow_block_starts_at_stage_zero() {
+    let store = store_with_traced_chunk();
+    let hardness = test_hardness(0.5);
+    let (mut scheduler, _receiver_a, mut receiver_b) = two_players();
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(3),
+        PlayerAction::ACTION_START,
+        1,
+    );
+
+    assert_eq!(
+        dig_tick(&mut scheduler, &mut receiver_b),
+        vec![0],
+        "dirt starts at 0"
+    );
+    assert_eq!(
+        dig_tick(&mut scheduler, &mut receiver_b),
+        vec![1],
+        "two ticks of 1/15 cross the first tenth"
+    );
+}
+
+/// A finish one tick into a 60-tick log dig is refused (tolerance 0): the
+/// observer gets the crack reset, the digger the real state corrected and the
+/// ack, and the block stays. [hypothesis] — no trace shows a refusal.
+#[test]
+fn an_early_finish_is_refused_and_rolled_back() {
+    let store = store_with_traced_chunk();
+    let hardness = test_hardness(2.0);
+    let (mut scheduler, mut receiver_a, mut receiver_b) = two_players();
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(0),
+        PlayerAction::ACTION_START,
+        1,
+    );
+    expect_ack(&mut receiver_a, 1);
+    assert_eq!(dig_tick(&mut scheduler, &mut receiver_b), vec![0]);
+
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(0),
+        PlayerAction::ACTION_FINISH,
+        2,
+    );
+
+    expect_block_state(&mut receiver_a, traced_position(), 1);
+    expect_ack(&mut receiver_a, 2);
+    expect_stage(&mut receiver_b, 1, traced_position(), 0xFF);
+    assert!(
+        receiver_b.try_recv().is_err(),
+        "a refused break never reaches the observer"
+    );
+    assert_eq!(store.block(93, 123, -22), Some(1), "the block stays");
+}
+
+/// The 3-tick tolerance lets a finish slightly before `1.0` through: 58 of
+/// the log's 60 ticks are enough (the plan's soft option (a)). [hypothesis]
+#[test]
+fn the_finish_tolerance_accepts_a_slightly_early_dig() {
+    let store = store_with_traced_chunk();
+    let hardness = test_hardness(2.0);
+    let (mut scheduler, mut receiver_a, mut receiver_b) = two_players();
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(3),
+        PlayerAction::ACTION_START,
+        1,
+    );
+    expect_ack(&mut receiver_a, 1);
+    for _ in 0..58 {
+        let _ = dig_tick(&mut scheduler, &mut receiver_b);
+    }
+
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(3),
+        PlayerAction::ACTION_FINISH,
+        2,
+    );
+
+    expect_block_update(&mut receiver_a, traced_position());
+    expect_ack(&mut receiver_a, 2);
+    assert_eq!(store.block(93, 123, -22), Some(0), "the tolerance accepts");
+}
+
+/// An abort stops the timer and clears the cracks with `0xFF`; the block stays
+/// and no break packet goes out. [traced reset on an interrupted dig]
+#[test]
+fn an_abort_resets_the_cracks() {
+    let store = store_with_traced_chunk();
+    let hardness = test_hardness(0.2);
+    let (mut scheduler, mut receiver_a, mut receiver_b) = two_players();
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(3),
+        PlayerAction::ACTION_START,
+        1,
+    );
+    expect_ack(&mut receiver_a, 1);
+    assert_eq!(dig_tick(&mut scheduler, &mut receiver_b), vec![1]);
+
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(3),
+        PlayerAction::ACTION_ABORT,
+        2,
+    );
+
+    expect_ack(&mut receiver_a, 2);
+    expect_stage(&mut receiver_b, 1, traced_position(), 0xFF);
+    assert!(
+        receiver_b.try_recv().is_err(),
+        "an abort never breaks the block"
+    );
+    assert_eq!(store.block(93, 123, -22), Some(1), "the block stays");
+
+    // The timer is gone: a later finish is trusted as before (§4.2 trust).
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(3),
+        PlayerAction::ACTION_FINISH,
+        3,
+    );
+    expect_block_update(&mut receiver_a, traced_position());
+    expect_ack(&mut receiver_a, 3);
+}
+
+/// A player who quits mid-dig stops showing cracks to the observer: the quit
+/// takes the dig state with it and resets the cracks first. [hypothesis] — the
+/// traces have no quit case.
+#[test]
+fn a_quit_mid_dig_resets_the_cracks() {
+    let store = store_with_traced_chunk();
+    let hardness = test_hardness(0.2);
+    let (mut scheduler, mut receiver_a, mut receiver_b) = two_players();
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(3),
+        PlayerAction::ACTION_START,
+        1,
+    );
+    expect_ack(&mut receiver_a, 1);
+    assert_eq!(dig_tick(&mut scheduler, &mut receiver_b), vec![1]);
+
+    let mut replay = Replay::<Vec<u8>>::new(None);
+    let config = super::GameConfig {
+        store: Some(store.clone()),
+        hardness: Some(hardness.clone()),
+        ..super::GameConfig::default()
+    };
+    super::apply(&mut scheduler, &mut replay, 0, ToGame::Quit { id: 1 }, &config);
+
+    expect_stage(&mut receiver_b, 1, traced_position(), 0xFF);
+    assert!(
+        scheduler.regions()[0].get(1).is_none(),
+        "the dig state goes away with the player"
+    );
+    assert!(
+        receiver_a.try_recv().is_err(),
+        "the digger's own queue ends with it"
+    );
+}
+
+/// A state the report marks unbreakable (`hardness < 0`) is never timed and
+/// never removed: the start only acknowledges, the finish corrects the digger
+/// with the real state. [hypothesis] — no trace case.
+#[test]
+fn an_unbreakable_block_is_never_removed() {
+    let store = store_with_traced_chunk();
+    let hardness = test_hardness(-1.0);
+    let (mut scheduler, mut receiver_a, mut receiver_b) = two_players();
+
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(3),
+        PlayerAction::ACTION_START,
+        1,
+    );
+    expect_ack(&mut receiver_a, 1);
+    assert!(receiver_b.try_recv().is_err(), "no timer, no stages");
+
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(3),
+        PlayerAction::ACTION_FINISH,
+        2,
+    );
+    expect_block_state(&mut receiver_a, traced_position(), 1);
+    expect_ack(&mut receiver_a, 2);
+    assert!(receiver_b.try_recv().is_err(), "the observer hears nothing");
+    assert_eq!(store.block(93, 123, -22), Some(1), "bedrock stays bedrock");
+}
+
+/// `hardness = 0` is an instant block: no timer starts, no cracks are drawn,
+/// and the client's finish removes it with the usual traced packets.
+#[test]
+fn an_instant_block_breaks_without_a_timer() {
+    let store = store_with_traced_chunk();
+    let hardness = test_hardness(0.0);
+    let (mut scheduler, mut receiver_a, mut receiver_b) = two_players();
+
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(3),
+        PlayerAction::ACTION_START,
+        1,
+    );
+    expect_ack(&mut receiver_a, 1);
+    assert!(
+        receiver_b.try_recv().is_err(),
+        "an instant block has no stages"
+    );
+
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(3),
+        PlayerAction::ACTION_FINISH,
+        2,
+    );
+    expect_block_update(&mut receiver_a, traced_position());
+    expect_ack(&mut receiver_a, 2);
+    expect_level_event(&mut receiver_b, traced_position(), 1);
+    expect_block_update(&mut receiver_b, traced_position());
+    assert_eq!(store.block(93, 123, -22), Some(0), "the block is gone");
 }

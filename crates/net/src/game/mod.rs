@@ -12,6 +12,7 @@
 //! where no trace backs them (see `docs/ARCH-M4.md` §0/§1/§3).
 
 mod block_action;
+mod dig;
 mod entities;
 mod grid;
 mod messages;
@@ -65,8 +66,8 @@ pub use messages::{
 pub use metrics::{TickMetrics, TickMetricsHandle};
 pub use movement::MoveUpdate;
 pub use region::{
-    AppliedMove, Kick, Player, PlayerPos, Region, RegionId, StreamChunks, TickOutcome, Transfer,
-    SINGLE_REGION, SWING_DURATION_TICKS, SWING_THRESHOLD_TICKS,
+    AppliedMove, DigState, Kick, Player, PlayerPos, Region, RegionId, StreamChunks, TickOutcome,
+    Transfer, SINGLE_REGION, SWING_DURATION_TICKS, SWING_THRESHOLD_TICKS,
 };
 pub use replay::{Replay, ReplayRecord};
 pub use scheduler::Scheduler;
@@ -191,6 +192,12 @@ pub struct GameConfig {
     /// so the mining timer has nothing to measure a dig against and keeps
     /// trusting the client about when a block is broken.
     pub hardness: Option<Arc<data::BlockHardness>>,
+    /// Finish-time tolerance of the mining timer (Шаг 16a.3): a survival
+    /// finish is accepted once the server's progress is within this many ticks
+    /// of the expected `1.0`; `None` keeps the stage broadcasts but trusts
+    /// every finish. The default `Some(3)` is the soft tolerance of
+    /// `docs/BLOCK-BREAKING.md` §6 п.8, a **hypothesis** until 16a.4's oracle.
+    pub dig_tolerance_ticks: Option<u32>,
 }
 
 impl Default for GameConfig {
@@ -207,6 +214,7 @@ impl Default for GameConfig {
             default_game_mode: 0,
             store: None,
             hardness: None,
+            dig_tolerance_ticks: Some(3),
         }
     }
 }
@@ -447,10 +455,13 @@ fn game_loop(
             tick,
             &mut incoming,
             &mut disconnected,
-            config.store.as_ref(),
+            &config,
         );
         let after_apply = Instant::now();
         let outcome = scheduler.tick(tick, deadline);
+        // The mining timer advances after the regions (Шаг 16a.3), so a player
+        // that crossed a region boundary is advanced in its new region.
+        dig::tick(&mut scheduler);
         let after_sched = Instant::now();
         // Positions the tick applied (M4.2) are recorded after the queued
         // messages, so `seq` continues the per-tick counter that
@@ -578,11 +589,11 @@ fn apply_queued<W: std::io::Write>(
     tick: u64,
     incoming: &mut mpsc::Receiver<ToGame>,
     disconnected: &mut bool,
-    store: Option<&Arc<ChunkStore>>,
+    config: &GameConfig,
 ) {
     replay.start_tick();
     while let Some(message) = next_message(incoming, disconnected) {
-        apply(scheduler, replay, tick, message, store);
+        apply(scheduler, replay, tick, message, config);
     }
 }
 
@@ -596,7 +607,7 @@ fn apply<W: std::io::Write>(
     replay: &mut Replay<W>,
     tick: u64,
     message: ToGame,
-    store: Option<&Arc<ChunkStore>>,
+    config: &GameConfig,
 ) {
     match message {
         ToGame::Join(join) => {
@@ -628,10 +639,26 @@ fn apply<W: std::io::Write>(
         ToGame::Quit { id } => {
             let region_id = scheduler.region_of(id);
             replay.record(tick, region_id, id, "quit", serde_json::json!({}));
+            // A dig left behind must stop showing cracks to its observers
+            // (Шаг 16a.3); the state itself goes away with the player.
+            if let Some(dig) = dig::take(scheduler, id) {
+                dig::reset(scheduler, id, dig.position);
+            }
             scheduler.remove_player(id);
         }
         ToGame::BlockAction(action) => {
-            block_action::apply(scheduler, replay, tick, store, action);
+            let rules = dig::DigRules {
+                hardness: config.hardness.as_deref(),
+                tolerance_ticks: config.dig_tolerance_ticks,
+            };
+            block_action::apply(
+                scheduler,
+                replay,
+                tick,
+                config.store.as_ref(),
+                rules,
+                action,
+            );
         }
     }
 }

@@ -105,6 +105,14 @@ impl Scheduler {
         &self.regions
     }
 
+    /// The regions, mutable, in id order.
+    ///
+    /// The per-tick mining pass (Шаг 16a.3) walks the regions with exclusive
+    /// access: no lock, each region stays owned by the game thread.
+    pub fn regions_mut(&mut self) -> &mut [Region] {
+        &mut self.regions
+    }
+
     /// Looks a region up by id.
     pub fn region(&self, id: RegionId) -> Option<&Region> {
         self.regions.iter().find(|region| region.id() == id)

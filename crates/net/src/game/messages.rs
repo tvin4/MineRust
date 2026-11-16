@@ -161,6 +161,19 @@ pub enum ServerMessage {
         /// The removed block's state id.
         state: i32,
     },
+    /// A dig reached a new crack stage (Шаг 16a.3): the connection writes
+    /// `block_destruction` with the digger's entity id and the stage byte
+    /// (`BlockDestruction::KEY`). Sent to the observers of the dig only — the
+    /// digger draws its own cracks, and the traces show none coming back to
+    /// it.
+    BlockDestruction {
+        /// Entity id of the player digging.
+        digger: PlayerId,
+        /// Block being dug.
+        position: Position,
+        /// Crack stage byte (`0xFF` resets).
+        stage: u8,
+    },
 }
 
 /// Why the game thread closes a connection.

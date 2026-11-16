@@ -109,6 +109,27 @@ impl PlayerPos {
     }
 }
 
+/// A survival dig the server is timing (Шаг 16a.3).
+///
+/// One per player: vanilla has a single active dig at a time. The state is the
+/// server's own progress estimate, not a mirror of the client's prediction.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DigState {
+    /// Block being dug.
+    pub position: protocol::Position,
+    /// Progress of the dig; `1.0` is the expected finish
+    /// (`30·hardness/speed` ticks, §1.7 of `docs/BLOCK-BREAKING.md`).
+    pub progress: f32,
+    /// Progress added per tick (`speed/hardness/30`), kept in `f32` like the
+    /// game's own float accumulation (a `f64` sum of six `1/6` steps lands a
+    /// hair below `1.0` and misses the traced stage `10`).
+    pub step: f32,
+    /// Stage byte the observers already saw; `None` before the first stage.
+    pub stage: Option<u8>,
+    /// Ticks the dig has run (diagnostics and the finish-time tolerance).
+    pub ticks: u32,
+}
+
 /// A player the game thread owns: routing, whether movement may be trusted
 /// and the newest applied position (M4.2).
 #[derive(Debug)]
@@ -181,6 +202,9 @@ pub struct Player {
     /// Шаг 11). The packet itself goes only to observers, never to the
     /// player (the S3 trace shows A receiving none).
     pending_swings: u32,
+    /// The survival dig this player is timing (Шаг 16a.3), if any. Creative
+    /// and instant (`hardness = 0`) breaks never set it.
+    dig: Option<DigState>,
     connection: PlayerConnection,
 }
 
@@ -209,6 +233,7 @@ impl Player {
             swinging: false,
             swing_time: 0,
             pending_swings: 0,
+            dig: None,
             connection: join.connection,
         }
     }
@@ -221,6 +246,26 @@ impl Player {
     /// Game mode of this player (M4.5 Шаг 7.3).
     pub fn game_mode(&self) -> i32 {
         self.game_mode
+    }
+
+    /// The survival dig this player is timing (Шаг 16a.3), if any.
+    pub fn dig(&self) -> Option<DigState> {
+        self.dig
+    }
+
+    /// Mutable access to the dig state for the per-tick advance.
+    pub fn dig_mut(&mut self) -> Option<&mut DigState> {
+        self.dig.as_mut()
+    }
+
+    /// Replaces the dig state (a start adopts the new block).
+    pub fn set_dig(&mut self, dig: Option<DigState>) {
+        self.dig = dig;
+    }
+
+    /// Stops timing the dig and returns the state that was tracked.
+    pub fn take_dig(&mut self) -> Option<DigState> {
+        self.dig.take()
     }
 
     /// Name of Login Start.

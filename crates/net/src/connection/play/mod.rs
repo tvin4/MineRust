@@ -17,10 +17,11 @@ use chunk_pace::ChunkPace;
 
 use data::{GameData, PacketIds};
 use protocol::{
-    decode_frame, BlockChangedAck, BlockUpdate, ChunkBatchReceived, ClientInformation,
-    ConfirmTeleportation, KeepAlive, LevelEvent, PacketReader, PlayerAction, PlayerCommand,
-    PlayerInput, Position, ProtocolState, Punch, StatusInfo, MAX_STRING_CHARS, MOVE_PLAYER_POS,
-    MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT, MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
+    decode_frame, BlockChangedAck, BlockDestruction, BlockUpdate, ChunkBatchReceived,
+    ClientInformation, ConfirmTeleportation, KeepAlive, LevelEvent, PacketReader, PlayerAction,
+    PlayerCommand, PlayerInput, Position, ProtocolState, Punch, StatusInfo, MAX_STRING_CHARS,
+    MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT, MOVE_PLAYER_STATUS_ONLY,
+    PLAY_PLUGIN_MESSAGE,
 };
 use std::sync::Arc;
 
@@ -408,6 +409,27 @@ where
                             &mut writer,
                             ProtocolState::Play,
                             ids.id(LevelEvent::KEY),
+                            &packet.encode_payload(),
+                        )
+                        .await?;
+                    }
+                    // A dig reached a new crack stage (Шаг 16a.3): the
+                    // connection writes `block_destruction` with the digger's
+                    // entity id and the stage byte. Observers only.
+                    Some(ServerMessage::BlockDestruction {
+                        digger,
+                        position,
+                        stage,
+                    }) => {
+                        let packet = BlockDestruction {
+                            entity_id: digger,
+                            position,
+                            stage,
+                        };
+                        write_tracked(
+                            &mut writer,
+                            ProtocolState::Play,
+                            ids.id(BlockDestruction::KEY),
                             &packet.encode_payload(),
                         )
                         .await?;
