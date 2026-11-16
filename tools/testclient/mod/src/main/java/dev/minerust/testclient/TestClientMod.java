@@ -30,6 +30,7 @@ public class TestClientMod implements ClientModInitializer {
 		input.register(dispatcher);
 		new ObserveCommand(minecraft).register(dispatcher);
 		new SessionCommands(minecraft, ticks).register(dispatcher);
+		new TeleportCommand(minecraft).register(dispatcher);
 		int port = Integer.getInteger("testclient.port", DEFAULT_PORT);
 		new ControlServer(port, dispatcher).start();
 		ClientTickEvents.END_CLIENT_TICK.register(client -> {

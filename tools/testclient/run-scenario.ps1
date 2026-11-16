@@ -32,6 +32,11 @@ param(
 	# to place the joining player above open water, since our server has no
 	# RCON to teleport the player in game.
 	[string]$OursSpawnOverride = '',
+	# Development-only geometry file for our server (Шаг 15 п.2): setblock/fill
+	# commands applied to the in-memory store at startup. Empty leaves the
+	# generated config untouched. For S10 the runner writes the file from the
+	# scenario definition before the stand starts (-OursDevGeometry is the path).
+	[string]$OursDevGeometry = '',
 	[switch]$KeepStand
 )
 $ErrorActionPreference = 'Stop'
@@ -258,6 +263,16 @@ function Start-Stand {
 				$config = $config -replace '(?m)^spawn_override\s*=\s*"[^"]*"', "spawn_override = `"$OursSpawnOverride`""
 			} else {
 				$config = $config.TrimEnd() + "`r`nspawn_override = `"$OursSpawnOverride`"`r`n"
+			}
+		}
+		if ($OursDevGeometry) {
+			# TOML basic string: forward slashes avoid escape processing, and
+			# Windows accepts them as a path separator.
+			$geomPath = $OursDevGeometry -replace '\\', '/'
+			if ($config -match '(?m)^dev_geometry\s*=') {
+				$config = $config -replace '(?m)^dev_geometry\s*=.*$', "dev_geometry = `"$geomPath`""
+			} else {
+				$config = $config.TrimEnd() + "`r`ndev_geometry = `"$geomPath`"`r`n"
 			}
 		}
 		$config | Set-Content $oursConfig -Encoding utf8
@@ -1575,6 +1590,31 @@ function Get-S10Build {
 	}
 }
 
+# Writes the S10 platform and geometry commands to a file our server applies to
+# its in-memory store at startup (dev_geometry, Шаг 15 п.2). Must run before
+# Start-Stand: our server has no /fill, so the geometry has to be in the store
+# before the port opens.
+function Write-S10GeometryFile {
+	param([string]$Path)
+	$scenarioFile = Get-ChildItem (Join-Path $here 'scenarios') -Filter 's10-*.json' | Select-Object -First 1
+	if (-not $scenarioFile) { throw 'no s10 scenario file to build the geometry from' }
+	$cfg = Get-Content $scenarioFile.FullName -Raw | ConvertFrom-Json
+	$baseY = [int]$cfg.baseY
+	$xs = @($cfg.geometryRow.xs)
+	$zs = @($cfg.geometryRow.zs)
+	$lines = New-Object System.Collections.Generic.List[string]
+	foreach ($cmd in @($cfg.platform)) { $lines.Add([string]$cmd) }
+	foreach ($geo in $cfg.geometries) {
+		$slot = [int]$geo.slot
+		$col = $slot % $xs.Count
+		$row = [int][Math]::Floor($slot / $xs.Count)
+		$build = Get-S10Build $geo $baseY $xs[$col] $zs[$row]
+		foreach ($cmd in $build.commands) { $lines.Add([string]$cmd) }
+	}
+	$lines | Set-Content -LiteralPath $Path -Encoding utf8
+	Write-Host ("  [info] S10 dev geometry: {0} commands written to {1}" -f $lines.Count, $Path)
+}
+
 function Invoke-S10 {
 	param($Cfg, $Result)
 	$portA = [int]$Cfg.controlPortA
@@ -1611,36 +1651,49 @@ function Invoke-S10 {
 	$script:s7Facts.Add(("S10 B chunk drain: settled={0} loadedChunks={1}" -f $observer.settled, $observer.loadedChunks))
 
 	if (-not $isVanilla) {
-		# Our server has no /fill: the geometry must be pre-baked into the run
-		# world before start. Recorded as an honest gap, like S4/S9.
-		Add-Check $Result 'S10 geometry needs a pre-baked world on our server' $false `
-			'no /fill on our server; bake the s10-samples.json commands into the run world first and use -OursSpawnOverride (see docs/SWIMMING.md)'
-		$null = Invoke-TestCmd $portA (New-SessionCmd 's10-off' 'disconnect')
-		$null = Invoke-TestCmd $portB (New-SessionCmd 's10-offb' 'disconnect')
-		Start-Sleep -Seconds 3
-		return
-	}
+		# Our server has no /fill and no console: the geometry was applied to
+		# the in-memory store at startup through -OursDevGeometry (written by
+		# Write-S10GeometryFile before Start-Stand). Drowning is not
+		# implemented on our server, so the water_breathing effect is not
+		# needed either.
+		if (-not $OursDevGeometry) {
+			Add-Check $Result 'S10 geometry is available on our server' $false `
+				'pass -OursDevGeometry <file>: the runner writes the s10 commands there before start'
+			$null = Invoke-TestCmd $portA (New-SessionCmd 's10-off' 'disconnect')
+			$null = Invoke-TestCmd $portB (New-SessionCmd 's10-offb' 'disconnect')
+			Start-Sleep -Seconds 3
+			return
+		}
+		$script:s7Facts.Add("S10 dev geometry applied at startup: $OursDevGeometry")
+	} else {
+		# The build runs only after a client is connected: before that the server
+		# answers every /fill with "That position is not loaded" (first s10 run,
+		# 2026-11-16_1500) and the geometry never exists. forceload keeps the
+		# build area loaded while the commands run.
+		$fl = @($Cfg.forceload)
+		if ($fl.Count -eq 4) {
+			Invoke-VanillaConsole ("forceload add {0} {1} {2} {3}" -f $fl[0], $fl[1], $fl[2], $fl[3]) | Out-Null
+			Start-Sleep -Milliseconds 1000
+		}
+		foreach ($cmd in $allCommands) { Invoke-VanillaConsole $cmd | Out-Null }
+		Start-Sleep -Seconds 2
 
-	# The build runs only after a client is connected: before that the server
-	# answers every /fill with "That position is not loaded" (first s10 run,
-	# 2026-11-16_1500) and the geometry never exists. forceload keeps the build
-	# area loaded while the commands run.
-	$fl = @($Cfg.forceload)
-	if ($fl.Count -eq 4) {
-		Invoke-VanillaConsole ("forceload add {0} {1} {2} {3}" -f $fl[0], $fl[1], $fl[2], $fl[3]) | Out-Null
-		Start-Sleep -Milliseconds 1000
+		# Alice must survive the deep pools: in run r2 (2026-11-16_1526) she
+		# drowned in the 4-deep pool and the death screen froze every later
+		# teleport, so the second half of the run recorded no geometry at all.
+		# water_breathing takes drowning out of the picture and immediate respawn
+		# keeps a straggler death from stalling the loop. Neither changes the
+		# pose/flag behaviour under test.
+		Invoke-VanillaConsole ("effect give {0} minecraft:water_breathing infinite 0 true" -f $nickA) | Out-Null
+		Invoke-VanillaConsole 'gamerule doImmediateRespawn true' | Out-Null
+		# The observer must survive: on a fresh world at night a zombie killed Bob
+		# mid-run (r4, 2026-11-16) and his death screen stopped every later
+		# observation. Peaceful removes hostile mobs; it does not touch the
+		# pose/flag behaviour under test.
+		Invoke-VanillaConsole 'difficulty peaceful' | Out-Null
+		Invoke-VanillaConsole 'gamerule doMobSpawning false' | Out-Null
+		Start-Sleep -Milliseconds 500
 	}
-	foreach ($cmd in $allCommands) { Invoke-VanillaConsole $cmd | Out-Null }
-	Start-Sleep -Seconds 2
-
-	# Alice must survive the deep pools: in run r2 (2026-11-16_1526) she drowned
-	# in the 4-deep pool and the death screen froze every later teleport, so the
-	# second half of the run recorded no geometry at all. water_breathing takes
-	# drowning out of the picture and immediate respawn keeps a straggler death
-	# from stalling the loop. Neither changes the pose/flag behaviour under test.
-	Invoke-VanillaConsole ("effect give {0} minecraft:water_breathing infinite 0 true" -f $nickA) | Out-Null
-	Invoke-VanillaConsole 'gamerule doImmediateRespawn true' | Out-Null
-	Start-Sleep -Milliseconds 500
 
 	foreach ($geo in $geometries) {
 		$stand = $geo.stand
@@ -1649,17 +1702,31 @@ function Invoke-S10 {
 			# teleport, so the first samples are the fall-in, not a placement.
 			# dropY stays above the surface: a 4-deep pool otherwise starts the
 			# fall already submerged (run r2, 2026-11-16_1526).
-			$drop = [string]::Format($inv, "tp {0} {1} {2} {3} {4} {5}", `
-					$nickA, $stand.x, $geo.dropY, $stand.z, $stand.yaw, $stand.pitch)
-			Invoke-StandRcon $drop | Out-Null
+			if ($isVanilla) {
+				$drop = [string]::Format($inv, "tp {0} {1} {2} {3} {4} {5}", `
+						$nickA, $stand.x, $geo.dropY, $stand.z, $stand.yaw, $stand.pitch)
+				Invoke-StandRcon $drop | Out-Null
+			} else {
+				# Client-side teleport: our server has no /tp. The client's own
+				# movement path reports the new position and our server applies
+				# it, then the client falls the rest of the way itself.
+				$null = Invoke-TestCmd $portA (New-TpCmd "s10-$($geo.name)-drop" `
+						$stand.x $geo.dropY $stand.z $stand.yaw $stand.pitch)
+			}
 			Start-Sleep -Milliseconds 1200
 		}
 		$tp = [string]::Format($inv, "tp {0} {1} {2} {3} {4} {5}", `
 				$nickA, $stand.x, $stand.y, $stand.z, $stand.yaw, $stand.pitch)
-		# The teleport goes through RCON (the path S8 proved); the client is then
-		# probed until it reports the stand point (a geometry with no floor makes
-		# the player fall, and that must be visible as a failed check).
-		Invoke-StandRcon $tp | Out-Null
+		# Vanilla: the vanilla console teleports (the path S8 proved). Ours: the
+		# client teleports itself (no RCON/command on our server). The client is
+		# then probed until it reports the stand point (a geometry with no floor
+		# makes the player fall, and that must be visible as a failed check).
+		if ($isVanilla) {
+			Invoke-StandRcon $tp | Out-Null
+		} else {
+			$null = Invoke-TestCmd $portA (New-TpCmd "s10-$($geo.name)-tp" `
+					$stand.x $stand.y $stand.z $stand.yaw $stand.pitch)
+		}
 		$tpOk = $false
 		$probe = $null
 		$tpDeadline = (Get-Date).AddSeconds(6)
@@ -1749,6 +1816,9 @@ $scenarioDir = Join-Path $here 'scenarios'
 $allResults = @()
 try {
 	Prepare-RunWorld
+	if (-not $isVanilla -and $OursDevGeometry -and ($Scenarios -contains 's10')) {
+		Write-S10GeometryFile $OursDevGeometry
+	}
 	Start-Stand
 	foreach ($id in $Scenarios) {
 		$file = Get-ChildItem $scenarioDir -Filter "$id-*.json" | Select-Object -First 1

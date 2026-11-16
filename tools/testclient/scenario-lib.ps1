@@ -249,6 +249,20 @@ function New-SessionCmd {
 	return '{"id":"' + $Id + '","cmd":"' + $Cmd + '"}'
 }
 
+# Client-side teleport for our own server (no RCON, no /tp): the mod sets the
+# local player position and the client's own movement path reports it.
+# Rotation is optional; the invariant-culture strings keep the decimals plain.
+function New-TpCmd {
+	param([string]$Id, $X, $Y, $Z, $Yaw = $null, $Pitch = $null)
+	$inv = [System.Globalization.CultureInfo]::InvariantCulture
+	$json = '{"id":"' + $Id + '","cmd":"tp","args":{"x":' + ([string]::Format($inv, '{0}', $X)) +
+		',"y":' + ([string]::Format($inv, '{0}', $Y)) +
+		',"z":' + ([string]::Format($inv, '{0}', $Z))
+	if ($null -ne $Yaw) { $json += ',"yaw":' + ([string]::Format($inv, '{0}', $Yaw)) }
+	if ($null -ne $Pitch) { $json += ',"pitch":' + ([string]::Format($inv, '{0}', $Pitch)) }
+	return $json + '}}'
+}
+
 # --- result recording ------------------------------------------------------
 
 # Records one check into the scenario result object.
