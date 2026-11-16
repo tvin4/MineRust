@@ -2090,6 +2090,37 @@ MECHANICS.md` (пп. 4, 5, 6, 12).
   Флейк-чек «B chunk drain settled» переведён из проверок в facts (ронял
   прогоны 0928/0932 без протокольной причины).
 
+## Шаг 14b: автоочистка world.stale (16.11.2026)
+
+Коммит `1fca1d9`. Превенторный запуск (`Prune-StaleWorlds` в `run-scenario.ps1`
+перед `Prepare-RunWorld`): после копирования рабочего мира удаляются устаревшие
+каталоги `world.stale-<yyyyMMdd-HHmmss-fff>` в этом же каталоге, **остаются
+два последних**. Защита: имя обязано совпасть с лист-шаблоном, а `resolve()`
+после разрешения — оставаться внутри родительского каталога (никогда не удалять
+не-`world.stale` и ничего вне `world*`). Тест `world-protection`: три
+`Prepare-RunWorld` подряд → два stale каталога оставлены.
+
+## Шаг 14c: creative-ломание + `level_event` 2001 (16.11.2026)
+
+Код: `crates/protocol` (`LevelEvent` id 47, `EVENT_BLOCK_BREAK = 2001`,
+`TRACED_TRAILING = 0x00`), `crates/net/src/game/block_action.rs`
+(`broadcast_break`, creative start → finish), `ServerMessage::LevelEvent`,
+`GameConfig::default_game_mode` (server.toml `game_mode`, 0..=3, default 0),
+runner `-OursGameMode`. Детали и байты: `docs/BLOCK-BREAKING.md` §1.6.
+
+- Creative = mode 1: `player_action 0x00` (start) ломает блок мгновенно —
+  `level_event` 2001 наблюдателям → `block_update` state 0 всем →
+  `block_changed_ack` копающему. 2001 отправляется и в survival (S3).
+  `2019`/`2020`/`block_destruction` не шлются.
+- Побайтные тесты S3 (`000007d1 0000177ffffea07b 00000009 00`) и S9
+  (`000007d1 0000183ffffe208f 000001c2 00`); 10 тестов `block_action`.
+- **Живой прогон S9 на нашем сервере** (`2026-11-16_1233`, `-OursGameMode 1`):
+  5/5 PASS — creative виден B, прицел на блоке (96,143,−30), удержание удалило
+  блок (crosshair → MISS), B видит A, **`level_event` 2001 приходит раньше
+  air-`block_update` (ordered=True)**. Байты B совпали с ванильным S9.
+  Прогоны 1107/1145 — все модовые чеки PASS (B-trace 57 МБ читался python'ом;
+  чек порядка в runner поправлен на попарное сравнение).
+
 ## Остаточные факты и блокеры
 
 - **Шаг 10 C:** punch→swing не детерминирован один-к-одному на S3 (22 punch, 11 swing); правила drain/aggregation и удержания на блоке не установлены. Нужны новые подтверждённые трейсы/семантика перед реализацией.

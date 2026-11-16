@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 use crate::chunks::ReadyChunks;
 use crate::store::ChunkStore;
 
-use super::test_support::join_at;
+use super::test_support::{join_at, join_at_mode};
 use super::{
     block_action, BlockAction, Region, Replay, Scheduler, ServerMessage, ToGame, SINGLE_REGION,
 };
@@ -74,8 +74,20 @@ fn two_players() -> (
     mpsc::Receiver<ServerMessage>,
     mpsc::Receiver<ServerMessage>,
 ) {
+    two_players_with_mode(0)
+}
+
+/// [`two_players`] with the digger's game mode set (the observer stays
+/// survival).
+fn two_players_with_mode(
+    digger_mode: i32,
+) -> (
+    Scheduler,
+    mpsc::Receiver<ServerMessage>,
+    mpsc::Receiver<ServerMessage>,
+) {
     let mut scheduler = Scheduler::new(vec![Region::new(SINGLE_REGION)]);
-    let (join_a, _slot_a, receiver_a) = join_at(1, (0, 64, 0));
+    let (join_a, _slot_a, receiver_a) = join_at_mode(1, (0, 64, 0), digger_mode);
     let (join_b, _slot_b, receiver_b) = join_at(2, (0, 64, 0));
     scheduler.insert_player(join_a);
     scheduler.insert_player(join_b);
@@ -132,8 +144,28 @@ fn expect_ack(receiver: &mut mpsc::Receiver<ServerMessage>, sequence: i32) {
     }
 }
 
-/// The digger gets `block_update` then the ack; the observer gets the update
-/// only, and the block is gone from the store.
+/// Expects the block-break `level_event` on the queue: the traced effect
+/// (2001) and `data` = the state id the broken block had.
+fn expect_level_event(
+    receiver: &mut mpsc::Receiver<ServerMessage>,
+    position: Position,
+    broken_state: i32,
+) {
+    match receiver.try_recv().expect("a level_event") {
+        ServerMessage::LevelEvent {
+            position: got,
+            state,
+        } => {
+            assert_eq!(got, position, "the traced position");
+            assert_eq!(state, broken_state, "the removed block's state id");
+        }
+        other => panic!("expected level_event, got {other:?}"),
+    }
+}
+
+/// The digger gets `block_update` then the ack — and never a `level_event`;
+/// the observer gets the break `level_event` (with the removed state id)
+/// before its update, and the block is gone from the store.
 #[test]
 fn a_finish_removes_the_block_and_broadcasts_the_trace_packets() {
     let store = store_with_traced_chunk();
@@ -143,14 +175,17 @@ fn a_finish_removes_the_block_and_broadcasts_the_trace_packets() {
     act(&mut scheduler, &store, PlayerAction::ACTION_FINISH, 7);
 
     assert_eq!(store.block(93, 123, -22), Some(0), "air after the break");
-    // The digger: the update first, the ack second — the traced order.
+    // The digger: the update first, the ack second — the traced order; the
+    // break effect never reaches the digger (S3/S9).
     expect_block_update(&mut receiver_a, traced_position());
     expect_ack(&mut receiver_a, 7);
     assert!(
         receiver_a.try_recv().is_err(),
         "nothing else goes to the digger"
     );
-    // The observer: the update, never the ack.
+    // The observer: the break effect with the removed state id (1 = the
+    // store's stone), then the update; never the ack.
+    expect_level_event(&mut receiver_b, traced_position(), 1);
     expect_block_update(&mut receiver_b, traced_position());
     assert!(receiver_b.try_recv().is_err(), "an observer gets no ack");
 }
@@ -320,5 +355,63 @@ fn the_tick_accepts_the_traced_break_message() {
     assert_eq!(store.block(93, 123, -22), Some(0), "the block is removed");
     expect_block_update(&mut receiver_a, traced_position());
     expect_ack(&mut receiver_a, 4);
+    expect_level_event(&mut receiver_b, traced_position(), 1);
     expect_block_update(&mut receiver_b, traced_position());
+}
+
+/// In creative the start action itself breaks the block (Шаг 14c, the S9
+/// trace): the digger gets the air update then the ack; the observer gets the
+/// break `level_event` with the removed state id first, then the update.
+#[test]
+fn a_creative_start_breaks_the_block_immediately() {
+    let store = store_with_traced_chunk();
+    let (mut scheduler, mut receiver_a, mut receiver_b) = two_players_with_mode(1);
+    assert_eq!(store.block(93, 123, -22), Some(1), "solid before the break");
+
+    act(&mut scheduler, &store, PlayerAction::ACTION_START, 1);
+
+    assert_eq!(store.block(93, 123, -22), Some(0), "air after the break");
+    expect_block_update(&mut receiver_a, traced_position());
+    expect_ack(&mut receiver_a, 1);
+    assert!(
+        receiver_a.try_recv().is_err(),
+        "the creative digger receives no level_event"
+    );
+    expect_level_event(&mut receiver_b, traced_position(), 1);
+    expect_block_update(&mut receiver_b, traced_position());
+    assert!(receiver_b.try_recv().is_err(), "an observer gets no ack");
+}
+
+/// A player joining after the creative break reads the changed snapshot too —
+/// the chunk a later join sends already carries the air cell.
+#[test]
+fn a_later_join_after_a_creative_break_reads_the_changed_snapshot() {
+    let store = store_with_traced_chunk();
+    let (mut scheduler, _receiver_a, _receiver_b) = two_players_with_mode(1);
+
+    act(&mut scheduler, &store, PlayerAction::ACTION_START, 1);
+
+    let after = store.snapshot();
+    match &after.chunks()[0].sections[11].blocks {
+        PaletteContainer::Packed { palette, .. } => {
+            assert!(palette.contains(&0), "the air state is on the wire");
+        }
+        other => panic!("expected a packed section after the break, got {other:?}"),
+    }
+}
+
+/// A creative start in survival's shapes is untouched: with the digger in
+/// survival a start still only acknowledges and leaves the block (the S3
+/// trace), and the observer hears nothing.
+#[test]
+fn a_survival_start_still_only_acknowledges() {
+    let store = store_with_traced_chunk();
+    let (mut scheduler, mut receiver_a, mut receiver_b) = two_players();
+
+    act(&mut scheduler, &store, PlayerAction::ACTION_START, 1);
+
+    assert_eq!(store.block(93, 123, -22), Some(1), "the block stays");
+    expect_ack(&mut receiver_a, 1);
+    assert!(receiver_a.try_recv().is_err(), "no update to the digger");
+    assert!(receiver_b.try_recv().is_err(), "nothing for the observer");
 }

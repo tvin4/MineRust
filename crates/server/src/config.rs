@@ -134,6 +134,13 @@ pub struct ServerConfig {
     /// `docs/DECISIONS.md`): M4.6 decides the side.
     #[serde(default)]
     pub region_side: i32,
+    /// Game mode every new player joins in (Шаг 14c): `0` survival (the
+    /// default, the pre-14c behaviour), `1` creative, `2` adventure,
+    /// `3` spectator. Absent means survival. There is no in-game mode switch
+    /// yet, so the scenario runner raises it per run to place a player in
+    /// creative.
+    #[serde(default)]
+    pub game_mode: i32,
     /// Optional path to a saved world directory (step 3.3, M3).
     ///
     /// The directory is a world save: it holds `level.dat` (whose
@@ -235,6 +242,12 @@ impl ServerConfig {
             return Err(ConfigError::Invalid(
                 "vanilla_server_dir is empty".to_owned(),
             ));
+        }
+        if !(0..=3).contains(&self.game_mode) {
+            return Err(ConfigError::Invalid(format!(
+                "game_mode must be 0..=3 (survival, creative, adventure, spectator), got {}",
+                self.game_mode
+            )));
         }
         Ok(())
     }
@@ -342,6 +355,29 @@ simulation_distance = 4
         let config: ServerConfig = toml::from_str(&text).expect("valid toml");
         assert_eq!(config.region_side, 64);
         config.validate().expect("valid");
+    }
+
+    #[test]
+    fn game_mode_defaults_to_survival_and_parses_an_override() {
+        let config: ServerConfig = toml::from_str(&example_toml()).expect("valid toml");
+        assert_eq!(config.game_mode, 0, "absent means survival");
+
+        let text = example_toml() + "game_mode = 1\n";
+        let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+        assert_eq!(config.game_mode, 1, "creative");
+        config.validate().expect("valid");
+    }
+
+    #[test]
+    fn rejects_a_game_mode_outside_the_four_vanilla_modes() {
+        for mode in [-1, 4] {
+            let text = example_toml() + &format!("game_mode = {mode}\n");
+            let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+            assert!(
+                matches!(config.validate(), Err(ConfigError::Invalid(_))),
+                "game_mode = {mode} must be rejected"
+            );
+        }
     }
 
     #[test]

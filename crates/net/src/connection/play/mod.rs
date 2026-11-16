@@ -18,8 +18,8 @@ use chunk_pace::ChunkPace;
 use data::{GameData, PacketIds};
 use protocol::{
     decode_frame, BlockChangedAck, BlockUpdate, ChunkBatchReceived, ClientInformation,
-    ConfirmTeleportation, KeepAlive, PacketReader, PlayerAction, PlayerCommand, PlayerInput,
-    Position, ProtocolState, Punch, StatusInfo, MAX_STRING_CHARS, MOVE_PLAYER_POS,
+    ConfirmTeleportation, KeepAlive, LevelEvent, PacketReader, PlayerAction, PlayerCommand,
+    PlayerInput, Position, ProtocolState, Punch, StatusInfo, MAX_STRING_CHARS, MOVE_PLAYER_POS,
     MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT, MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
 };
 use std::sync::Arc;
@@ -384,6 +384,25 @@ where
                             &mut writer,
                             ProtocolState::Play,
                             ids.id(BlockChangedAck::KEY),
+                            &packet.encode_payload(),
+                        )
+                        .await?;
+                    }
+                    // A block broke (Шаг 14c): the connection writes
+                    // `level_event` with the block-break effect. The trailing
+                    // byte is the traced constant (its meaning is not
+                    // established; see `LevelEvent`).
+                    Some(ServerMessage::LevelEvent { position, state }) => {
+                        let packet = LevelEvent {
+                            event: LevelEvent::EVENT_BLOCK_BREAK,
+                            position,
+                            data: state,
+                            trailing: LevelEvent::TRACED_TRAILING,
+                        };
+                        write_tracked(
+                            &mut writer,
+                            ProtocolState::Play,
+                            ids.id(LevelEvent::KEY),
                             &packet.encode_payload(),
                         )
                         .await?;

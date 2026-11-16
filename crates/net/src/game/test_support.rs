@@ -23,6 +23,13 @@ pub fn join_at(id: PlayerId, spawn: (i32, i32, i32)) -> JoinFixture {
     join_view(id, &format!("player-{id}"), 10, spawn)
 }
 
+/// [`join_at`] with an explicit game mode (Шаг 14c: the creative digger).
+pub fn join_at_mode(id: PlayerId, spawn: (i32, i32, i32), game_mode: i32) -> JoinFixture {
+    let (join, slot, receiver) = join_at(id, spawn);
+    let join = PlayerJoin { game_mode, ..join };
+    (join, slot, receiver)
+}
+
 /// [`join_at`] with an explicit name and view distance (M4.5 Шаг 3.5
 /// equivalence tests).
 pub fn join_view(

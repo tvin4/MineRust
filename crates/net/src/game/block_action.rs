@@ -1,4 +1,4 @@
-//! Server-side block breaking (Шаг 13b).
+//! Server-side block breaking (Шаг 13b, Шаг 14c).
 //!
 //! The server **trusts the client's** `player_action`: a finish is applied
 //! without a server-side mining timer or hardness check. That is a
@@ -8,13 +8,20 @@
 //! What the client sees back is what the S3 trace records
 //! (`docs/BLOCK-BREAKING.md` §1.2): every action is acknowledged with
 //! `block_changed_ack` echoing its sequence; a finish that removes a block
-//! sends `block_update` (the removed state, air) to every player — the digger
-//! included — and only then the ack, exactly the order of the trace.
+//! sends `level_event` (the block-break effect) to the observers — the digger
+//! excluded — and then `block_update` (the removed state, air) to every
+//! player, the digger included, and only then the ack, exactly the order of
+//! the trace.
+//!
+//! In creative the start action already breaks the block (Шаг 14c): the
+//! vanilla S9 trace shows the digger holding attack for ~900 ms and two
+//! blocks gone, with no start/finish round trip per block.
 //!
 //! SOURCE: our vanilla S3 trace (`E:\MineRust-data\autotests\2026-11-14_1644\
-//! mcproxy\proxy-conn-6.jsonl`), the packet layout in `protocol` and the store
-//! in `net::store`. Where the trace carries no denial case, the response is a
-//! **hypothesis** and says so (see [`finish`]).
+//! mcproxy\proxy-conn-6.jsonl`), the S9 creative trace
+//! (`docs/BLOCK-BREAKING.md` §1.5), the packet layout in `protocol` and the
+//! store in `net::store`. Where the trace carries no denial case, the
+//! response is a **hypothesis** and says so (see [`finish`]).
 
 use std::sync::Arc;
 
@@ -33,6 +40,12 @@ use super::scheduler::Scheduler;
 /// `reports/blocks.json` gives `minecraft:air` the id `0`. The store's own
 /// `is_air` classification agrees with the same report.
 pub const AIR_STATE: i32 = 0;
+
+/// Game mode id of creative.
+///
+/// SOURCE: `entity_packets` already encodes the creative login (the same
+/// ordering across survival/creative/adventure/spectator).
+pub const CREATIVE: i32 = 1;
 
 /// Applies one `player_action` (41) for `id`.
 ///
@@ -71,17 +84,27 @@ pub(super) fn apply<W: std::io::Write>(
         return;
     };
     match action {
+        // Creative breaks on the click itself (Шаг 14c, S9): a start is a
+        // finish. In survival a start only acknowledges (the S3 trace's
+        // `block_changed_ack` after start, the block left in place).
+        PlayerAction::ACTION_START if game_mode(scheduler, id) == Some(CREATIVE) => {
+            finish(scheduler, store, id, position, sequence)
+        }
         PlayerAction::ACTION_FINISH => finish(scheduler, store, id, position, sequence),
-        // Start and abort change nothing; the trace acknowledges both (start
-        // carries `block_changed_ack` seq `01`, and a tap leaves the block).
+        // Start and abort change nothing in survival; the trace acknowledges
+        // both (start carries `block_changed_ack` seq `01`, and a tap leaves
+        // the block).
         _ => ack(scheduler, id, sequence),
     }
 }
 
 /// A finished break: removes the block if it can, then acknowledges.
 ///
-/// The success path follows the trace: `block_update` to every player (the
-/// digger included), then `block_changed_ack` to the digger.
+/// The success path follows the trace: `level_event` (the block-break effect,
+/// `data` = the state id the block had before removal) to the observers — the
+/// digger excluded — then `block_update` to every player (the digger
+/// included), then `block_changed_ack` to the digger (S3: the observer's 2001
+/// precedes its `block_update`).
 ///
 /// The refusal path is a **hypothesis** — the S3 trace never shows one. When
 /// the store knows the block (the chunk is loaded) it is sent back so the
@@ -98,7 +121,7 @@ fn finish(
         Some(state) if !store.is_air(state) => {
             match store.set_block(position.x, position.y, position.z, AIR_STATE) {
                 Ok(_) => {
-                    broadcast(scheduler, position, AIR_STATE);
+                    broadcast_break(scheduler, id, position, state);
                     ack(scheduler, id, sequence);
                 }
                 Err(err) => {
@@ -134,24 +157,56 @@ fn finish(
     }
 }
 
-/// Sends one `block_update` to every player of the scheduler, ascending id.
+/// Announces one broken block: the break `level_event` to the observers (the
+/// digger excluded, per S3/S9), then the `block_update` air state to every
+/// player, the digger included.
 ///
 /// M4 keeps one region (the whole world is [`SINGLE_REGION`](super::SINGLE_REGION)),
 /// so "every player" is the traced audience; the per-chunk view rule is a
 /// later refinement (`docs/BLOCK-BREAKING.md` §4.1).
-fn broadcast(scheduler: &mut Scheduler, position: Position, state: i32) {
+fn broadcast_break(
+    scheduler: &mut Scheduler,
+    digger: PlayerId,
+    position: Position,
+    broken_state: i32,
+) {
     let ids: Vec<PlayerId> = scheduler
         .regions()
         .iter()
         .flat_map(|region| region.player_ids())
         .collect();
+    for id in &ids {
+        if *id != digger {
+            deliver(
+                scheduler,
+                *id,
+                ServerMessage::LevelEvent {
+                    position,
+                    state: broken_state,
+                },
+            );
+        }
+    }
     for id in ids {
         deliver(
             scheduler,
             id,
-            ServerMessage::BlockUpdate { position, state },
+            ServerMessage::BlockUpdate {
+                position,
+                state: AIR_STATE,
+            },
         );
     }
+}
+
+/// The player's game mode, `None` for an id outside the regions.
+fn game_mode(scheduler: &Scheduler, id: PlayerId) -> Option<i32> {
+    scheduler
+        .regions()
+        .iter()
+        .find(|region| region.player_ids().any(|player| player == id))
+        .and_then(|region| region.get(id))
+        .map(|player| player.game_mode())
 }
 
 /// Sends one `block_changed_ack` to the digger.

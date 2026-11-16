@@ -151,6 +151,16 @@ pub enum ServerMessage {
         /// Sequence echoed back from the action.
         sequence: i32,
     },
+    /// A block broke (Шаг 14c): the connection writes `level_event` with the
+    /// block-break effect (`LevelEvent::EVENT_BLOCK_BREAK`) and `data` =
+    /// the state id the broken block had (`LevelEvent::KEY`). Sent to the
+    /// observers of the break — the digger excluded, per the S3/S9 traces.
+    LevelEvent {
+        /// Block that broke.
+        position: Position,
+        /// The removed block's state id.
+        state: i32,
+    },
 }
 
 /// Why the game thread closes a connection.

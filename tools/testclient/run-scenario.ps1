@@ -22,6 +22,10 @@ param(
 	[string]$RunDir = '',
 	[ValidateSet('vanilla', 'ours')]
 	[string]$Target = 'vanilla',
+	# Game mode new players join in on our server (Шаг 14c). -1 (the default)
+	# leaves the generated server-ours.toml untouched (survival). The S9
+	# creative run uses 1: our server has no RCON to switch modes in game.
+	[int]$OursGameMode = -1,
 	[switch]$KeepStand
 )
 $ErrorActionPreference = 'Stop'
@@ -236,6 +240,13 @@ function Start-Stand {
 		$oursConfig = Join-Path $RunDir 'server-ours.toml'
 		$config = (Get-Content $repoServerToml -Raw) -replace 'listen\s*=\s*"[^"]*"', 'listen = "127.0.0.1:25566"'
 		$config = $config -replace "world_dir\s*=\s*'[^']*'", "world_dir = '$($script:activeWorldDir)'"
+		if ($OursGameMode -ge 0) {
+			if ($config -match '(?m)^game_mode\s*=') {
+				$config = $config -replace '(?m)^game_mode\s*=\s*\d+', "game_mode = $OursGameMode"
+			} else {
+				$config = $config.TrimEnd() + "`r`ngame_mode = $OursGameMode`r`n"
+			}
+		}
 		$config | Set-Content $oursConfig -Encoding utf8
 		Start-Process -FilePath $serverExe -ArgumentList '--config', $oursConfig `
 			-WorkingDirectory (Split-Path -Parent $repoServerToml) `
@@ -1324,16 +1335,22 @@ function Invoke-S9 {
 			$observer.settled, $observer.loadedChunks))
 
 	if (-not $isVanilla) {
-		Add-Check $Result 'creative mode is a vanilla RCON command' $false `
-			'no RCON on our server - the creative break is a vanilla-trace fact'
-		$null = Invoke-TestCmd $portA (New-SessionCmd 's9-off' 'disconnect')
-		$null = Invoke-TestCmd $portB (New-SessionCmd 's9-offb' 'disconnect')
-		Start-Sleep -Seconds 3
-		return
+		# Ours (Шаг 14c): creative comes from the generated config
+		# (-OursGameMode 1 patches game_mode into server-ours.toml); there is
+		# no RCON to switch modes in game. Without it the scenario stays the
+		# recorded vanilla-trace gap.
+		if ($OursGameMode -lt 0) {
+			Add-Check $Result 'creative mode is a vanilla RCON command' $false `
+				'no RCON on our server and no -OursGameMode was set - the creative break is a vanilla-trace fact'
+			$null = Invoke-TestCmd $portA (New-SessionCmd 's9-off' 'disconnect')
+			$null = Invoke-TestCmd $portB (New-SessionCmd 's9-offb' 'disconnect')
+			Start-Sleep -Seconds 3
+			return
+		}
+	} else {
+		Invoke-StandRcon ("gamemode creative {0}" -f $nickA) | Out-Null
+		Start-Sleep -Milliseconds $settle
 	}
-
-	Invoke-StandRcon ("gamemode creative {0}" -f $nickA) | Out-Null
-	Start-Sleep -Milliseconds $settle
 	$mode = (Invoke-TestCmd $portB (New-ObserveCmd 's9-mode' $nickA)).result
 	Add-Check $Result 'B sees A in creative' ($mode.gameMode -eq 'creative') `
 		("gameMode seen by B: {0}" -f $mode.gameMode)
@@ -1378,6 +1395,47 @@ function Invoke-S9 {
 	$witness = (Invoke-TestCmd $portB (New-ObserveCmd 's9-witness' $nickA)).result
 	Add-Check $Result 'B observed A after the break' ($witness.found -eq $true) `
 		("pose={0} pos=({1},{2},{3})" -f $witness.pose, $witness.pos.x, $witness.pos.y, $witness.pos.z)
+
+	if (-not $isVanilla) {
+		# Ours (Шаг 14c): the wire facts of "B sees the block gone" — the
+		# break level_event (event 2001, data = the destroyed state id)
+		# reaches B before the air block_update, the S3/S9 observer order.
+		$bFiles = Get-NewTraceFiles $traceDir $watermark
+		$bTrace = $bFiles | Select-Object -Skip 1 | Select-Object -First 1
+		$breakOk = $false
+		$breakFacts = 'no B trace'
+		if ($bTrace) {
+			# The traces are tens of megabytes: prefilter the raw lines with
+			# Select-String and parse only the block-break rows (a full
+			# Read-Trace of 57 MB takes tens of minutes in PowerShell).
+			$bRows = @(Select-String -LiteralPath $bTrace.FullName -Pattern 'minecraft:(level_event|block_update)' |
+					ForEach-Object { $_.Line | ConvertFrom-Json } |
+					Where-Object { $_.dir -eq 'clientbound' -and $_.state -eq 'play' })
+			$breakLevels = @($bRows | Where-Object {
+					if ($_.name -ne 'minecraft:level_event') { return $false }
+					$p = ConvertFrom-TraceB64 $_.b64
+					$p.Length -ge 4 -and $p[0] -eq 0x00 -and $p[1] -eq 0x00 -and $p[2] -eq 0x07 -and $p[3] -eq 0xd1
+				})
+			$airUpdates = @($bRows | Where-Object {
+					if ($_.name -ne 'minecraft:block_update') { return $false }
+					$p = ConvertFrom-TraceB64 $_.b64
+					$p.Length -eq 9 -and $p[8] -eq 0
+				})
+			$levelSeqs = @($breakLevels | ForEach-Object { [int]$_.seq })
+			$airSeqs = @($airUpdates | ForEach-Object { [int]$_.seq })
+			# One level_event per broken block, each followed by its air
+			# update: check the pairs (max<min fails on an interleaved pair).
+			$breakOk = ($levelSeqs.Count -ge 1) -and ($levelSeqs.Count -eq $airSeqs.Count)
+			if ($breakOk) {
+				for ($i = 0; $i -lt $levelSeqs.Count; $i++) {
+					if ($levelSeqs[$i] -ge $airSeqs[$i]) { $breakOk = $false; break }
+				}
+			}
+			$breakFacts = "level_event(2001)={0} block_update(air)={1} ordered={2}" -f `
+				$breakLevels.Count, $airUpdates.Count, $breakOk
+		}
+		Add-Check $Result 'B receives the break level_event 2001 before the air block_update' $breakOk $breakFacts
+	}
 
 	$script:s7Facts.Add(("S9 creative crosshair: hitType={0} block=({1},{2},{3})" -f `
 			$before.hitType, $before.hitBlock.x, $before.hitBlock.y, $before.hitBlock.z))

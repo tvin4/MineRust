@@ -1015,6 +1015,72 @@ impl BlockChangedAck {
     }
 }
 
+/// Clientbound Level Event: a world-wide effect tied to a position (play id
+/// 0x2F).
+///
+/// SOURCE: our vanilla traces. The block-break event (`2001`) reaches the
+/// observers of a broken block — never the digger — as
+/// `event i32 BE + packed pos (8 B) + data i32 BE + one trailing byte 0x00`,
+/// where `data` is the block state id the block had before it was removed
+/// (S3: `data 9` = `grass_block`; S9: `data 450` = `dark_oak_leaves`, both
+/// from `reports/blocks.json`). The neighbouring break effects `2019`/`2020`
+/// reach only the digger; we do not send them.
+///
+/// The trailing byte is **not established**: the traces always carry `0x00`,
+/// so we reproduce it as a constant [hypothesis: a global-event flag].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LevelEvent {
+    /// Effect code (`2001` = block break with particles).
+    pub event: i32,
+    /// Position the effect is tied to.
+    pub position: Position,
+    /// Event data — for a break, the removed block's state id.
+    pub data: i32,
+    /// Traced constant `0x00`; its meaning is not established (see above).
+    pub trailing: u8,
+}
+
+impl LevelEvent {
+    /// Packet id of Level Event (play state, clientbound).
+    pub const ID: u32 = 0x2F;
+
+    /// Key that resolves the Level Event id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::clientbound(ProtocolState::Play, "minecraft:level_event", Self::ID);
+
+    /// Event code of the block-break effect, from the S3/S9 traces.
+    pub const EVENT_BLOCK_BREAK: i32 = 2001;
+
+    /// The trailing byte the traces always carry (not established, see the
+    /// struct comment).
+    pub const TRACED_TRAILING: u8 = 0x00;
+
+    /// Encodes the payload (packet id excluded).
+    pub fn encode_payload(&self) -> Vec<u8> {
+        let mut writer = PacketWriter::new();
+        writer.write_i32(self.event);
+        writer.write_position(self.position);
+        writer.write_i32(self.data);
+        writer.write_u8(self.trailing);
+        writer.into_bytes()
+    }
+
+    /// Decodes the payload; the packet id must already be consumed.
+    pub fn decode_payload(reader: &mut PacketReader<'_>) -> Result<Self, CodecError> {
+        Ok(Self {
+            event: reader.read_i32()?,
+            position: reader.read_position()?,
+            data: reader.read_i32()?,
+            trailing: reader.read_u8()?,
+        })
+    }
+
+    /// Encodes the packet as a complete frame.
+    pub fn to_frame(&self) -> Result<Vec<u8>, CodecError> {
+        encode_frame(Self::ID, &self.encode_payload())
+    }
+}
+
 /// Serverbound Player Action: the client's block-breaking signal (play id
 /// 0x29).
 ///
@@ -1465,6 +1531,50 @@ mod tests {
                 BlockChangedAck::decode_payload,
             );
         }
+    }
+
+    /// The block-break `level_event` the S3 observer received after the
+    /// grass block (93,123,−22) broke: event `2001`, `data 9` = the removed
+    /// state id (`grass_block`, `reports/blocks.json`), trailing `0x00`.
+    #[test]
+    fn level_event_roundtrips_the_s3_break() {
+        crate::packets::test_support::check(
+            LevelEvent {
+                event: LevelEvent::EVENT_BLOCK_BREAK,
+                position: Position {
+                    x: 93,
+                    y: 123,
+                    z: -22,
+                },
+                data: 9,
+                trailing: LevelEvent::TRACED_TRAILING,
+            },
+            "000007d10000177ffffea07b0000000900",
+            |packet| Ok(packet.encode_payload()),
+            LevelEvent::decode_payload,
+        );
+    }
+
+    /// The block-break `level_event` the S9 observer received twice after
+    /// the creative digger broke dark oak leaves at (96,143,−30): `data 450`
+    /// = the removed state id (`dark_oak_leaves`, `reports/blocks.json`).
+    #[test]
+    fn level_event_roundtrips_the_s9_break() {
+        crate::packets::test_support::check(
+            LevelEvent {
+                event: LevelEvent::EVENT_BLOCK_BREAK,
+                position: Position {
+                    x: 96,
+                    y: 143,
+                    z: -30,
+                },
+                data: 450,
+                trailing: LevelEvent::TRACED_TRAILING,
+            },
+            "000007d10000183ffffe208f000001c200",
+            |packet| Ok(packet.encode_payload()),
+            LevelEvent::decode_payload,
+        );
     }
 
     #[test]
