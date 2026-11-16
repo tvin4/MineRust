@@ -228,6 +228,36 @@ pub fn state_flags(sneak: bool, sprint: bool, swimming: bool) -> u8 {
         | if swimming { 0x10 } else { 0 }
 }
 
+/// The Шаг 14e swimming rule: a player swims exactly when sprinting with the
+/// feet in water.
+///
+/// SOURCE: the S10 vanilla trace (2026-11-16, r3), 68 flags transitions across
+/// the sixteen geometries — `state_flags` composed with this rule reproduces
+/// 50/68 exactly and 66/68 (97.1%) within one event; see the oracle test
+/// `swim_tests`. The two residual events are sprint-flag transients at a
+/// geometry teleport. The two other candidate shapes (also require the eyes
+/// submerged, or a start-only hysteresis) scored identically on this trace and
+/// are not distinguished by it, so the simplest consistent rule is kept.
+pub fn is_swimming(feet_in_water: bool, sprint: bool) -> bool {
+    feet_in_water && sprint
+}
+
+/// The pose metadata value for the confirmed sneak/swim state.
+///
+/// Swimming wins over sneaking: a swimming player is pose 3 even with the
+/// sneak key held (the S10 trace never shows sneak and swim together, so the
+/// precedence is the simplest consistent choice).
+// SOURCE: S10 r3 vanilla trace; the S8 trace for the sneak/swim poses.
+pub fn pose_of(sneak: bool, swimming: bool) -> u8 {
+    if swimming {
+        3
+    } else if sneak {
+        5
+    } else {
+        0
+    }
+}
+
 /// A traced sneak/sprint/swim metadata transition for a survival or creative player.
 ///
 /// Combined flag values such as `0x0a` are the OR of confirmed bits but the
@@ -471,13 +501,7 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
                                         .then_some(state[subject].2),
                                     pose: ((previous.0 != state[subject].0)
                                         || (previous.2 != state[subject].2))
-                                        .then_some(if state[subject].2 {
-                                            3
-                                        } else if state[subject].0 {
-                                            5
-                                        } else {
-                                            0
-                                        }),
+                                        .then_some(pose_of(state[subject].0, state[subject].2)),
                                 });
                                 next_broadcast_state[subject] = Some(state[subject]);
                             }

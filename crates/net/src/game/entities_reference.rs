@@ -14,8 +14,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use protocol::{offline_uuid, Uuid};
 
 use super::entities::{
-    mutually_visible, pose_differs, relative_delta, state_flags, view_radius, EntityMotion,
-    EntityMove, EntityRemove, EntitySpawn, EntityStateUpdate, StreamEntities,
+    mutually_visible, pose_differs, pose_of, relative_delta, state_flags, view_radius,
+    EntityMotion, EntityMove, EntityRemove, EntitySpawn, EntityStateUpdate, StreamEntities,
     BROADCAST_PERIOD_TICKS, UPDATE_INTERVAL,
 };
 use super::messages::PlayerId;
@@ -160,13 +160,7 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
                             sprinting: (previous.1 != state[&id].1).then_some(state[&id].1),
                             swimming: (previous.2 != state[&id].2).then_some(state[&id].2),
                             pose: ((previous.0 != state[&id].0) || (previous.2 != state[&id].2))
-                                .then_some(if state[&id].2 {
-                                    3
-                                } else if state[&id].0 {
-                                    5
-                                } else {
-                                    0
-                                }),
+                                .then_some(pose_of(state[&id].0, state[&id].2)),
                         });
                         next_broadcast_state.insert(id, Some(state[&id]));
                     }
