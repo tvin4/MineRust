@@ -67,7 +67,16 @@ CI runs the same checks on every push and pull request
    client_jar = "path/to/your/client.jar"
    protocol_version = <from your game's version.json>
    version_name = "<from your game's version.json>"
+   save_dir = "MineRust-data/worlds/minecraft-v3"
    ```
+
+   `save_dir` keeps player data across restarts (position, rotation, health,
+   food, game mode) in the vanilla layout `<save_dir>/players/data/<uuid>.dat`.
+   Use one directory per world; it must not be the world template or the
+   vanilla parity stand. Without `save_dir` the server writes nothing, warns
+   once at startup, and every join starts at the spawn with 20/20/5. The
+   default autosave is 6000 ticks (5 minutes); a quit and a graceful stop
+   always save.
 
 2. Start the server:
 

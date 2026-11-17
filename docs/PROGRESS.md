@@ -2871,3 +2871,109 @@ join`/`--test status` читают `set_health` после телепорта. `
 
 - S13 не выполним в текущей среде (нет собранного стенда). Правило — «не
   установлено», пока владелец не прогонит сценарий.
+
+## Шаг 19: живая проверка playerdata (19a), тест (в) (19b), риски (19c)
+
+**19.0 (Шаг 18 / S14).** Проверка «был ли выполнен шаг 18»: да. Мгновенное
+ломание и водные блоки закрыты коммитами `b8c7ade`, `55dfd0f`, `147e4b5`,
+`41c658c`, `9499d9d`, docs `e782944`; живой прогон
+`2026-11-17_s14-ours-r3` — 0 failed.
+
+### 19a — живая проверка S13 (закрыто)
+
+Стенд: release-сервер, `mcproxy`, Fabric-тест-клиент 26.3. Основной прогон —
+`E:\MineRust-data\autotests\2026-11-17_s13-live-r7` (0 failed): `save_dir`
+внутри каталога прогона, `game_mode = 0`, `force_gamemode = true`,
+`autosave_interval_ticks = 200`. Дополнительно:
+
+- `2026-11-17_s13-stop-r1` (0 failed): закрытие консоли сервера (`taskkill`
+  без `/F`) → `player saves flushed`, файл новее остановки, dxz 0,000.
+- `2026-11-17_s13-gamemode-r2` (0 failed): `force_gamemode=false`, в файле
+  `playerGameType=2` (adventure), конфиг `survival` → клиент вошёл в
+  adventure, т.е. файл победил.
+
+Проверки r7 (подробности и точные числа — `docs/PLAYERDATA.md` §12):
+движение/поворот (yaw 27, pitch 9) сохраняются автосейвом при подключённом A
+и на выходе; `Pos`/`Rotation` в файле совпадают с наблюдёнными (dxz 0,000);
+схема NBT (`Pos`, `Rotation`, `Health=20`, `foodLevel=20`, `foodSaturationLevel=5`,
+`DataVersion=5023`, `playerGameType=0`, `Dimension=minecraft:overworld`,
+`OnGround=1`); повторный вход телепортирует в сохранённую позу и поворот
+(`player_position`, dxz 0,0000); `force_gamemode=true` берёт режим конфига
+(файл 2 → клиент survival); B видит A в сохранённой позе (`add_entity seq=62`,
+dxz 0,000); битый файл → спавн + `warn`; шаблон (55 файлов) и
+`vanilla\world` (64 файла) не изменились (SHA-256).
+
+Найдено и исправлено по ходу:
+
+- `playerdata::file_name` реверсировал первые три группы UUID-строки вместо
+  байтов UUID по порядку: сервер искал `08059210-...`, файл лежит как
+  `10920508-...`. Новый тест — на файл ParityBot из шаблона.
+- `MoveSlot` держал только последний пакет движения, поэтому
+  `move_player_rot`, пришедший перед `move_player_pos` в том же тике, терялся
+  и в файл писался `Rotation=(0,0)`. Второй слот (`take_rotation`) +
+  `PlayerPos::apply_rotation`; 3 теста в `net`.
+- Проверка (5) была вакуумной: `save_all` вызывается после `after_entities`,
+  его время не входит в `phases_total_us`, а парсер лог-строк не снимал
+  `ESC`-байт ANSI-раскраски. В сервер добавлена строка `autosave queued`
+  (`tick`, `save_us`, `players`); в r7 — 17 автосейвов, 2 с двумя игроками,
+  `save_us` медиана 19 мкс, максимум 23 мкс (бюджет 5000), очередь не
+  переполнялась. `phases_total_us` остаётся контекстом: в него входят
+  доставка чанков при входе клиентов и пробуждение ОС, а не запись.
+
+Сценарии харнесса: `tools/testclient/scenarios/s13-playerdata.json`
+(`s13`), `s13-stop-check.json` (`s13-stop`), `s13-gamemode-check.json`
+(`s13-gamemode`); параметры `-OursSaveDir`, `-OursAutosaveTicks`,
+`-OursForceGamemode`. В `scenario-lib.ps1` добавлен
+`Get-OfflinePlayerFileName` (имя файла по нику до запуска клиента) и
+`Read-Trace` больше не падает на недописанной последней строке прокси-трейса.
+
+**Известная проблема (не шаг 19).** Клиент при загрузке чанков из шаблона
+пишет `WARN [LevelChunk] Serialization errors: chunk@[0, 9]
+minecraft:trial_spawner ... Registry does not exist: minecraft:trial_spawner`.
+Клиент переживает, блок-сущность остаётся пустой: наша configuration-фаза не
+отправляет datapack-реестры (в ванили их шлют). Отдельная задача.
+
+### 19b — тест (в) `entity_stream_parity`: `update_attributes` как набор (закрыто)
+
+Разрешённая правка теста: в `normalized()` записи `update_attributes`
+сортируются канонически — `(key, base bits, modifiers по id/amount bits/
+operation)`; это ровно тот набор, который сравнивает
+`UpdateAttributes::records_match`. Сравнение остальных пакетов не менялось
+(payload побайтно, id/координаты нормализуются, режим игры — нет). Решение —
+`docs/DECISIONS.md`.
+
+Остаточные красные (`cargo test -p parity --release --test entity_stream_parity
+-- --ignored`; отчёт `E:\MineRust-data\traces\entity-stream-parity.md`,
+17.11.2026 — 280 диффов):
+
+| сценарий | режим | пакетов о B (ваниль/мы) | диффов | класс |
+|---|---|---|---|---|
+| C1 (спавн) | 3 spectator | одинаково | **0** | порядок `update_attributes` больше не расхождение |
+| C2 (ходьба) | 3 | 176 / 178 | 169 | лишний/недостающий `entity_position_sync`, чередование `rotate_head` и `move_entity_pos*` (сдвиг с #6), байты yaw в `move_entity_pos_rot` (`0x20` vs `0xa0`) |
+| C4 (поворот на месте) | 3 | 113 / 111 | 99 | то же + байты `rotate_head`/`move_entity_rot`, `entity_position_sync` на #10/#27/#30 |
+| C5 (спавн) | 0 survival | 12 / 11 | 6 | нет одного `entity_position_sync` перед `update_attributes` (#5), дальше сдвиг |
+| C6 (спавн) | 1 creative | 12 / 11 | 6 | то же; байтовое сравнение `update_attributes` (модификаторы креатива) заблокировано сдвигом — **не проверено** |
+
+То есть правка 19b убрала единственный класс, который зависел от порядка
+записей (C1 теперь чистый); остальные диффы — поведение ванили, не
+нормализация.
+
+### 19c — риски playerdata (закрыто как анализ)
+
+`docs/PLAYERDATA.md` §13: дубликат имени, окно потерь между автосейвами,
+смена `save_dir`, offline/online UUID; пять вопросов владельцу (§13.5).
+Код не менялся.
+
+### Блокеры / нужны решения владельца
+
+- C5/C6: ваниль шлёт `entity_position_sync` о наблюдателе сразу после
+  спавна (`update_attributes` уже после него); мы не шлём. Минимальная
+  правка (sync перед `update_attributes` на `ToGame::TeleportAck`) не
+  сделана без решения владельца.
+- C6: в `update_attributes` ваниль кодирует модификаторы креатива
+  resource-location (строки), наш `AttributeModifier` — UUID. Сейчас это не
+  проверено: из-за недостающего `entity_position_sync` пакет сравнивается со
+  сдвигом, байтовое сравнение `update_attributes` в C6 пропускается. После
+  правки C5/C6 формат нужно проверить отдельно.
+- `fsync` каталога после `rename` (durability), дефолт автосейва, маркер
+  чужого `save_dir` — вопросы §13.5.

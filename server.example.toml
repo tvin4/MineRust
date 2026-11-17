@@ -147,7 +147,7 @@ client_jar = "path/to/client.jar"
 # carries (a file without a usable mode still gets the configured one).
 # force_gamemode = true
 
-# Autosave period in ticks (Шаг 18a). Default 6000 — three minutes at 20 TPS.
+# Autosave period in ticks (Шаг 18a). Default 6000 — five minutes at 20 TPS.
 # 0 disables the periodic save; a player quit and the server stop still save.
 # The write never runs on the tick thread: the tick snapshots and a dedicated
 # writer thread does the disk work, atomically (`.tmp` + rename).
