@@ -12,6 +12,7 @@
 //! where no trace backs them (see `docs/ARCH-M4.md` §0/§1/§3).
 
 mod block_action;
+mod break_block;
 mod dig;
 mod entities;
 mod grid;

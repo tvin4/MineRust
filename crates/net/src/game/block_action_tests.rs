@@ -23,13 +23,22 @@ use super::{
     ServerMessage, ToGame, SINGLE_REGION,
 };
 
-/// A block report with just air, stone and water, so the store can classify a
-/// write and answer the steady-state water check.
+/// A block report with air, stone, water and the Шаг 18 states: a waterlogged
+/// slab, seagrass and the two halves of a tall seagrass plus a kelp column,
+/// so the store can classify a write and answer the water/steady-state checks.
 fn test_blocks() -> Arc<BlockStates> {
     let text = r#"{
       "minecraft:air": {"states": [{"id": 0, "default": true}]},
       "minecraft:stone": {"states": [{"id": 1, "default": true}]},
-      "minecraft:water": {"states": [{"id": 2, "default": true}]}
+      "minecraft:water": {"states": [{"id": 2, "default": true}]},
+      "minecraft:oak_slab": {"states": [
+        {"id": 3, "properties": {"type": "bottom", "waterlogged": "true"}, "default": true}]},
+      "minecraft:seagrass": {"states": [{"id": 4, "default": true}]},
+      "minecraft:tall_seagrass": {"states": [
+        {"id": 5, "properties": {"half": "lower"}, "default": true},
+        {"id": 6, "properties": {"half": "upper"}}]},
+      "minecraft:kelp_plant": {"states": [{"id": 7, "default": true}]},
+      "minecraft:kelp": {"states": [{"id": 8, "properties": {"age": "0"}, "default": true}]}
     }"#;
     Arc::new(BlockStates::parse(text, "test".to_owned()).expect("a valid report"))
 }
@@ -933,10 +942,12 @@ fn an_unbreakable_block_is_never_removed() {
     assert_eq!(store.block(93, 123, -22), Some(1), "bedrock stays bedrock");
 }
 
-/// `hardness = 0` is an instant block: no timer starts, no cracks are drawn,
-/// and the client's finish removes it with the usual traced packets.
+/// `hardness = 0` is an instant block: the **start** removes it with no timer
+/// and no crack stages, exactly as the S14 trace shows — the client sends only
+/// a start and never a finish (Шаг 18). The digger gets the replacement update
+/// then the ack; the observer the break effect then the update.
 #[test]
-fn an_instant_block_breaks_without_a_timer() {
+fn an_instant_block_breaks_on_the_start_without_a_timer() {
     let store = store_with_traced_chunk();
     let hardness = test_hardness(0.0);
     let (mut scheduler, mut receiver_a, mut receiver_b) = two_players();
@@ -949,25 +960,213 @@ fn an_instant_block_breaks_without_a_timer() {
         PlayerAction::ACTION_START,
         1,
     );
-    expect_ack(&mut receiver_a, 1);
-    assert!(
-        receiver_b.try_recv().is_err(),
-        "an instant block has no stages"
-    );
 
-    act_with(
-        &mut scheduler,
-        &store,
-        Some(&hardness),
-        Some(3),
-        PlayerAction::ACTION_FINISH,
-        2,
+    assert_eq!(
+        store.block(93, 123, -22),
+        Some(0),
+        "the start itself removes the block"
     );
     expect_block_update(&mut receiver_a, traced_position());
-    expect_ack(&mut receiver_a, 2);
+    expect_ack(&mut receiver_a, 1);
+    assert!(
+        receiver_a.try_recv().is_err(),
+        "the digger receives nothing else"
+    );
     expect_level_event(&mut receiver_b, traced_position(), 1);
     expect_block_update(&mut receiver_b, traced_position());
-    assert_eq!(store.block(93, 123, -22), Some(0), "the block is gone");
+    assert!(
+        receiver_b.try_recv().is_err(),
+        "an instant block has no crack stages"
+    );
+}
+
+// === Шаг 18: water replacement, cascades and the instant start ============
+
+/// Breaking a waterlogged slab leaves a water source, not air (Шаг 18): the
+/// S14 trace shows `block_update state 89` (the water default of
+/// `reports/blocks.json`), and the observer's break effect carries the slab's
+/// own state id.
+#[test]
+fn a_broken_waterlogged_block_leaves_water() {
+    let store = store_with_traced_chunk();
+    store
+        .set_block(93, 123, -22, 3)
+        .expect("the waterlogged slab is written");
+    let (mut scheduler, mut receiver_a, mut receiver_b) = two_players();
+
+    act(&mut scheduler, &store, PlayerAction::ACTION_FINISH, 4);
+
+    assert_eq!(
+        store.block(93, 123, -22),
+        Some(2),
+        "water is left behind, not air"
+    );
+    expect_block_state(&mut receiver_a, traced_position(), 2);
+    expect_ack(&mut receiver_a, 4);
+    assert!(
+        receiver_a.try_recv().is_err(),
+        "the digger receives nothing else"
+    );
+    expect_level_event(&mut receiver_b, traced_position(), 3);
+    expect_block_state(&mut receiver_b, traced_position(), 2);
+    assert!(receiver_b.try_recv().is_err(), "an observer gets no ack");
+}
+
+/// A water plant leaves water too: the S14 trace replaces seagrass, tall
+/// seagrass and kelp by water (`state 89`), with the break effect carrying the
+/// plant's own state id.
+#[test]
+fn a_broken_seagrass_leaves_water() {
+    let store = store_with_traced_chunk();
+    store
+        .set_block(93, 123, -22, 4)
+        .expect("the seagrass is written");
+    let (mut scheduler, mut receiver_a, mut receiver_b) = two_players();
+
+    act(&mut scheduler, &store, PlayerAction::ACTION_FINISH, 6);
+
+    assert_eq!(store.block(93, 123, -22), Some(2), "water is left behind");
+    expect_block_state(&mut receiver_a, traced_position(), 2);
+    expect_ack(&mut receiver_a, 6);
+    expect_level_event(&mut receiver_b, traced_position(), 4);
+    expect_block_state(&mut receiver_b, traced_position(), 2);
+}
+
+/// A finish on a water source changes nothing: water is never dug, so a finish
+/// there (the leftover of an instant break whose start already ran) is
+/// refused — the digger gets the real water state and the ack, the observer
+/// nothing. The S14 trace never shows a finish after an instant start.
+#[test]
+fn a_finish_on_water_is_refused() {
+    let store = store_with_traced_chunk();
+    store
+        .set_block(93, 123, -22, 2)
+        .expect("the water is written");
+    let (mut scheduler, mut receiver_a, mut receiver_b) = two_players();
+
+    act(&mut scheduler, &store, PlayerAction::ACTION_FINISH, 5);
+
+    expect_block_state(&mut receiver_a, traced_position(), 2);
+    expect_ack(&mut receiver_a, 5);
+    assert!(receiver_b.try_recv().is_err(), "the observer hears nothing");
+    assert_eq!(store.block(93, 123, -22), Some(2), "still water");
+}
+
+/// `tall_seagrass` is a double plant: breaking one half removes the other too
+/// (Шаг 18, the S14 trace carries a break effect for both halves), and both
+/// leave water. The aimed half is removed first, then the other.
+///
+/// The break-effect audience follows S14 (§1.12): the **aimed** half reaches
+/// the observers only, the **cascade** half reaches the digger as well (the
+/// trace's digger received `2001` for the half it did not aim at).
+#[test]
+fn breaking_tall_seagrass_removes_both_halves() {
+    let store = store_with_traced_chunk();
+    store.set_block(93, 123, -22, 5).expect("the lower half");
+    store.set_block(93, 124, -22, 6).expect("the upper half");
+    let (mut scheduler, mut receiver_a, mut receiver_b) = two_players();
+
+    act(&mut scheduler, &store, PlayerAction::ACTION_FINISH, 4);
+
+    let lower = traced_position();
+    let upper = Position {
+        x: 93,
+        y: 124,
+        z: -22,
+    };
+    assert_eq!(
+        store.block(93, 123, -22),
+        Some(2),
+        "the lower half is water"
+    );
+    assert_eq!(
+        store.block(93, 124, -22),
+        Some(2),
+        "the upper half is water"
+    );
+    // The digger: no break effect for the aimed lower half, then the cascade
+    // of the upper half announces to it too.
+    expect_block_state(&mut receiver_a, lower, 2);
+    expect_level_event(&mut receiver_a, upper, 6);
+    expect_block_state(&mut receiver_a, upper, 2);
+    expect_ack(&mut receiver_a, 4);
+    // The observer: the aimed half first, then the cascade half.
+    expect_level_event(&mut receiver_b, lower, 5);
+    expect_block_state(&mut receiver_b, lower, 2);
+    expect_level_event(&mut receiver_b, upper, 6);
+    expect_block_state(&mut receiver_b, upper, 2);
+}
+
+/// `kelp` grows as a column: breaking a part removes every kelp block above it
+/// (Шаг 18), each leaving water.
+///
+/// The break-effect audience follows S14 (§1.12): the **aimed** block reaches
+/// the observers only, every **cascade** block above reaches the digger too.
+#[test]
+fn breaking_kelp_removes_the_column_above() {
+    let store = store_with_traced_chunk();
+    store
+        .set_block(93, 123, -22, 7)
+        .expect("the bottom kelp_plant");
+    store
+        .set_block(93, 124, -22, 7)
+        .expect("the middle kelp_plant");
+    store.set_block(93, 125, -22, 8).expect("the top kelp");
+    let (mut scheduler, mut receiver_a, mut receiver_b) = two_players();
+
+    act(&mut scheduler, &store, PlayerAction::ACTION_FINISH, 4);
+
+    for y in [123, 124, 125] {
+        assert_eq!(
+            store.block(93, y, -22),
+            Some(2),
+            "the kelp at y={y} becomes water"
+        );
+    }
+    // The digger: no break effect for the aimed bottom, then each cascade
+    // block above announces to it too.
+    expect_block_state(
+        &mut receiver_a,
+        Position {
+            x: 93,
+            y: 123,
+            z: -22,
+        },
+        2,
+    );
+    for (y, broken) in [(124, 7), (125, 8)] {
+        let position = Position { x: 93, y, z: -22 };
+        expect_level_event(&mut receiver_a, position, broken);
+        expect_block_state(&mut receiver_a, position, 2);
+    }
+    expect_ack(&mut receiver_a, 4);
+    // The observer: the aimed bottom first, then the cascade above.
+    for (y, broken) in [(123, 7), (124, 7), (125, 8)] {
+        let position = Position { x: 93, y, z: -22 };
+        expect_level_event(&mut receiver_b, position, broken);
+        expect_block_state(&mut receiver_b, position, 2);
+    }
+}
+
+/// A player joining after a waterlogged break reads the changed snapshot: the
+/// chunk a later join sends already carries the water cell.
+#[test]
+fn a_join_after_a_waterlogged_break_reads_water() {
+    let store = store_with_traced_chunk();
+    store
+        .set_block(93, 123, -22, 3)
+        .expect("the waterlogged slab is written");
+    let (mut scheduler, _receiver_a, _receiver_b) = two_players();
+
+    act(&mut scheduler, &store, PlayerAction::ACTION_FINISH, 1);
+
+    let after = store.snapshot();
+    match &after.chunks()[0].sections[11].blocks {
+        PaletteContainer::Packed { palette, .. } => {
+            assert!(palette.contains(&2), "the water state is on the wire");
+        }
+        other => panic!("expected a packed section after the break, got {other:?}"),
+    }
 }
 
 // === Шаг 16a.4: the steady-state gate =====================================

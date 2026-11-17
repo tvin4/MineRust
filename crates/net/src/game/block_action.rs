@@ -11,10 +11,20 @@
 //!
 //! What the client sees back is what the S3 trace records
 //! (`docs/BLOCK-BREAKING.md` §1.2): every action is acknowledged with
-//! `block_changed_ack` echoing its sequence; a finish that removes a block
-//! sends a `0xFF` crack reset to the observers, then `level_event` (the
-//! block-break effect, the digger excluded) and `block_update` (the removed
-//! state, air) to every player, the digger included, and only then the ack.
+//! `block_changed_ack` echoing its sequence; a break sends a `0xFF` crack
+//! reset to the observers (timed digs only), then `level_event` (the
+//! block-break effect) and `block_update` (the replacement state) to every
+//! player, the digger included, and only then the ack. The break effect of the
+//! **aimed** block excludes the digger (S3/S9/S14); a **cascade** part of the
+//! break (Шаг 18) reaches the digger too — see [`super::break_block`].
+//!
+//! Шаг 18 adds two rules the S14 trace established:
+//!
+//! - an **instant** block (`hardness = 0`) is broken by the start itself, with
+//!   no timer and no finish — the client sends only a start, the server sends
+//!   the `level_event`/`block_update` and the ack;
+//! - a break does not always leave air and does not always remove one block:
+//!   the replacement and the cascade live in [`super::break_block`].
 //!
 //! In creative the start action already breaks the block (Шаг 14c): the
 //! vanilla S9 trace shows the digger holding attack for ~900 ms and two
@@ -23,10 +33,10 @@
 //!
 //! SOURCE: our vanilla S3 trace (`E:\MineRust-data\autotests\2026-11-14_1644\
 //! mcproxy\proxy-conn-6.jsonl`), the S9 creative trace
-//! (`docs/BLOCK-BREAKING.md` §1.5), the stage traces of §1.7, the packet
-//! layout in `protocol` and the store in `net::store`. Where the trace carries
-//! no denial case, the response is a **hypothesis** and says so (see
-//! [`finish`]).
+//! (`docs/BLOCK-BREAKING.md` §1.5), the stage traces of §1.7, the S14 traces
+//! of §1.12, the packet layout in `protocol` and the store in `net::store`.
+//! Where the trace carries no denial case, the response is a **hypothesis**
+//! and says so (see [`finish`]).
 
 use std::sync::Arc;
 
@@ -35,16 +45,18 @@ use tracing::{debug, warn};
 
 use crate::store::ChunkStore;
 
+use super::break_block;
 use super::dig::{self, DigRules, PROGRESS_DIVISOR, TOOL_REQUIRED_DIVISOR};
 use super::messages::{BlockAction, PlayerId, ServerMessage};
 use super::region::DigState;
 use super::replay::Replay;
 use super::scheduler::Scheduler;
 
-/// State id a broken block is set to.
+/// State id a broken block is set to when it leaves no water behind.
 ///
 /// SOURCE: the S3 trace's `block_update` carries state varint `0`, and
-/// `reports/blocks.json` gives `minecraft:air` the id `0`. The store's own
+/// `reports/blocks.json` gives `minecraft:air` the id `0`; the S14 trace keeps
+/// the same id for short grass, leaf litter and a dandelion. The store's own
 /// `is_air` classification agrees with the same report.
 pub const AIR_STATE: i32 = 0;
 
@@ -118,14 +130,17 @@ pub(super) fn apply<W: std::io::Write>(
     }
 }
 
-/// Starts the survival timer when the hardness data can describe the dig.
+/// Starts a survival dig: an instant block is broken right away, everything
+/// else starts the timer when the hardness data can describe it.
 ///
 /// No timer starts — the action is only acknowledged, as before — when the
-/// chunk is not loaded, the cell is air, the report is absent or does not
-/// describe the state, the block is unbreakable (`hardness < 0`; a finish on
-/// it is refused by [`finish`]) or instant (`hardness = 0`; the finish is
-/// trusted). A repeated start on the block already timed keeps its progress,
-/// as vanilla does; a start on another block first clears the old cracks.
+/// chunk is not loaded, the cell is air or water, the report is absent or does
+/// not describe the state, or the block is unbreakable (`hardness < 0`; a
+/// finish on it is refused by [`finish`]). A block the report marks **instant**
+/// (`hardness = 0`) is removed by the start itself, exactly as the S14 trace
+/// shows (Шаг 18): the client sends only a start and never a finish. A repeated
+/// start on the block already timed keeps its progress, as vanilla does; a
+/// start on another block first clears the old cracks.
 fn start(
     scheduler: &mut Scheduler,
     store: &Arc<ChunkStore>,
@@ -134,6 +149,27 @@ fn start(
     position: Position,
     sequence: i32,
 ) {
+    let Some(state) = store.block(position.x, position.y, position.z) else {
+        stop_dig(scheduler, id, None);
+        ack(scheduler, id, sequence);
+        return;
+    };
+    // Air and water are never dug: the client can only send such a start after
+    // the block already changed (a second start of an instant break), and a
+    // timer on a water source would broadcast cracks no trace shows.
+    if store.is_air(state) || store.is_water(state) {
+        stop_dig(scheduler, id, None);
+        ack(scheduler, id, sequence);
+        return;
+    }
+    if is_instant(rules, state) {
+        // The instant break of Шаг 18: the start removes the block and
+        // announces it, with no timer and no crack stages.
+        stop_dig(scheduler, id, None);
+        break_block::break_blocks(scheduler, store, id, position, state);
+        ack(scheduler, id, sequence);
+        return;
+    }
     let Some(step) = step_per_tick(store, rules, position) else {
         stop_dig(scheduler, id, None);
         ack(scheduler, id, sequence);
@@ -155,6 +191,14 @@ fn start(
         },
     );
     ack(scheduler, id, sequence);
+}
+
+/// Whether the report marks `state` as an instant block (`hardness = 0`).
+///
+/// `false` when there is no report or it does not describe the state; a
+/// positive hardness is timed and a negative one is unbreakable.
+fn is_instant(rules: DigRules<'_>, state: i32) -> bool {
+    rules.hardness.and_then(|report| report.hardness(state)) == Some(0.0)
 }
 
 /// Progress one tick of a bare-handed dig adds, or `None` when the block
@@ -185,13 +229,18 @@ fn step_per_tick(store: &Arc<ChunkStore>, rules: DigRules<'_>, position: Positio
     (step.is_finite() && step > 0.0).then_some(step)
 }
 
-/// A finish: removes the block if the timer allows it, then acknowledges.
+/// A finish: removes the block and its cascade if the timer allows it, then
+/// acknowledges.
 ///
 /// The success path follows the trace: the `0xFF` crack reset to the
 /// observers, `level_event` (the block-break effect, `data` = the state id the
-/// block had before removal) to the observers — the digger excluded — then
-/// `block_update` to every player (the digger included), then
-/// `block_changed_ack` to the digger.
+/// block had before removal) — the aimed block to the observers only, a
+/// cascade part to everyone (Шаг 18, [`super::break_block`]) — then
+/// `block_update` of the replacement to every player (the digger included),
+/// then `block_changed_ack` to the digger. The replacement — water for a
+/// waterlogged or water-plant block, air otherwise — and the cascade (the
+/// other `tall_seagrass` half, the kelp above) are [`super::break_block`]'s
+/// (Шаг 18).
 ///
 /// Two refusals are **hypotheses** (the traces never show one), both answered
 /// with the real state to the digger so its prediction is corrected and with
@@ -237,8 +286,10 @@ fn finish(
         refuse(scheduler, id, position, state, sequence);
         return;
     }
-    if store.is_air(state) {
-        // Already air: nothing changes; the digger is told the real state.
+    if store.is_air(state) || store.is_water(state) {
+        // Already air or water: nothing changes; the digger is told the real
+        // state. Water is never dug, so such a finish is a leftover of an
+        // instant break that already ran on the start (Шаг 18).
         refuse(scheduler, id, position, state, sequence);
         return;
     }
@@ -271,25 +322,8 @@ fn finish(
             return;
         }
     }
-    match store.set_block(position.x, position.y, position.z, AIR_STATE) {
-        Ok(_) => {
-            broadcast_break(scheduler, id, position, state);
-            ack(scheduler, id, sequence);
-        }
-        Err(err) => {
-            // The read above already proved the cell is writable; a failure
-            // here is a race or malformed data, never a guess.
-            warn!(
-                player = id,
-                x = position.x,
-                y = position.y,
-                z = position.z,
-                %err,
-                "block write failed, the action is only acknowledged"
-            );
-            ack(scheduler, id, sequence);
-        }
-    }
+    break_block::break_blocks(scheduler, store, id, position, state);
+    ack(scheduler, id, sequence);
 }
 
 /// Whether the digger is in the state the bare-hand ground model describes:
@@ -361,49 +395,6 @@ fn refuse(scheduler: &mut Scheduler, id: PlayerId, position: Position, state: i3
     ack(scheduler, id, sequence);
 }
 
-/// Announces one broken block: the break `level_event` to the observers (the
-/// digger excluded, per S3/S9), then the `block_update` air state to every
-/// player, the digger included. The crack reset goes out before this call
-/// (see [`finish`]).
-///
-/// M4 keeps one region (the whole world is [`SINGLE_REGION`](super::SINGLE_REGION)),
-/// so "every player" is the traced audience; the per-chunk view rule is a
-/// later refinement (`docs/BLOCK-BREAKING.md` §4.1).
-fn broadcast_break(
-    scheduler: &mut Scheduler,
-    digger: PlayerId,
-    position: Position,
-    broken_state: i32,
-) {
-    let ids: Vec<PlayerId> = scheduler
-        .regions()
-        .iter()
-        .flat_map(|region| region.player_ids())
-        .collect();
-    for id in &ids {
-        if *id != digger {
-            deliver(
-                scheduler,
-                *id,
-                ServerMessage::LevelEvent {
-                    position,
-                    state: broken_state,
-                },
-            );
-        }
-    }
-    for id in ids {
-        deliver(
-            scheduler,
-            id,
-            ServerMessage::BlockUpdate {
-                position,
-                state: AIR_STATE,
-            },
-        );
-    }
-}
-
 /// The player's game mode, `None` for an id outside the regions.
 fn game_mode(scheduler: &Scheduler, id: PlayerId) -> Option<i32> {
     scheduler
@@ -420,7 +411,10 @@ fn ack(scheduler: &mut Scheduler, id: PlayerId, sequence: i32) {
 }
 
 /// Delivers one message with the shared tick policy, warning on a kick.
-fn deliver(scheduler: &mut Scheduler, id: PlayerId, message: ServerMessage) {
+///
+/// Shared with [`super::break_block`], which announces a broken block's
+/// `level_event` and replacement `block_update` the same way.
+pub(super) fn deliver(scheduler: &mut Scheduler, id: PlayerId, message: ServerMessage) {
     if let Some(kick) = scheduler.deliver(id, message) {
         warn!(
             player = kick.id,
