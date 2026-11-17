@@ -11,8 +11,9 @@
 //!   and in С4 the earlier analysis mistook a mob for B);
 //! * the **type sequence** must be exactly equal;
 //! * every payload must be **byte for byte** equal after normalising only the
-//!   values the owner allows — the entity id and the position fields (a packet
-//!   is emitted on a different tick). The game mode is **not** normalised since
+//!   values the owner allows – the entity id, the position fields (a packet
+//!   is emitted on a different tick) and the `update_attributes` record order
+//!   (a multiset since Шаг 19b). The game mode is **not** normalised since
 //!   Шаг 7.3: the server runs each scenario with the mode the vanilla trace was
 //!   recorded in (C1/C2/C4 = 3 spectator, C5 = 0 survival, C6 = 1 creative).
 //! * anything else is printed as an explicit list `type, offset, our byte,
@@ -30,7 +31,11 @@
 //!   (56/65), С4 shows head = body − one client tick (45/50); contradictory,
 //!   so no single rule follows;
 //! * the `update_attributes` key order (С1 (26, 13, 8), С2 (8, 26, 13), С4
-//!   (26, 8, 13) — unstable across vanilla runs, so not a rule);
+//!   (26, 8, 13) — unstable across vanilla runs, so not a rule). Since Шаг 19b
+//!   the normaliser sorts these records into one canonical order, exactly the
+//!   `(key, base, modifiers)` multiset `UpdateAttributes::records_match` uses
+//!   (`docs/DECISIONS.md`); the rest of the payload is still compared byte for
+//!   byte;
 //! * the zero-delta `move_entity_pos` period in С4 (gaps 38/53/116 ticks vs
 //!   the strict 60 of С1/С2) and vanilla's 1/3/4-tick sampling jitter.
 //!
@@ -64,8 +69,9 @@ use std::sync::Arc;
 
 use parity::load_parity_env;
 use protocol::{
-    AddEntity, EntityPositionSync, MoveEntityPos, MoveEntityPosRot, MoveEntityRot, PacketReader,
-    PlayerInfoUpdate, RemoveEntities, RotateHead, SetEntityData, UpdateAttributes,
+    AddEntity, AttributeEntry, AttributeModifier, EntityPositionSync, MoveEntityPos,
+    MoveEntityPosRot, MoveEntityRot, PacketReader, PlayerInfoUpdate, RemoveEntities, RotateHead,
+    SetEntityData, UpdateAttributes,
 };
 
 use entity_stream::{
@@ -128,6 +134,27 @@ where
     }
 }
 
+/// Canonical sort key of one modifier: UUID, amount bits, operation.
+type ModifierOrderKey = ([u8; 16], u64, u8);
+
+/// Canonical sort key of one attribute record (see [`attribute_order_key`]).
+type AttributeOrderKey = (i32, u64, Vec<ModifierOrderKey>);
+
+/// Canonical sort key of one attribute record: the same fields
+/// `UpdateAttributes::records_match` compares, so two payloads that differ only
+/// in record order re-encode to the same bytes.
+fn attribute_order_key(attribute: &AttributeEntry) -> AttributeOrderKey {
+    let mut modifiers: Vec<ModifierOrderKey> =
+        attribute.modifiers.iter().map(modifier_order_key).collect();
+    modifiers.sort_unstable();
+    (attribute.key, attribute.base.to_bits(), modifiers)
+}
+
+/// Canonical sort key of one modifier: UUID, amount bits, operation.
+fn modifier_order_key(modifier: &AttributeModifier) -> ModifierOrderKey {
+    (modifier.id, modifier.amount.to_bits(), modifier.operation)
+}
+
 /// Normalises the values the owner allows to differ: the entity id and the
 /// position fields (a packet is emitted on a different tick). Everything else
 /// stays byte for byte — since Шаг 7.3 the game mode is **not** normalised:
@@ -162,9 +189,17 @@ fn normalized(name: &str, raw: &[u8]) -> Vec<u8> {
             packet.z = 0.0;
         }),
         "minecraft:set_entity_data" => edit::<SetEntityData, _>(raw, |packet| packet.entity_id = 0),
-        "minecraft:update_attributes" => {
-            edit::<UpdateAttributes, _>(raw, |packet| packet.entity_id = 0)
-        }
+        "minecraft:update_attributes" => edit::<UpdateAttributes, _>(raw, |packet| {
+            // The record order is not a parity criterion (docs/DECISIONS.md):
+            // compare the same multiset of `(key, base, modifiers)` the way
+            // `UpdateAttributes::records_match` does, by sorting into one
+            // canonical wire order before the byte comparison below.
+            packet.entity_id = 0;
+            packet.attributes.sort_by_key(attribute_order_key);
+            for attribute in &mut packet.attributes {
+                attribute.modifiers.sort_by_key(modifier_order_key);
+            }
+        }),
         "minecraft:remove_entities" => edit::<RemoveEntities, _>(raw, |packet| {
             packet.entity_ids.fill(0);
         }),
