@@ -1,0 +1,13 @@
+[package]
+name = "playerdata"
+description = "Vanilla-compatible player save files (Шаг 18a)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+flate2.workspace = true
+protocol = { path = "../protocol" }
+thiserror.workspace = true
+tracing.workspace = true
