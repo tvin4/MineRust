@@ -4,7 +4,13 @@
 //! root). Reading keeps every unknown tag of an existing file; writing
 //! updates only the fields this server models and writes the rest back
 //! untouched. Writes are atomic: a temporary sibling is flushed, synced and
-//! renamed over the target.
+//! renamed over the target, and the directory entry is synced where the
+//! platform supports it.
+//!
+//! A save root created by this server carries `minerust-save.json`, a marker
+//! with the format version. A non-empty root without the marker is still
+//! used (the owner may point `save_dir` at an existing world), but the server
+//! logs it and does not claim the directory.
 //!
 //! SOURCE: the owner's world saves and the S7 join trace
 //! (`docs/PLAYERDATA.md` §1): field names and shapes were read out of the
@@ -20,6 +26,7 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use protocol::{NbtTag, Uuid};
+use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use crate::error::PlayerdataError;
@@ -27,6 +34,27 @@ use crate::state::{
     Pose, SavedPlayer, Snapshot, NEW_PLAYER_FOOD, NEW_PLAYER_HEALTH, NEW_PLAYER_SATURATION,
     OVERWORLD,
 };
+
+/// Marker file of a save root created by this server.
+pub const MARKER_FILE: &str = "minerust-save.json";
+
+/// Format version of [`MARKER_FILE`]; bump it when the marker's shape or the
+/// meaning of the directory changes.
+pub const MARKER_VERSION: u32 = 1;
+
+/// The `format` field of [`Marker`].
+const MARKER_FORMAT: &str = "minerust-save";
+
+/// Contents of [`MARKER_FILE`].
+#[derive(Debug, Serialize, Deserialize)]
+struct Marker {
+    /// Always [`MARKER_FORMAT`]; a different value is not our directory.
+    format: String,
+    /// [`MARKER_VERSION`] at the time the directory was created.
+    version: u32,
+    /// `DataVersion` of the world the root was created for.
+    data_version: i32,
+}
 
 /// Size of the standard player health/food envelope (vanilla 0..=20).
 const MAX_FOOD: i32 = 20;
@@ -65,6 +93,9 @@ impl Store {
         // A symlink can turn a clean path into one inside a forbidden
         // directory; the canonical form is the one that counts.
         check_forbidden(&root, forbidden)?;
+        let root = fs::canonicalize(&root)
+            .map_err(|source| PlayerdataError::io(root.display(), source))?;
+        check_marker(&root, data_version)?;
         let players = root.join("players").join("data");
         fs::create_dir_all(&players)
             .map_err(|source| PlayerdataError::io(players.display(), source))?;
@@ -532,6 +563,102 @@ fn resolve(path: &Path) -> Result<PathBuf, PlayerdataError> {
     Ok(folded)
 }
 
+/// Checks or creates [`MARKER_FILE`] in the save root.
+///
+/// An existing marker is only read: an unknown format/version or a damaged
+/// document is logged and the store keeps working (the save files are still
+/// the vanilla ones). An empty directory is claimed by writing the marker; a
+/// non-empty directory without one is logged and left untouched.
+fn check_marker(root: &Path, data_version: i32) -> Result<(), PlayerdataError> {
+    let marker = root.join(MARKER_FILE);
+    match fs::read(&marker) {
+        Ok(bytes) => match serde_json::from_slice::<Marker>(&bytes) {
+            Ok(found) if found.format == MARKER_FORMAT && found.version == MARKER_VERSION => Ok(()),
+            Ok(found) => {
+                warn!(
+                    path = %marker.display(),
+                    format = %found.format,
+                    version = found.version,
+                    expected = MARKER_VERSION,
+                    "save marker has an unknown format or version; continuing"
+                );
+                Ok(())
+            }
+            Err(err) => {
+                warn!(
+                    %err,
+                    path = %marker.display(),
+                    "save marker is unreadable; continuing"
+                );
+                Ok(())
+            }
+        },
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            let empty = fs::read_dir(root)
+                .map_err(|source| PlayerdataError::io(root.display(), source))?
+                .next()
+                .is_none();
+            if !empty {
+                warn!(
+                    path = %root.display(),
+                    marker = MARKER_FILE,
+                    "save_dir is not empty and has no marker; using it anyway"
+                );
+                return Ok(());
+            }
+            let document = serde_json::to_vec_pretty(&Marker {
+                format: MARKER_FORMAT.to_owned(),
+                version: MARKER_VERSION,
+                data_version,
+            })
+            .map_err(|err| PlayerdataError::corrupt(marker.display(), err.to_string()))?;
+            write_plain_atomically(&marker, &document)
+        }
+        Err(source) => Err(PlayerdataError::io(marker.display(), source)),
+    }
+}
+
+/// Writes `bytes` through a synced temporary sibling and renames it over
+/// `path` (no compression; used for the marker).
+fn write_plain_atomically(path: &Path, bytes: &[u8]) -> Result<(), PlayerdataError> {
+    let temporary = path.with_extension("json.tmp");
+    let mut file = fs::File::create(&temporary)
+        .map_err(|source| PlayerdataError::io(temporary.display(), source))?;
+    file.write_all(bytes)
+        .map_err(|source| PlayerdataError::io(temporary.display(), source))?;
+    file.sync_all()
+        .map_err(|source| PlayerdataError::io(temporary.display(), source))?;
+    drop(file);
+    fs::rename(&temporary, path).map_err(|source| {
+        let _ = fs::remove_file(&temporary);
+        PlayerdataError::io(path.display(), source)
+    })?;
+    if let Some(parent) = path.parent() {
+        sync_dir(parent)?;
+    }
+    Ok(())
+}
+
+/// Flushes the directory entry of a renamed file.
+///
+/// Unix needs an explicit `fsync` on the directory for the new name to
+/// survive a power loss; Windows journals the rename itself (and opening a
+/// directory for `fsync` is not portable there), so the call is a no-op.
+fn sync_dir(path: &Path) -> Result<(), PlayerdataError> {
+    #[cfg(unix)]
+    {
+        let dir =
+            fs::File::open(path).map_err(|source| PlayerdataError::io(path.display(), source))?;
+        dir.sync_all()
+            .map_err(|source| PlayerdataError::io(path.display(), source))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
 /// Writes `document` through a synced temporary sibling and renames it over
 /// `path`.
 fn write_atomically(path: &Path, document: &[u8]) -> Result<(), PlayerdataError> {
@@ -555,7 +682,11 @@ fn write_atomically(path: &Path, document: &[u8]) -> Result<(), PlayerdataError>
     fs::rename(&temporary, path).map_err(|source| {
         let _ = fs::remove_file(&temporary);
         PlayerdataError::io(path.display(), source)
-    })
+    })?;
+    if let Some(parent) = path.parent() {
+        sync_dir(parent)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -837,6 +968,73 @@ mod tests {
 
         let sibling = parent.join("sibling");
         Store::open(&sibling, 5023, &forbidden).expect("a sibling is allowed");
+    }
+
+    #[test]
+    fn open_writes_the_marker_into_an_empty_save_root() {
+        let dir = temp_dir("marker");
+        let store = Store::open(&dir, 5023, &[]).expect("store");
+        let marker = store.root().join(MARKER_FILE);
+        assert!(marker.is_file(), "the marker is written on creation");
+        let json: serde_json::Value =
+            serde_json::from_slice(&fs::read(&marker).expect("read")).expect("marker JSON");
+        assert_eq!(json["format"], MARKER_FORMAT);
+        assert_eq!(json["version"], MARKER_VERSION);
+        assert_eq!(json["data_version"], 5023);
+        assert!(
+            !marker.with_extension("json.tmp").exists(),
+            "the marker's temporary file is gone after the rename"
+        );
+
+        // Re-opening a directory that is already ours is not a warning.
+        Store::open(&dir, 5023, &[]).expect("re-open");
+    }
+
+    #[test]
+    fn open_tolerates_a_non_empty_root_without_a_marker() {
+        let dir = temp_dir("foreign");
+        let seed = dir.join("level.dat");
+        fs::write(&seed, b"not ours").expect("seed");
+
+        let store = Store::open(&dir, 5023, &[]).expect("a foreign root is usable");
+
+        assert!(store.players_dir().is_dir());
+        assert!(
+            !dir.join(MARKER_FILE).exists(),
+            "a directory the server did not create is not claimed"
+        );
+        assert_eq!(fs::read(&seed).expect("kept"), b"not ours");
+    }
+
+    #[test]
+    fn open_tolerates_a_damaged_or_future_marker() {
+        let dir = temp_dir("bad-marker");
+        fs::write(dir.join(MARKER_FILE), b"{").expect("seed");
+        Store::open(&dir, 5023, &[]).expect("a damaged marker is logged, not fatal");
+
+        fs::write(
+            dir.join(MARKER_FILE),
+            br#"{"format":"minerust-save","version":999,"data_version":1}"#,
+        )
+        .expect("seed future");
+        Store::open(&dir, 5023, &[]).expect("a future marker version is logged, not fatal");
+    }
+
+    #[test]
+    fn a_write_syncs_its_directory_where_supported() {
+        let dir = temp_dir("dir-sync");
+        let store = Store::open(&dir, 5023, &[]).expect("store");
+        store.write(&snapshot(uuid())).expect("write");
+        let path = store.path(uuid());
+        assert!(path.is_file(), "the rename landed");
+        assert!(
+            !path.with_extension("dat.tmp").exists(),
+            "the temporary file is gone"
+        );
+        assert!(
+            store.read(uuid()).expect("read").is_some(),
+            "the player file reads back"
+        );
     }
 
     fn read_map(path: &Path) -> BTreeMap<String, NbtTag> {

@@ -605,6 +605,8 @@ version = "0.1.0"
 dependencies = [
  "flate2",
  "protocol",
+ "serde",
+ "serde_json",
  "thiserror",
  "tracing",
 ]
