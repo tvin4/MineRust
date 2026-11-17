@@ -64,7 +64,10 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
                 continue;
             };
             ids.push(id);
-            position.insert(id, player.position());
+            // Same one-tick head lag as the optimized pass.
+            let mut pose = player.position();
+            pose.head_yaw = player.previous_yaw();
+            position.insert(id, pose);
             radius.insert(id, view_radius(player.view_distance()));
             owner.insert(id, region.id());
             name.insert(id, player.name().to_owned());
@@ -244,6 +247,7 @@ pub(crate) fn naive_visibility_pass(regions: &mut [Region]) -> Vec<StreamEntitie
             // The swings were snapshotted above; consumed whether or not a
             // viewer heard them (M4.5 Шаг 11).
             player.set_pending_swings(0);
+            player.set_previous_yaw(player.position().yaw);
         }
     }
     events

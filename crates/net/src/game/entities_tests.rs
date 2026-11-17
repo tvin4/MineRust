@@ -412,6 +412,49 @@ fn a_rotation_only_change_is_reported_as_rotation() {
     assert_eq!(event.moves[0].motion, EntityMotion::Rotation);
 }
 
+/// The head byte of a move is the body yaw of the previous tick, not the one
+/// the same packet carries. Vanilla C4: `move_entity_rot` yaw 0xa0 and
+/// `rotate_head` 0x99 in the same tick; when the client keeps rotating every
+/// tick, the head is exactly one input step (one tick) behind.
+// SOURCE: two-bot vanilla trace 26.3 (C4), 44/50 body/head pairs.
+#[test]
+fn the_broadcast_head_yaw_lags_the_body_by_one_tick() {
+    let mut regions = vec![region_with(&[(1, (0, 64, 0)), (2, (50, 64, 0))])];
+    let spawn = visibility_pass(&mut regions);
+    assert_eq!(
+        event_of(&spawn, 1).expect("spawn").spawn[0]
+            .position
+            .head_yaw,
+        0.0,
+        "the spawn carries the join yaw as both body and head"
+    );
+    let mut events = Vec::new();
+    for yaw in [9.0_f32, 18.0] {
+        regions[0]
+            .get_mut(2)
+            .expect("player 2")
+            .apply_move(&MoveUpdate {
+                x: None,
+                y: None,
+                z: None,
+                yaw: Some(yaw),
+                pitch: None,
+                flags: 0,
+            });
+        events = visibility_pass(&mut regions);
+    }
+    // The move is broadcast on the second tick; the head is the yaw of the
+    // first tick (9°), the body is the yaw of the second (18°).
+    let moved = event_of(&events, 1)
+        .expect("viewer 1")
+        .moves
+        .iter()
+        .find(|moved| moved.id == 2)
+        .expect("viewer 1 hears about 2");
+    assert_eq!(moved.position.yaw, 18.0);
+    assert_eq!(moved.position.head_yaw, 9.0);
+}
+
 #[test]
 fn a_large_jump_is_a_sync_not_a_relative_move() {
     let mut regions = vec![region_with(&[(1, (0, 64, 0)), (2, (50, 64, 0))])];

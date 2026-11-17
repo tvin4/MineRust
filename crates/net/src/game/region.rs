@@ -166,6 +166,16 @@ pub struct Player {
     teleport_confirmed: bool,
     spawn: protocol::Position,
     position: PlayerPos,
+    /// Body yaw at the end of the previous server tick.
+    ///
+    /// The wire head yaw is this value, not the current one: in the vanilla C4
+    /// trace every `move_entity_rot`/`rotate_head` pair carries the body yaw of
+    /// the previous tick (head lags the body by one input step; 44/50 pairs
+    /// match a previous input exactly, the rest are sync/spawn packets). The
+    /// visibility pass snapshots this into [`PlayerPos::head_yaw`] and advances
+    /// it once per tick.
+    // SOURCE: two-bot vanilla trace 26.3 (C4), byte-level pair analysis.
+    previous_yaw: f32,
     /// Health the join carried (Шаг 18a). Death and respawn are not modelled,
     /// so it stays what the join announced; every save writes it back.
     health: f32,
@@ -257,6 +267,7 @@ impl Player {
             game_mode: join.game_mode,
             teleport_confirmed: false,
             spawn: join.spawn,
+            previous_yaw: position.yaw,
             position,
             health: join.health,
             food: join.food,
@@ -357,6 +368,18 @@ impl Player {
     /// The newest applied position and orientation (M4.2).
     pub fn position(&self) -> PlayerPos {
         self.position
+    }
+
+    /// Body yaw at the end of the previous server tick: the head yaw the wire
+    /// packets carry this tick.
+    pub fn previous_yaw(&self) -> f32 {
+        self.previous_yaw
+    }
+
+    /// Advances the lagged head source to this tick's body yaw (the tick's
+    /// visibility pass owns it).
+    pub fn set_previous_yaw(&mut self, yaw: f32) {
+        self.previous_yaw = yaw;
     }
 
     /// The chunk the client's chunk-cache centre sits at (M4.4 B).

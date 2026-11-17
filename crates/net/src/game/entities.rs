@@ -486,7 +486,11 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
             };
             index.insert(id, ids.len());
             ids.push(id);
-            position.push(player.position());
+            // The head yaw the packets carry is the body yaw of the previous
+            // server tick (C4); the applied pose keeps the current one.
+            let mut pose = player.position();
+            pose.head_yaw = player.previous_yaw();
+            position.push(pose);
             radius.push(view_radius(player.view_distance()));
             owner.push(region.id());
             owner_region.push(region_index);
@@ -716,6 +720,9 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
             player.set_last_broadcast(next_baseline[i]);
             player.set_ticks_since_broadcast(next_ticks[i]);
             player.set_broadcast_state(next_broadcast_state[i]);
+            // One tick of head lag: what this tick carried becomes the head
+            // source of the next one.
+            player.set_previous_yaw(player.position().yaw);
             // The swings were snapshotted above; consumed whether or not a
             // viewer heard them — a swing without observers is simply not
             // broadcast (M4.5 Шаг 11).
