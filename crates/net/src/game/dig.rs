@@ -65,11 +65,18 @@ const MAX_STAGE: f32 = 254.0;
 /// How strictly a survival finish is timed (Шаг 16a.3).
 ///
 /// With `hardness = None` the whole timer is off and the client is trusted
-/// about when a block is broken (the pre-16a.3 behaviour). The tolerance is a
-/// **hypothesis**: the traces show a finish arriving with progress 0.94…1.36
-/// of the expected time, so the default accepts a finish that is up to 3
-/// ticks early and never rejects a late one. `tolerance_ticks = None` turns
-/// the time check off while keeping the stage broadcasts.
+/// about when a block is broken (the pre-16a.3 behaviour). `tolerance_ticks`
+/// bounds how early a steady finish may arrive: `Some(n)` refuses one with
+/// `progress + n·step < 1.0`.
+/// The 16a.4 oracle derived `Some(3)` from the ten traced finishes
+/// (`finish − T` = −1.93…+0.41), but 17b showed vanilla is looser still, so
+/// the default is now `None` (see below). `None` keeps the stage broadcasts.
+///
+/// The default is `None` (Шаг 18.0.1, owner's decision): the 17b stand showed
+/// the vanilla 26.3 server accepting a finish one client tick into hard
+/// blocks, so `Some(3)` was stricter than vanilla (`docs/BLOCK-BREAKING.md`
+/// §1.11). `Some(n)` stays a setting; the evidence is one stand, so the
+/// choice is temporary.
 #[derive(Debug, Clone, Copy)]
 pub struct DigRules<'a> {
     /// Hardness and bare-hand speed report; `None` keeps the timer off.

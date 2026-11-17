@@ -198,8 +198,15 @@ pub struct GameConfig {
     /// Finish-time tolerance of the mining timer (Шаг 16a.3): a survival
     /// finish is accepted once the server's progress is within this many ticks
     /// of the expected `1.0`; `None` keeps the stage broadcasts but trusts
-    /// every finish. The default `Some(3)` is the soft tolerance of
-    /// `docs/BLOCK-BREAKING.md` §6 п.8, a **hypothesis** until 16a.4's oracle.
+    /// every finish.
+    ///
+    /// The default is `None` (Шаг 18.0.1, owner's decision): the parity stand
+    /// of 17b showed the vanilla 26.3 server **accepts** a finish one client
+    /// tick into blocks as hard as `ender_chest` (`docs/BLOCK-BREAKING.md`
+    /// §1.11), so our `Some(3)` was stricter than vanilla and rolled back an
+    /// honest dig (the `_0131` run, where the client's tick catch-up
+    /// compressed a 6-tick dig into 2.65 server ticks). `Some(n)` stays
+    /// available as a setting; the data is one stand, so this is temporary.
     pub dig_tolerance_ticks: Option<u32>,
 }
 
@@ -217,7 +224,7 @@ impl Default for GameConfig {
             default_game_mode: 0,
             store: None,
             hardness: None,
-            dig_tolerance_ticks: Some(3),
+            dig_tolerance_ticks: None,
         }
     }
 }

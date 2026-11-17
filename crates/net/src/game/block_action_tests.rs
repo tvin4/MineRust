@@ -677,6 +677,45 @@ fn an_early_finish_is_refused_and_rolled_back() {
     assert_eq!(store.block(93, 123, -22), Some(1), "the block stays");
 }
 
+/// With the tolerance off (`None`, the Шаг 18.0.1 default) the timer still
+/// refuses nothing: a finish one tick into a 60-tick log dig breaks the
+/// block, matching the vanilla 26.3 behaviour the 17b stand measured
+/// (`docs/BLOCK-BREAKING.md` §1.11).
+#[test]
+fn a_finish_is_trusted_when_the_tolerance_is_off() {
+    let store = store_with_traced_chunk();
+    let hardness = test_hardness(2.0);
+    let (mut scheduler, mut receiver_a, mut receiver_b) = two_players();
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        None,
+        PlayerAction::ACTION_START,
+        1,
+    );
+    expect_ack(&mut receiver_a, 1);
+    assert_eq!(dig_tick(&mut scheduler, &mut receiver_b), vec![0]);
+
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        None,
+        PlayerAction::ACTION_FINISH,
+        2,
+    );
+
+    expect_block_update(&mut receiver_a, traced_position());
+    expect_ack(&mut receiver_a, 2);
+    expect_stage(&mut receiver_b, 1, traced_position(), 0xFF);
+    assert_eq!(
+        store.block(93, 123, -22),
+        Some(0),
+        "no tolerance means every finish is trusted"
+    );
+}
+
 /// The 3-tick tolerance lets a finish slightly before `1.0` through: 58 of
 /// the log's 60 ticks are enough (the plan's soft option (a)). [hypothesis]
 #[test]

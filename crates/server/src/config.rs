@@ -127,6 +127,21 @@ pub struct ServerConfig {
     /// keeps trusting the client about when a block is broken.
     #[serde(default)]
     pub hardness_report: Option<String>,
+    /// Optional finish-time tolerance of the mining timer, in ticks (Шаг 16a.3).
+    ///
+    /// Absent (the default) trusts the client about when a block is finished:
+    /// the crack stages still go out, but a `player_action` finish is never
+    /// rolled back. Set it to refuse a steady survival finish that is more
+    /// than that many ticks before the modelled `1.0`.
+    ///
+    /// Off by default since Шаг 18.0.1 (owner's decision): the 17b stand
+    /// showed the vanilla 26.3 server accepting a finish one client tick into
+    /// blocks as hard as `ender_chest`, so the old `Some(3)` (the 16a.4
+    /// oracle's choice) was stricter than vanilla and rolled back an honest
+    /// dig. The evidence is one stand, so the choice is temporary; see
+    /// `docs/BLOCK-BREAKING.md` §1.11 and §6 п.9.
+    #[serde(default)]
+    pub dig_tolerance_ticks: Option<u32>,
     /// Chunks around the player the server announces it sends in Login
     /// (play) — also the largest radius this server ever sends (the real
     /// radius is min(this, the client's own request), see
@@ -669,6 +684,22 @@ simulation_distance = 4
 "#;
         let config: ServerConfig = toml::from_str(&empty).expect("valid toml");
         assert!(matches!(config.validate(), Err(ConfigError::Invalid(_))));
+    }
+
+    /// Шаг 18.0.1: the finish-time tolerance is off unless the file sets it.
+    #[test]
+    fn dig_tolerance_ticks_defaults_to_none_and_parses_an_override() {
+        let config: ServerConfig = toml::from_str(&example_toml()).expect("valid toml");
+        assert_eq!(
+            config.dig_tolerance_ticks, None,
+            "absent trusts the client about the finish"
+        );
+        config.validate().expect("valid");
+
+        let text = example_toml() + "dig_tolerance_ticks = 3\n";
+        let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+        assert_eq!(config.dig_tolerance_ticks, Some(3));
+        config.validate().expect("valid");
     }
 
     #[test]

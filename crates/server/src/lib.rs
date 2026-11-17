@@ -337,6 +337,7 @@ pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> Result<(), R
         store,
         hardness: load_hardness(&config)?,
         default_game_mode: config.game_mode,
+        dig_tolerance_ticks: config.dig_tolerance_ticks,
         ..net::game::GameConfig::default()
     };
     net::serve_with(
@@ -430,6 +431,7 @@ mod tests {
             blocks_report: None,
             collision_report: None,
             hardness_report: None,
+            dig_tolerance_ticks: None,
             world_dir: None,
             vanilla_server_jar: None,
             vanilla_server_dir: None,

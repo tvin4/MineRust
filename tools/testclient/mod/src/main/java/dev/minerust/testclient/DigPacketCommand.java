@@ -33,7 +33,11 @@ import net.minecraft.world.phys.BlockHitResult;
  *
  * <p>Args: {@code k} — client ticks between start and finish (default 3; at
  * least 1). The result reports the block, the face, the sequence numbers and
- * the k that was used.
+ * the k that was used, plus (Шаг 18.0.2) the client's own context at packet
+ * time: {@code gameMode}, {@code onGround}, {@code heldItem}/{@code heldCount}
+ * and {@code blockDestroySpeed} ({@code Player.getDestroySpeed(state)}), so a
+ * run can tell whether the server's accept/reject boundary follows any of
+ * them. All values come from public API only.
  */
 final class DigPacketCommand {
 	/** Sequence counter for the crafted packets; the server only echoes it. */
@@ -94,6 +98,24 @@ final class DigPacketCommand {
 		out.addProperty("start", withStart);
 		out.addProperty("startSequence", startSequence);
 		out.addProperty("finishSequence", finishSequence);
+		// Шаг 18.0.2: the client's own context at packet time, so a later run
+		// can tell whether the accept/reject boundary follows the game mode,
+		// the held item or the actual dig speed (all read through public
+		// API, no Minecraft internals). `blockDestroySpeed` is
+		// Player.getDestroySpeed(state) — the same value the hardness report
+		// exports — which the game already divides by 5 while airborne or in
+		// water.
+		out.addProperty("gameMode", minecraft.gameMode == null ? "unknown"
+				: minecraft.gameMode.getPlayerMode().getSerializedName());
+		out.addProperty("onGround", minecraft.player == null || minecraft.player.onGround());
+		out.addProperty("heldItem", minecraft.player == null ? "unknown"
+				: net.minecraft.core.registries.BuiltInRegistries.ITEM
+						.getKey(minecraft.player.getMainHandItem().getItem()).toString());
+		out.addProperty("heldCount",
+				minecraft.player == null ? 0 : minecraft.player.getMainHandItem().getCount());
+		float destroySpeed = minecraft.player == null || minecraft.level == null ? 0.0F
+				: minecraft.player.getDestroySpeed(minecraft.level.getBlockState(pos));
+		out.addProperty("blockDestroySpeed", destroySpeed);
 		return CompletableFuture.completedFuture(out);
 	}
 }

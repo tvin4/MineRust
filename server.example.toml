@@ -84,6 +84,17 @@ client_jar = "path/to/client.jar"
 #   hardness -> reports/hardness.json  (35723 states, 116 unbreakable)
 # hardness_report = "path/to/generated/reports/hardness.json"
 
+# Optional finish-time tolerance of the mining timer, in ticks (Шаг 16a.3).
+# Absent (the default) trusts the client about when a block is finished: the
+# crack stages still go out, but a `player_action` finish is never rolled back.
+# Set a number to refuse a steady survival finish that is more than that many
+# ticks before the modelled dig time. The default was `3` (the oracle's choice
+# over ten traced digs) but Шаг 18.0.1 turned it off: the vanilla 26.3 server
+# accepts a finish one client tick into hard blocks, so the tolerance was
+# stricter than vanilla. The evidence is one stand, so this may change back;
+# see docs/BLOCK-BREAKING.md §1.11 and §6 п.9.
+# dig_tolerance_ticks = 3
+
 # REQUIRED at startup: a saved world directory (M3): the folder that
 # contains `level.dat` and `dimensions/minecraft/overworld/region/`. The
 # server sends the ready chunks of that world on join; without this field
