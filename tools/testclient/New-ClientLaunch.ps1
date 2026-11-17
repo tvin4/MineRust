@@ -11,6 +11,11 @@ param(
     [string]$Address = '127.0.0.1:25565',
     [int]$Width = 1280,
     [int]$Height = 720,
+    # Suffix for the per-client directories (Шаг 20a). Two clients with the
+    # same Nick (the S15 duplicate-login scenario) need separate game and
+    # natives dirs; the offline UUID still comes from Nick alone, so both
+    # clients log in as the same player.
+    [string]$Instance = '',
     # Base dir for per-client game dirs (clients/... is gitignored).
     [string]$ClientsRoot = 'E:\MineRust-data\clients',
     # Scratch dir for extracted natives (E: - the C: drive is tight).
@@ -161,7 +166,7 @@ $classpath.Add($ClientJar)
 # netty dirs are scratch dirs named by the manifest's jvm arguments. Only the
 # .dll payload of the jars is extracted; no code is read or shipped.
 if (-not (Test-Path $NativesRoot)) { New-Item -ItemType Directory -Path $NativesRoot | Out-Null }
-$nativesDir = Join-Path $NativesRoot $Nick
+$nativesDir = Join-Path $NativesRoot ($Nick + $Instance)
 # A previous client of the same nick may still be shutting down and hold the
 # jna*/lwjgl* DLLs open, which makes the delete fail. The DLLs belong to the
 # same game version and extraction below overwrites them, so a locked
@@ -219,7 +224,7 @@ foreach ($item in $nativesJars) {
 }
 
 # --- game directory + offline UUID ----------------------------------------
-$gameDir = Join-Path $ClientsRoot $Nick
+$gameDir = Join-Path $ClientsRoot ($Nick + $Instance)
 if (-not (Test-Path $gameDir)) { New-Item -ItemType Directory -Path $gameDir | Out-Null }
 # Offline UUID: MD5 of "OfflinePlayer:<nick>" with RFC 4122 v3 bits set - the
 # same derivation the server log shows for offline players (verified against

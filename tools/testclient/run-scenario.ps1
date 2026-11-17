@@ -410,14 +410,16 @@ function Invoke-StandRcon {
 # lands ~3.5 s after connect, so 5 s of margin closes the race).
 # Returns { pid, uuid }. $Since guards against stale "joined" lines.
 function Start-Client {
-	param([string]$Nick, [int]$ControlPort, [datetime]$Since, [int]$TimeoutSec = 120)
+	param([string]$Nick, [int]$ControlPort, [datetime]$Since, [int]$TimeoutSec = 120, [string]$Instance = '')
 	# A previous client of the same nick may still be alive after `disconnect`
 	# (the game returns to the main menu instead of exiting) and holds its log
 	# files and natives DLLs. The server-side quit has already been waited for
 	# by the caller, so stopping the leftover process here is safe and makes
-	# the relaunch deterministic (S13 re-entry).
-	Stop-ClientByName $Nick
-	$out = & $launchScript -Nick $Nick -Address '127.0.0.1:25565' -ControlPort $ControlPort
+	# the relaunch deterministic (S13 re-entry). With -Instance only that
+	# instance is stopped, so a second connection of the same nick (S15) can
+	# start while the first one still plays.
+	Stop-ClientByName ($Nick + $Instance)
+	$out = & $launchScript -Nick $Nick -Address '127.0.0.1:25565' -ControlPort $ControlPort -Instance $Instance
 	$pidOut = [int]($out | Select-Object -Last 1)
 	$uuid = $null
 	foreach ($line in $out) {
@@ -3121,6 +3123,183 @@ function Invoke-S13Gamemode {
 	Start-Sleep -Seconds 2
 }
 
+# --- S15 (Шаг 20a): duplicate login on one name ---------------------------
+# The scenario opens a second connection with the same player name and
+# records what the first connection receives. The vanilla trace is the
+# source for the kick packet and its text; our server must match it.
+
+# Reads a wire String (VarInt length + UTF-8 bytes) from a trace payload.
+function ConvertFrom-TraceString {
+	param([byte[]]$Bytes, [int]$Offset = 0)
+	$len = ConvertFrom-TraceVarInt $Bytes $Offset
+	$start = $len.next
+	$end = $start + $len.value
+	if ($end -gt $Bytes.Length) { throw 'truncated string in trace payload' }
+	return [PSCustomObject]@{
+		value = [System.Text.Encoding]::UTF8.GetString($Bytes, $start, $len.value)
+		next  = $end
+	}
+}
+
+# The player name a connection logged in with (`minecraft:hello`, login state).
+function Get-TraceLoginName {
+	param($Rows)
+	$hello = @($Rows | Where-Object { $_.state -eq 'login' -and $_.name -eq 'minecraft:hello' } | Select-Object -First 1)
+	if ($hello.Count -eq 0) { return $null }
+	$bytes = ConvertFrom-TraceB64 $hello[0].b64
+	return (ConvertFrom-TraceString $bytes 0).value
+}
+
+# Clientbound `minecraft:disconnect` rows of the play state.
+function Get-TracePlayDisconnects {
+	param($Rows)
+	return @($Rows | Where-Object { $_.dir -eq 'clientbound' -and $_.state -eq 'play' -and $_.name -eq 'minecraft:disconnect' })
+}
+
+# The translation key (or literal text) of a play-state disconnect reason.
+#
+# 26.3 sends a text component as unnamed-root network NBT: 0x0A (compound),
+# 0x08 (string) + u16 name length + name, u16 value length + value, 0x00 end.
+# The S15 duplicate-login reason is `{"translate": "multiplayer.disconnect.
+# duplicate_login"}`, so a plain wire String would decode as garbage.
+function ConvertFrom-TraceDisconnectText {
+	param([byte[]]$Bytes)
+	if ($Bytes.Length -lt 3 -or $Bytes[0] -ne 0x0A) {
+		throw 'disconnect reason is not an NBT compound'
+	}
+	$at = 1
+	$field = ''
+	$value = ''
+	while ($at -lt $Bytes.Length) {
+		$type = [int]$Bytes[$at]
+		$at++
+		if ($type -eq 0) { break }
+		if ($type -ne 0x08) { throw "disconnect reason has an unsupported NBT tag $type" }
+		$nameLen = ([int]$Bytes[$at] -shl 8) -bor [int]$Bytes[$at + 1]
+		$at += 2
+		$field = [System.Text.Encoding]::UTF8.GetString($Bytes, $at, $nameLen)
+		$at += $nameLen
+		$valueLen = ([int]$Bytes[$at] -shl 8) -bor [int]$Bytes[$at + 1]
+		$at += 2
+		$value = [System.Text.Encoding]::UTF8.GetString($Bytes, $at, $valueLen)
+		$at += $valueLen
+	}
+	return $value
+}
+
+# Classifies the fresh traces by login name and play-state disconnect.
+function Get-S15TraceFacts {
+	param([datetime]$Since)
+	$facts = @()
+	foreach ($file in @(Get-NewTraceFiles $traceDir $Since)) {
+		$rows = Read-Trace $file.FullName
+		$name = Get-TraceLoginName $rows
+		if (-not $name) { continue }
+		if (@($rows | Where-Object { $_.state -eq 'play' }).Count -eq 0) { continue }
+		$disconnects = @(Get-TracePlayDisconnects $rows)
+		$loginRow = @($rows | Where-Object { $_.dir -eq 'clientbound' -and $_.state -eq 'play' -and $_.name -eq 'minecraft:login' } | Select-Object -First 1)
+		$text = $null
+		$seq = $null
+		$readMs = $null
+		if ($disconnects.Count -gt 0) {
+			$seq = [int]$disconnects[0].seq
+			$readMs = [double]$disconnects[0].read_ms
+			$text = ConvertFrom-TraceDisconnectText (ConvertFrom-TraceB64 $disconnects[0].b64)
+		}
+		$facts += [PSCustomObject]@{
+			file             = $file.Name
+			name             = $name
+			loginSeq         = $(if ($loginRow.Count -gt 0) { [int]$loginRow[0].seq } else { $null })
+			loginReadMs      = $(if ($loginRow.Count -gt 0) { [double]$loginRow[0].read_ms } else { $null })
+			disconnects      = $disconnects.Count
+			disconnectSeq    = $seq
+			disconnectReadMs = $readMs
+			text             = $text
+		}
+	}
+	return $facts
+}
+
+function Invoke-S15 {
+	param($Cfg, $Result)
+	$nick = [string]$Cfg.playerA
+	$portA = [int]$Cfg.controlPortA
+	$portB = [int]$Cfg.controlPortB
+	$instanceA = [string]$Cfg.instanceA
+	$instanceB = [string]$Cfg.instanceB
+	$settleMs = [int]$Cfg.settleMs
+
+	$watermark = Get-Date
+	$launchA = Start-Client $nick $portA $watermark 120 $instanceA
+	if (-not $launchA.uuid) { throw 'S15: could not resolve the offline UUID' }
+	$obsA1 = (Invoke-TestCmd $portA (New-ObserveCmd 's15-a-in')).result
+	Add-Check $Result 'S15: the first connection joined' ($obsA1.inGame -eq $true) `
+		("inGame={0}" -f $obsA1.inGame)
+	$script:s7Facts.Add("S15 first join: inGame=$($obsA1.inGame) uuid=$($launchA.uuid)")
+
+	# The second connection of the same name: separate game dir and control
+	# port, same offline UUID (the name alone drives it).
+	$secondAt = Get-Date
+	$launchB = Start-Client $nick $portB $secondAt 120 $instanceB
+	$obsB = (Invoke-TestCmd $portB (New-ObserveCmd 's15-b-in')).result
+	Add-Check $Result 'S15: the second connection joined under the same name' ($obsB.inGame -eq $true) `
+		("inGame={0}" -f $obsB.inGame)
+	Start-Sleep -Milliseconds $settleMs
+
+	# The old client must have been returned to the menu by the server.
+	$obsA2 = $null
+	try { $obsA2 = (Invoke-TestCmd $portA (New-ObserveCmd 's15-a-after') 2000).result } catch { }
+	Add-Check $Result 'S15: the first connection was dropped' ($obsA2 -eq $null -or $obsA2.inGame -ne $true) `
+		("inGame={0}" -f $(if ($obsA2) { $obsA2.inGame } else { 'no answer' }))
+	$obsB2 = $null
+	try { $obsB2 = (Invoke-TestCmd $portB (New-ObserveCmd 's15-b-after') 2000).result } catch { }
+	Add-Check $Result 'S15: the second connection stays in the game' ($obsB2 -ne $null -and $obsB2.inGame -eq $true) `
+		("inGame={0}" -f $(if ($obsB2) { $obsB2.inGame } else { 'no answer' }))
+
+	# Classify the fresh traces by login name and the play-state disconnect.
+	# The proxy may flush the kick row a little after the client is already
+	# back in the menu (the r2 vanilla run read the trace too early), so poll.
+	$deadline = (Get-Date).AddSeconds(20)
+	$playTraces = @()
+	do {
+		$playTraces = @(Get-S15TraceFacts $watermark)
+		$kicked = @($playTraces | Where-Object { $_.name -eq $nick -and $_.disconnects -gt 0 })
+		if ($kicked.Count -gt 0) { break }
+		Start-Sleep -Milliseconds 500
+	} while ((Get-Date) -lt $deadline)
+	$sameName = @($playTraces | Where-Object { $_.name -eq $nick })
+	Add-Check $Result 'S15: both connections are traced under the same name' ($sameName.Count -eq 2) `
+		(($playTraces | ForEach-Object { "$($_.file):$($_.name)" }) -join ', ')
+	$kicked = @($sameName | Where-Object { $_.disconnects -gt 0 })
+	$survivors = @($sameName | Where-Object { $_.disconnects -eq 0 })
+	Add-Check $Result 'S15: the server disconnects exactly the first connection' ($kicked.Count -eq 1 -and $survivors.Count -eq 1) `
+		("kicked=$($kicked.Count) survivors=$($survivors.Count)")
+	if ($kicked.Count -eq 1) {
+		$kick = $kicked[0]
+		Add-Check $Result 'S15: the kick carries a text component' (-not [string]::IsNullOrWhiteSpace($kick.text)) `
+			("text='$($kick.text)'")
+		$expected = [string]$Cfg.expectedKickText
+		if ($expected) {
+			Add-Check $Result 'S15: the kick text matches the recorded vanilla text' ($kick.text -eq $expected) `
+				("got='$($kick.text)' want='$expected'")
+		}
+		$script:s7Facts.Add(("S15 kick: trace='{0}' seq={1} read_ms={2:N1} text={3}" -f $kick.file, $kick.disconnectSeq, $kick.disconnectReadMs, $kick.text))
+	}
+	foreach ($t in $playTraces) {
+		$script:s7Facts.Add(("S15 trace '{0}': name={1} login_seq={2} login_read_ms={3:N1} disconnects={4}" -f $t.file, $t.name, $t.loginSeq, $t.loginReadMs, $t.disconnects))
+	}
+	# The vanilla server log lines about the duplicate are the human-readable
+	# counterpart of the packet; they are recorded, not asserted.
+	if ($isVanilla) {
+		$logLines = @(Get-Content $vanillaLog -ErrorAction SilentlyContinue | Where-Object { $_ -match [regex]::Escape($nick) } |
+			Where-Object { $_.Length -lt 400 } | Select-Object -Last 8)
+		foreach ($line in $logLines) { $script:s7Facts.Add("S15 vanilla log: $line") }
+	}
+
+	$null = Invoke-TestCmd $portB (New-SessionCmd 's15-b-off' 'disconnect')
+	Start-Sleep -Seconds 2
+}
+
 $scenarioDir = Join-Path $here 'scenarios'
 $allResults = @()
 try {
@@ -3191,6 +3370,7 @@ try {
 			's13' { Invoke-S13 $cfg $result }
 			's13-stop' { Invoke-S13Stop $cfg $result }
 			's13-gamemode' { Invoke-S13Gamemode $cfg $result }
+			's15' { Invoke-S15 $cfg $result }
 			default { throw "unknown scenario '$($cfg.id)'" }
 		}
 		Stop-ClientByName $cfg.playerA

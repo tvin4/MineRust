@@ -15,6 +15,9 @@ param(
     [int]$Height = 720,
     # Control socket port handed to the mod (-Dtestclient.port).
     [int]$ControlPort = 25571,
+    # Per-client directory suffix (Шаг 20a): forwarded to New-ClientLaunch.ps1;
+    # two instances of one Nick (S15) must not share a game dir.
+    [string]$Instance = '',
     # Fabric toolchain versions: same values as mod/gradle.properties
     # (official Fabric sources, checked 14.11.2026).
     [string]$GameVersion = '26.3',
@@ -34,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 
 # --- vanilla launch data (manifest, cache, natives - all already verified) --
 $vanilla = & (Join-Path $PSScriptRoot 'New-ClientLaunch.ps1') -Nick $Nick -Address $Address `
-    -Width $Width -Height $Height -ClientsRoot $ClientsRoot
+    -Width $Width -Height $Height -ClientsRoot $ClientsRoot -Instance $Instance
 
 if (-not (Test-Path $ModJar)) { throw "mod jar not built: $ModJar (run gradle build in tools/testclient/mod)" }
 if (-not (Test-Path $FabricLibsRoot)) { New-Item -ItemType Directory -Path $FabricLibsRoot | Out-Null }

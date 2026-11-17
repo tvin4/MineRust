@@ -31,6 +31,13 @@ if (Test-Path $opt) {
         'fullscreen:false'
         'maxFps:120'
         'lang:en_us'
+        # Same clears as launch-fabric-client.ps1: the onboarding and the
+        # multiplayer warning block quickPlay in a fresh game dir.
+        'onboardAccessibility:false'
+        'skipMultiplayerWarning:true'
+        'joinedFirstServer:true'
+        'tutorialStep:none'
+        'pauseOnLostFocus:false'
     )
     [System.IO.File]::WriteAllLines($opt, $lines)
 }

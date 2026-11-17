@@ -10,12 +10,14 @@ param(
     [int]$Width = 1280,
     [int]$Height = 720,
     [int]$ControlPort = 25571,
+    # Per-client directory suffix (Шаг 20a); empty keeps the plain per-nick dir.
+    [string]$Instance = '',
     [switch]$Wait
 )
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $launch = & (Join-Path $here 'New-FabricLaunch.ps1') -Nick $Nick -Address $Address `
-    -Width $Width -Height $Height -ControlPort $ControlPort
+    -Width $Width -Height $Height -ControlPort $ControlPort -Instance $Instance
 
 # --- options.txt: render + simulation distance about 10 --------------------
 # Same keys as launch-client.ps1 (real options.txt of the 26.3 game).
@@ -26,6 +28,10 @@ if (Test-Path $opt) {
     $txt = $txt -replace 'simulationDistance:\d+', 'simulationDistance:10'
     [System.IO.File]::WriteAllText($opt, $txt)
 } else {
+    # A fresh game dir shows the accessibility onboarding and the multiplayer
+    # safety warning, and both block quickPlay: the client never connects and
+    # the scenario times out (S15 r1, first run of a new instance dir). The
+    # cleared values are the ones a played-in dir (clients/Alice) carries.
     $lines = @(
         'version:5023'
         'renderDistance:10'
@@ -33,6 +39,11 @@ if (Test-Path $opt) {
         'fullscreen:false'
         'maxFps:120'
         'lang:en_us'
+        'onboardAccessibility:false'
+        'skipMultiplayerWarning:true'
+        'joinedFirstServer:true'
+        'tutorialStep:none'
+        'pauseOnLostFocus:false'
     )
     [System.IO.File]::WriteAllLines($opt, $lines)
 }

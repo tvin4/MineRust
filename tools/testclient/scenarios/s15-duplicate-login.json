@@ -1,0 +1,12 @@
+{
+  "id": "s15",
+  "title": "duplicate login (step 20a): a second connection with the same name replaces the first",
+  "playerA": "Dup",
+  "playerB": "Dup",
+  "instanceA": "-a",
+  "instanceB": "-b",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "settleMs": 3000,
+  "expectedKickText": "multiplayer.disconnect.duplicate_login"
+}
