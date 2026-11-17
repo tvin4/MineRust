@@ -6,7 +6,11 @@
 //! (`docs/BLOCK-BREAKING.md` §1.7) and the exported hardness scale:
 //!
 //! - progress grows by `speed/hardness/30` per tick, so a bare-handed dig
-//!   lasts `30·hardness` ticks (`speed = 1.0` in `reports/hardness.json`);
+//!   lasts `30·hardness` ticks (`speed = 1.0` in `reports/hardness.json`).
+//!   A state the report flags as requiring the right tool (Шаг 17a) advances
+//!   at `speed/hardness/100` instead: a bare hand is not a tool, and the
+//!   vanilla client takes `100·hardness` ticks there (stone 1.5 → 151 ticks,
+//!   live and traced);
 //! - after the increment the stage is `floor(progress·10)`, **not clamped**
 //!   (the traces carry 10, 11 and 13), and a packet goes out only when the
 //!   byte changes — leaves (6 ticks) therefore start at stage 1, while dirt,
@@ -44,6 +48,15 @@ pub const RESET: u8 = 0xFF;
 /// `f32`: the game accumulates the progress as a float, and the rounding is
 /// what makes six `1/6` ticks reach the traced stage `10`.
 pub const PROGRESS_DIVISOR: f32 = 30.0;
+
+/// Tick divisor for a state that requires the right tool when the hand holds
+/// nothing (Шаг 17a): `speed/hardness/100`, i.e. `100·hardness` ticks.
+///
+/// SOURCE: the vanilla client's bare-hand stone dig — 151 ticks at hardness
+/// 1.5 (live `2026-11-17_0142_s12-ours` and the `_0149` repeat), against
+/// 45 ticks at the `/30` divisor. The flag comes from
+/// `BlockState.requiresCorrectToolForDrops()` in `reports/hardness.json`.
+pub const TOOL_REQUIRED_DIVISOR: f32 = 100.0;
 
 /// Highest stage byte a progress may produce; `0xFF` is reserved for
 /// [`RESET`]. The traces stop at 13, far below it.

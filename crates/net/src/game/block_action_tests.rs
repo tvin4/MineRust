@@ -476,6 +476,15 @@ fn test_hardness(hardness: f64) -> Arc<BlockHardness> {
     Arc::new(BlockHardness::parse(&text, "test".to_owned()).expect("a valid report"))
 }
 
+/// The same report with state 1 flagged as requiring the right tool (stone in
+/// the real report): a bare hand then digs at `/100` (Шаг 17a).
+fn test_hardness_with_tool(hardness: f64) -> Arc<BlockHardness> {
+    let text = format!(
+        r#"{{"states": 2, "hardness": {{"1": {hardness}, "0": 0.0}}, "handSpeed": {{"1": 1.0, "0": 1.0}}, "toolRequired": [1]}}"#
+    );
+    Arc::new(BlockHardness::parse(&text, "test".to_owned()).expect("a valid report"))
+}
+
 /// Advances the mining timer one tick and returns the stage bytes the observer
 /// (player 2) received this tick.
 fn dig_tick(scheduler: &mut Scheduler, observer: &mut mpsc::Receiver<ServerMessage>) -> Vec<u8> {
@@ -691,6 +700,111 @@ fn the_finish_tolerance_accepts_a_slightly_early_dig() {
     expect_block_update(&mut receiver_a, traced_position());
     expect_ack(&mut receiver_a, 2);
     assert_eq!(store.block(93, 123, -22), Some(0), "the tolerance accepts");
+}
+
+/// A stone dig with no tool (Шаг 17a): the report flags state 1, so the step
+/// is `1/1.5/100` and the stages run 0..10 over **150** ticks, not 45. The
+/// traced client takes 151 ticks (live `2026-11-17_0142_s12-ours`).
+#[test]
+fn a_tool_required_block_digs_at_the_hundred_divisor() {
+    let store = store_with_traced_chunk();
+    let hardness = test_hardness_with_tool(1.5);
+    let (mut scheduler, mut receiver_a, mut receiver_b) = two_players();
+
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(3),
+        PlayerAction::ACTION_START,
+        1,
+    );
+    expect_ack(&mut receiver_a, 1);
+
+    let mut first_seen = std::collections::BTreeMap::new();
+    // The real client sends its finish on tick 151 (151 measured live); the
+    // float accumulation also crosses stage 10 on 151, not exactly 150.
+    for tick in 1..=151 {
+        for stage in dig_tick(&mut scheduler, &mut receiver_b) {
+            first_seen.entry(stage).or_insert(tick);
+        }
+    }
+    assert_eq!(
+        first_seen.keys().copied().collect::<Vec<_>>(),
+        (0..=10).collect::<Vec<_>>(),
+        "stages 0..10, one per fifteenth of the dig"
+    );
+    for (stage, tick) in &first_seen {
+        let expected = 15 * i32::from(*stage);
+        assert!(
+            (*tick - expected).abs() <= 1,
+            "stage {stage} first at tick {tick}, expected {expected} ± 1 (T = 100·hardness = 150, not 45)"
+        );
+    }
+    assert_eq!(
+        store.block(93, 123, -22),
+        Some(1),
+        "the timer alone never breaks the block"
+    );
+
+    // Progress is just past 1.0 at 151 ticks: the finish is on time (the real
+    // client sent its finish on the same tick).
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(3),
+        PlayerAction::ACTION_FINISH,
+        2,
+    );
+    expect_block_update(&mut receiver_a, traced_position());
+    expect_ack(&mut receiver_a, 2);
+    expect_stage(&mut receiver_b, 1, traced_position(), 0xFF);
+    assert_eq!(
+        store.block(93, 123, -22),
+        Some(0),
+        "an honest stone dig is accepted"
+    );
+}
+
+/// A stone finish at the old `/30` time (45 ticks) is refused: the timer is
+/// only a third of the way. This is the bug Шаг 17a closes — the observer used
+/// to see the full crack at ~44 ticks and wait for 106 more.
+#[test]
+fn a_stone_finish_at_the_thirty_divisor_time_is_refused() {
+    let store = store_with_traced_chunk();
+    let hardness = test_hardness_with_tool(1.5);
+    let (mut scheduler, mut receiver_a, mut receiver_b) = two_players();
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(3),
+        PlayerAction::ACTION_START,
+        1,
+    );
+    expect_ack(&mut receiver_a, 1);
+    for _ in 0..45 {
+        let _ = dig_tick(&mut scheduler, &mut receiver_b);
+    }
+
+    act_with(
+        &mut scheduler,
+        &store,
+        Some(&hardness),
+        Some(3),
+        PlayerAction::ACTION_FINISH,
+        2,
+    );
+
+    expect_block_state(&mut receiver_a, traced_position(), 1);
+    expect_ack(&mut receiver_a, 2);
+    expect_stage(&mut receiver_b, 1, traced_position(), 0xFF);
+    assert_eq!(
+        store.block(93, 123, -22),
+        Some(1),
+        "45 ticks are not enough for a bare-hand stone dig"
+    );
 }
 
 /// An abort stops the timer and clears the cracks with `0xFF`; the block stays

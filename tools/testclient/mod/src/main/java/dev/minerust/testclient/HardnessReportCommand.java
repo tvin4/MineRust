@@ -29,6 +29,11 @@ import net.minecraft.world.level.block.state.BlockState;
  *   <li>{@code Player.getDestroySpeed(BlockState)} — the dig speed of the
  *       player holding its current items; the report run holds nothing, so this
  *       is the bare-hand speed.</li>
+ *   <li>{@code BlockState.requiresCorrectToolForDrops()} — whether the state
+ *       needs the right tool to be harvested. The game divides the dig progress
+ *       by 100 instead of 30 for such a state when the held item is not the
+ *       right tool (Шаг 17a); the list lets the server use the same divisor
+ *       instead of guessing the dig time.</li>
  * </ul>
  *
  * <p>Both are read against the connected world in an air cell above the player,
@@ -81,6 +86,7 @@ final class HardnessReportCommand {
 		JsonObject hardness = new JsonObject();
 		JsonObject handSpeed = new JsonObject();
 		JsonArray unbreakable = new JsonArray();
+		JsonArray toolRequired = new JsonArray();
 		int states = 0;
 		for (BlockState state : Block.BLOCK_STATE_REGISTRY) {
 			if (state == null) {
@@ -94,21 +100,27 @@ final class HardnessReportCommand {
 			if (block < 0.0F) {
 				unbreakable.add(Integer.parseInt(id));
 			}
+			if (state.requiresCorrectToolForDrops()) {
+				toolRequired.add(Integer.parseInt(id));
+			}
 		}
 
 		JsonObject report = new JsonObject();
 		report.addProperty("source", "BlockState.getDestroySpeed(level,pos) and Player.getDestroySpeed(state) "
-				+ "with an empty hand; measured in an air cell above the player; hardness < 0 is unbreakable");
+				+ "with an empty hand, and BlockState.requiresCorrectToolForDrops(); "
+				+ "measured in an air cell above the player; hardness < 0 is unbreakable");
 		report.addProperty("states", states);
 		report.add("hardness", hardness);
 		report.add("handSpeed", handSpeed);
 		report.add("unbreakable", unbreakable);
+		report.add("toolRequired", toolRequired);
 		Files.writeString(Path.of(path), report.toString(), StandardCharsets.UTF_8);
 
 		JsonObject result = new JsonObject();
 		result.addProperty("path", path);
 		result.addProperty("states", states);
 		result.addProperty("unbreakable", unbreakable.size());
+		result.addProperty("toolRequired", toolRequired.size());
 		return CompletableFuture.completedFuture(result);
 	}
 }

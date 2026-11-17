@@ -12,7 +12,7 @@
 //! the repository, like every other report; the server points at it with the
 //! optional `hardness_report` setting.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -31,6 +31,10 @@ pub struct BlockHardness {
     /// empty hand; the server uses it as the dig speed of a bare-handed dig
     /// until inventories exist.
     hand_speed: BTreeMap<i32, f64>,
+    /// States that require the right tool for drops. A bare hand is not a
+    /// right tool, so the game divides the dig progress by 100 instead of 30
+    /// (Шаг 17a). A report without the list leaves every state unflagged.
+    tool_required: BTreeSet<i32>,
 }
 
 impl BlockHardness {
@@ -50,7 +54,8 @@ impl BlockHardness {
     ///
     /// Only the `hardness` map is required; `handSpeed` is optional (a report
     /// without it leaves every speed absent, and the caller falls back to a
-    /// bare-hand speed of `1.0`).
+    /// bare-hand speed of `1.0`), and `toolRequired` is optional (a report
+    /// without it leaves every state unflagged, i.e. the divisor of 30).
     pub fn parse(text: &str, path: String) -> Result<Self, DataError> {
         let parsed: Value = serde_json::from_str(text).map_err(|source| DataError::Json {
             path: path.clone(),
@@ -64,6 +69,7 @@ impl BlockHardness {
         }
         let mut speeds = BTreeMap::new();
         let mut hardnesses = BTreeMap::new();
+        let mut tools = BTreeSet::new();
         for (key, value) in hardness {
             let Some(id) = key.parse::<i32>().ok() else {
                 continue;
@@ -82,9 +88,17 @@ impl BlockHardness {
                 }
             }
         }
+        if let Some(tool_required) = parsed.get("toolRequired").and_then(Value::as_array) {
+            for value in tool_required {
+                if let Some(id) = value.as_i64().and_then(|id| i32::try_from(id).ok()) {
+                    tools.insert(id);
+                }
+            }
+        }
         Ok(Self {
             hardness: hardnesses,
             hand_speed: speeds,
+            tool_required: tools,
         })
     }
 
@@ -104,6 +118,18 @@ impl BlockHardness {
     /// A state absent from the report is **not** treated as unbreakable.
     pub fn is_unbreakable(&self, state_id: i32) -> bool {
         self.hardness(state_id).is_some_and(|value| value < 0.0)
+    }
+
+    /// Whether the state requires the right tool for drops. A bare hand is
+    /// never that tool, so such a dig advances at `/100` instead of `/30`
+    /// (Шаг 17a). A state absent from the list does **not** require a tool.
+    pub fn requires_tool(&self, state_id: i32) -> bool {
+        self.tool_required.contains(&state_id)
+    }
+
+    /// Number of states flagged as requiring the right tool.
+    pub fn tool_required_len(&self) -> usize {
+        self.tool_required.len()
     }
 
     /// Number of states the report describes.
@@ -129,7 +155,8 @@ mod tests {
           "states": 4,
           "hardness": {"1": 1.5, "10": 0.5, "0": 0.0, "34": -1.0},
           "handSpeed": {"1": 1.0, "10": 1.0, "0": 1.0, "34": 1.0},
-          "unbreakable": [34]
+          "unbreakable": [34],
+          "toolRequired": [1]
         }"#
     }
 
@@ -161,6 +188,28 @@ mod tests {
         let report = BlockHardness::parse(text, "test".to_owned()).expect("valid report");
         assert_eq!(report.hardness(1), Some(2.0));
         assert_eq!(report.hand_speed(1), None, "no speed in this report");
+    }
+
+    /// Шаг 17a: the tool flag is a list of state ids; a report without the
+    /// list leaves every state unflagged, so old reports keep loading.
+    #[test]
+    fn the_tool_flag_is_read_per_state_and_defaults_to_false() {
+        let report = BlockHardness::parse(report(), "test".to_owned()).expect("valid report");
+        assert!(report.requires_tool(1), "stone needs a pickaxe");
+        assert!(!report.requires_tool(10), "dirt does not need a tool");
+        assert!(
+            !report.requires_tool(9999),
+            "a state outside the list needs none"
+        );
+        assert_eq!(report.tool_required_len(), 1);
+
+        let old = BlockHardness::parse(
+            r#"{"states": 1, "hardness": {"1": 1.5}}"#,
+            "test".to_owned(),
+        )
+        .expect("a report without the flag still loads");
+        assert!(!old.requires_tool(1), "no list, no flagged state");
+        assert_eq!(old.tool_required_len(), 0);
     }
 
     #[test]

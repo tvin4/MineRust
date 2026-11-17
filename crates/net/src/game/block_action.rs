@@ -35,7 +35,7 @@ use tracing::{debug, warn};
 
 use crate::store::ChunkStore;
 
-use super::dig::{self, DigRules, PROGRESS_DIVISOR};
+use super::dig::{self, DigRules, PROGRESS_DIVISOR, TOOL_REQUIRED_DIVISOR};
 use super::messages::{BlockAction, PlayerId, ServerMessage};
 use super::region::DigState;
 use super::replay::Replay;
@@ -174,7 +174,14 @@ fn step_per_tick(store: &Arc<ChunkStore>, rules: DigRules<'_>, position: Positio
         return None;
     }
     let speed = report.hand_speed(state).unwrap_or(1.0);
-    let step = speed as f32 / hardness as f32 / PROGRESS_DIVISOR;
+    // A bare hand is never the right tool: vanilla divides the progress by
+    // 100 for a state that requires one instead of by 30 (Шаг 17a).
+    let divisor = if report.requires_tool(state) {
+        TOOL_REQUIRED_DIVISOR
+    } else {
+        PROGRESS_DIVISOR
+    };
+    let step = speed as f32 / hardness as f32 / divisor;
     (step.is_finite() && step > 0.0).then_some(step)
 }
 
