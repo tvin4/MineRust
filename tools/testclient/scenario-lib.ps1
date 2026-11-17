@@ -89,6 +89,23 @@ function ConvertFrom-TraceB64 {
 	return [Convert]::FromBase64String($B64)
 }
 
+# Decodes a packed block position (8 bytes, big-endian): x = v >> 38 (26-bit
+# signed), z = (v >> 12) & 0x3ffffff (26-bit signed), y = v & 0xfff (12-bit
+# signed). SOURCE: the packet field layout in crates/protocol.
+function ConvertFrom-PackedPosition {
+	param([byte[]]$Bytes, [int]$Offset)
+	if ($Offset + 8 -gt $Bytes.Length) { throw 'truncated packed position in trace payload' }
+	[UInt64]$value = 0
+	for ($i = 0; $i -lt 8; $i++) { $value = ($value -shl 8) -bor [UInt64]$Bytes[$Offset + $i] }
+	[long]$x = [long](($value -shr 38) -band 0x3ffffff)
+	if ($x -ge 0x2000000) { $x -= 0x4000000 }
+	[long]$z = [long](($value -shr 12) -band 0x3ffffff)
+	if ($z -ge 0x2000000) { $z -= 0x4000000 }
+	[long]$y = [long]($value -band 0xfff)
+	if ($y -ge 0x800) { $y -= 0x1000 }
+	return [PSCustomObject]@{ x = [int]$x; y = [int]$y; z = [int]$z }
+}
+
 # Decodes one VarInt from a packet payload.
 function ConvertFrom-TraceVarInt {
 	param([byte[]]$Bytes, [int]$Offset)
@@ -176,6 +193,20 @@ function Get-NewTraceFiles {
 			$_.CreationTime -gt $Since -and
 			(Select-String -LiteralPath $_.FullName -Pattern '"name":"minecraft:login_finished"' -Quiet)
 		} | Sort-Object CreationTime)
+}
+
+# First file from the list whose text matches the regex. Used to attribute
+# trace files to roles: the digger's file carries serverbound player_action,
+# the observer's carries the clientbound destruction/effects. A client also
+# receives the clientbound packets, so the caller must exclude the file it
+# already took for the other role.
+function Select-TraceByPattern {
+	param([object[]]$Files, [string]$Pattern, [string[]]$Exclude = @())
+	foreach ($file in @($Files)) {
+		if ($Exclude -contains $file.FullName) { continue }
+		if (Select-String -LiteralPath $file.FullName -Pattern $Pattern -Quiet) { return $file }
+	}
+	return $null
 }
 
 # --- vanilla log -----------------------------------------------------------

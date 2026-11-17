@@ -42,6 +42,10 @@ param(
 	# (public BlockState API) to this file. The server's collision_report reads
 	# that file; it stays outside the repository.
 	[string]$CollisionReport = '',
+	# Hardness report for our server (Шаг 16a.4 п.4): the path is written into
+	# the generated server-ours.toml as hardness_report, which switches the
+	# survival dig timer on. It is never committed (E:\MineRust-data).
+	[string]$HardnessReport = '',
 	[switch]$KeepStand
 )
 $ErrorActionPreference = 'Stop'
@@ -288,6 +292,17 @@ function Start-Stand {
 				$config = $config -replace '(?m)^collision_report\s*=.*$', "collision_report = `"$collisionPath`""
 			} else {
 				$config = $config.TrimEnd() + "`r`ncollision_report = `"$collisionPath`"`r`n"
+			}
+		}
+		if ($HardnessReport) {
+			# Шаг 16a.4 п.4: the survival dig timer needs the exported hardness
+			# scale. The path stays outside the repository, like the collision
+			# report above.
+			$hardnessPath = $HardnessReport -replace '\\', '/'
+			if ($config -match '(?m)^hardness_report\s*=') {
+				$config = $config -replace '(?m)^hardness_report\s*=.*$', "hardness_report = `"$hardnessPath`""
+			} else {
+				$config = $config.TrimEnd() + "`r`nhardness_report = `"$hardnessPath`"`r`n"
 			}
 		}
 		$config | Set-Content $oursConfig -Encoding utf8
@@ -1644,6 +1659,12 @@ function Write-DevGeometryFile {
 			$lines.Add(("setblock {0} {1} {2} {3}" -f [int]$case.x, $roofY, $probeZ, [string]$case.roof))
 		}
 	}
+	if ($Scenarios -contains 's12') {
+		$scenarioFile = Get-ChildItem (Join-Path $here 'scenarios') -Filter 's12-*.json' | Select-Object -First 1
+		if (-not $scenarioFile) { throw 'no s12 scenario file to build the geometry from' }
+		$cfg = Get-Content $scenarioFile.FullName -Raw | ConvertFrom-Json
+		foreach ($cmd in (Get-S12Commands $cfg)) { $lines.Add([string]$cmd) }
+	}
 	if ($lines.Count -eq 0) { throw 'no dev geometry for the selected scenarios' }
 	$lines | Set-Content -LiteralPath $Path -Encoding utf8
 	Write-Host ("  [info] dev geometry: {0} commands written to {1}" -f $lines.Count, $Path)
@@ -2085,11 +2106,297 @@ function Invoke-S11 {
 	Start-Sleep -Seconds 3
 }
 
+# --- S12: survival dig states, live (Шаг 16a.4 п.2/п.3b/п.4) ----------------
+# Four stands on the S10 platform, all dug straight down (pitch 90) by holding
+# attack: a 4-block ground column (grass, dirt, stone, leaves), the same column
+# sneaking, a block under water at the feet, and a block under an air stand (the
+# player is teleported 2.5 blocks above it; the aim check takes longer than the
+# fall, so the dig starts from the ground - see docs/BLOCK-BREAKING.md 4.3.2).
+# Vanilla feeds the geometry to its console after a join; our server gets the
+# same list through -OursDevGeometry at startup and needs -HardnessReport for
+# the dig timer. Facts recorded: A's player_action timings per block, B's
+# block_destruction stages, break level_events and air block_updates, all in
+# s12-samples.json for the tick comparison against the vanilla traces.
+function Get-S12Commands {
+	param($Cfg)
+	$lines = New-Object System.Collections.Generic.List[string]
+	foreach ($cmd in @($Cfg.platform)) { $lines.Add([string]$cmd) }
+	$z = [int]$Cfg.columnZ
+	$base = [int]$Cfg.baseY
+	foreach ($case in @($Cfg.cases)) {
+		$x = [int]$case.x
+		if ($case.kind -eq 'column' -or $case.kind -eq 'sneak') {
+			$y = $base
+			foreach ($block in @($case.blocks)) {
+				$lines.Add(("setblock {0} {1} {2} {3}" -f $x, $y, $z, [string]$block))
+				$y--
+			}
+			# Landing pad under the column: the four one-block falls together
+			# are four blocks, one damage point, and the pad keeps the player
+			# from dropping through the platform afterwards.
+			$lines.Add(("setblock {0} {1} {2} minecraft:stone" -f $x, $y, $z))
+		}
+		elseif ($case.kind -eq 'water') {
+			# A 1x1, one-deep walled pool: feet at base+1 are inside the water
+			# while the eyes (base+2.62) stay dry, and the dug block is the
+			# floor at base. The walls keep a vanilla source from spreading.
+			# The floor must be set explicitly: without it the dug block was
+			# the platform's stone (150 bare-hand ticks, not dirt's 15).
+			$lines.Add(("setblock {0} {1} {2} {3}" -f $x, $base, $z, [string]$case.block))
+			$lines.Add(("fill {0} {1} {2} {3} {1} {4} minecraft:stone" -f `
+						($x - 1), ($base + 1), ($z - 1), ($x + 1), ($z + 1)))
+			$lines.Add(("fill {0} {1} {2} {0} {1} {2} minecraft:water" -f $x, ($base + 1), $z))
+		}
+		elseif ($case.kind -eq 'air') {
+			# One isolated block on the platform top; the stand is base+3.5,
+			# so the block top is 4.1 blocks from the eyes (reach 4.5). The
+			# fall there lasts ~50 ms of proxy time while the aim check takes
+			# ~250 ms, so the dig starts from the ground in practice. Bedrock
+			# replaces the platform block below: a long hold must not start a
+			# second dig (the leaves break in ~0.3 s, the key stays down).
+			$lines.Add(("setblock {0} {1} {2} {3}" -f $x, $base, $z, [string]$case.block))
+			$lines.Add(("setblock {0} {1} {2} minecraft:bedrock" -f $x, ($base - 1), $z))
+		}
+		else {
+			throw "S12: unknown case kind '$($case.kind)'"
+		}
+	}
+	return $lines
+}
+
+function Invoke-S12 {
+	param($Cfg, $Result)
+	$portA = [int]$Cfg.controlPortA
+	$portB = [int]$Cfg.controlPortB
+	$nickA = [string]$Cfg.playerA
+	$nickB = [string]$Cfg.playerB
+	$settle = [int]$Cfg.settleMs
+	$base = [int]$Cfg.baseY
+	$z = [int]$Cfg.columnZ
+	$inv = [System.Globalization.CultureInfo]::InvariantCulture
+	$commands = Get-S12Commands $Cfg
+
+	$watermark = Get-Date
+	$null = Start-Client $nickA $portA $watermark
+	$null = Start-Client $nickB $portB (Get-Date)
+	$observer = Wait-ObserverChunksStable $portB 30
+	$script:s7Facts.Add(("S12 B chunk drain: settled={0} loadedChunks={1}" -f `
+				$observer.settled, $observer.loadedChunks))
+
+	if (-not $isVanilla) {
+		if (-not $OursDevGeometry) {
+			Add-Check $Result 'S12 geometry is available on our server' $false `
+				'pass -OursDevGeometry <file>: the runner writes the s12 commands there before start'
+			$null = Invoke-TestCmd $portA (New-SessionCmd 's12-off' 'disconnect')
+			$null = Invoke-TestCmd $portB (New-SessionCmd 's12-offb' 'disconnect')
+			Start-Sleep -Seconds 3
+			return
+		}
+		if (-not $HardnessReport) {
+			Add-Check $Result 'the survival dig timer is on' $false `
+				'pass -HardnessReport <hardness.json>: without it our server trusts every finish and times nothing'
+			$null = Invoke-TestCmd $portA (New-SessionCmd 's12-off' 'disconnect')
+			$null = Invoke-TestCmd $portB (New-SessionCmd 's12-offb' 'disconnect')
+			Start-Sleep -Seconds 3
+			return
+		}
+		$script:s7Facts.Add("S12 dev geometry applied at startup: $OursDevGeometry")
+		$script:s7Facts.Add("S12 hardness report: $HardnessReport")
+	} else {
+		$fl = @($Cfg.forceload)
+		if ($fl.Count -eq 4) {
+			Invoke-VanillaConsole ("forceload add {0} {1} {2} {3}" -f $fl[0], $fl[1], $fl[2], $fl[3]) | Out-Null
+			Start-Sleep -Milliseconds 1000
+		}
+		foreach ($cmd in $commands) { Invoke-VanillaConsole $cmd | Out-Null }
+		Start-Sleep -Seconds 2
+		Invoke-VanillaConsole 'gamerule doImmediateRespawn true' | Out-Null
+		Invoke-VanillaConsole 'difficulty peaceful' | Out-Null
+		Invoke-VanillaConsole 'gamerule doMobSpawning false' | Out-Null
+		Start-Sleep -Milliseconds 500
+	}
+
+	$casesRun = New-Object System.Collections.ArrayList
+	foreach ($case in @($Cfg.cases)) {
+		$x = [int]$case.x
+		$standY = if ($case.kind -eq 'air') { $base + 3.5 } else { $base + 1.0 }
+		$standX = $x + 0.5
+		$standZ = $z + 0.5
+		$yaw = 0.0
+		$pitch = 90.0
+		if ($isVanilla) {
+			$line = [string]::Format($inv, "tp {0} {1} {2} {3} {4} {5}", `
+					$nickA, $standX, $standY, $standZ, $yaw, $pitch)
+			Invoke-StandRcon $line | Out-Null
+		} else {
+			$null = Invoke-TestCmd $portA (New-TpCmd "s12-$($case.name)-tp" $standX $standY $standZ $yaw $pitch)
+		}
+
+		# Wait until the crosshair is on the expected cell: the client needs
+		# the chunk and the teleport to settle before a click reaches a block.
+		$aim = $null
+		$aimed = $false
+		$aimDeadline = (Get-Date).AddSeconds(8)
+		while ((Get-Date) -lt $aimDeadline) {
+			Start-Sleep -Milliseconds 250
+			$aim = (Invoke-TestCmd $portA (New-ObserveCmd "s12-$($case.name)-aim")).result
+			if ($null -eq $aim -or $null -eq $aim.hitBlock) { continue }
+			if ($aim.hitType -eq 'BLOCK' -and [int]$aim.hitBlock.x -eq $x -and `
+					[int]$aim.hitBlock.y -eq $base -and [int]$aim.hitBlock.z -eq $z) {
+				$aimed = $true
+				break
+			}
+		}
+		$aimFact = 'no observe result'
+		if ($null -ne $aim) {
+			$aimFact = ("hitType={0} block=({1},{2},{3})" -f $aim.hitType, `
+					$aim.hitBlock.x, $aim.hitBlock.y, $aim.hitBlock.z)
+		}
+		Add-Check $Result ("{0}: A aims at the block under it" -f $case.name) $aimed $aimFact
+		if (-not $aimed) { continue }
+
+		# Settle after the aim: the first dig of a run can lose ticks to the
+		# client stalling and catching up its ticks (11 `client_tick_end`
+		# packets arrived within 1.4 ms in the 2026-11-17_0131 run), which
+		# makes the server's wall-time dig look short. The wait does not
+		# change the client's dig time, but the first case of the scenario is
+		# the one that carries join/tp stutter; it is also the case whose
+		# finish the server trusts (water/airborne), so a compressed finish
+		# there cannot roll back a legitimate dig.
+		$caseSettle = if ($null -ne $case.digSettleMs) { [int]$case.digSettleMs } else { [int]$Cfg.digSettleMs }
+		if ($caseSettle -gt 0) { Start-Sleep -Milliseconds $caseSettle }
+
+		if ($case.kind -eq 'sneak') {
+			$null = Invoke-TestCmd $portA (New-KeyCmd "s12-$($case.name)-shift" 'shift' 'down')
+		}
+		$null = Invoke-TestCmd $portA (New-KeyCmd "s12-$($case.name)-attack-on" 'attack' 'down')
+		Start-Sleep -Milliseconds ([int]$case.holdMs)
+		$null = Invoke-TestCmd $portA (New-KeyCmd "s12-$($case.name)-attack-up" 'attack' 'up')
+		if ($case.kind -eq 'sneak') {
+			$null = Invoke-TestCmd $portA (New-KeyCmd "s12-$($case.name)-shift-up" 'shift' 'up')
+		}
+		Start-Sleep -Milliseconds $settle
+		$after = (Invoke-TestCmd $portA (New-ObserveCmd "s12-$($case.name)-after")).result
+		$firstGone = $true
+		if ($null -ne $after -and $null -ne $after.hitBlock) {
+			$firstGone = -not ([int]$after.hitBlock.x -eq $x -and [int]$after.hitBlock.y -eq $base -and `
+					[int]$after.hitBlock.z -eq $z)
+		}
+		$afterFact = 'no observe result'
+		if ($null -ne $after) {
+			$afterFact = ("hitType={0} block=({1},{2},{3})" -f $after.hitType, `
+					$after.hitBlock.x, $after.hitBlock.y, $after.hitBlock.z)
+		}
+		Add-Check $Result ("{0}: the first block is gone" -f $case.name) $firstGone $afterFact
+		$casesRun.Add([PSCustomObject]@{ name = [string]$case.name; kind = [string]$case.kind; x = $x; z = $z }) | Out-Null
+	}
+
+	# The wire facts come from the proxy traces: A's serverbound actions (start
+	# and finish per block) and B's clientbound cracks, break effects and air
+	# updates. Positions are decoded from the packet bytes, so each fact is
+	# attributed to its stand, not just counted.
+	Start-Sleep -Seconds 1
+	$files = @(Get-NewTraceFiles $traceDir $watermark)
+	# The connect order is A then B, but the runner must not rely on the file
+	# index: mcproxy also writes one short file per rejected/duplicate
+	# connection, and a file picked by position was already the wrong one.
+	# The digger's file has serverbound player_action, the observer's has the
+	# clientbound destruction; A receives those too, so it is excluded there.
+	$aTrace = Select-TraceByPattern $files 'minecraft:player_action'
+	$bTrace = $null
+	if ($null -ne $aTrace) {
+		$bTrace = Select-TraceByPattern $files 'minecraft:(block_destruction|level_event)' @($aTrace.FullName)
+	}
+	if ($null -ne $aTrace -and $null -ne $bTrace) {
+		$aSeen = @(Select-String -LiteralPath $aTrace.FullName -Pattern 'minecraft:player_action' |
+				ForEach-Object { $_.Line | ConvertFrom-Json } |
+				Where-Object { $_.dir -eq 'serverbound' } |
+				ForEach-Object {
+					$p = ConvertFrom-TraceB64 $_.b64
+					$action = ConvertFrom-TraceVarInt $p 0
+					$pos = ConvertFrom-PackedPosition $p $action.next
+					[PSCustomObject]@{
+						ms = [double]$_.read_ms; action = [int]$action.value
+						x = $pos.x; y = $pos.y; z = $pos.z
+					}
+				})
+		$bRows = @(Select-String -LiteralPath $bTrace.FullName -Pattern 'minecraft:(block_destruction|level_event|block_update)' |
+				ForEach-Object { $_.Line | ConvertFrom-Json } |
+				Where-Object { $_.dir -eq 'clientbound' })
+		$bStages = @($bRows | Where-Object { $_.name -eq 'minecraft:block_destruction' } | ForEach-Object {
+				$p = ConvertFrom-TraceB64 $_.b64
+				$eid = ConvertFrom-TraceVarInt $p 0
+				$pos = ConvertFrom-PackedPosition $p $eid.next
+				[PSCustomObject]@{
+					ms = [double]$_.read_ms; eid = [int]$eid.value
+					x = $pos.x; y = $pos.y; z = $pos.z; stage = [int]$p[$eid.next + 8]
+				}
+			})
+		$bBreaks = @($bRows | Where-Object { $_.name -eq 'minecraft:level_event' } | ForEach-Object {
+				$p = ConvertFrom-TraceB64 $_.b64
+				# [int] casts matter: PowerShell shifts a [byte] in byte
+				# width, so [byte]7 -shl 8 is 0 and 2001 decoded as 209.
+				$event = ([int]$p[0] -shl 24) -bor ([int]$p[1] -shl 16) -bor ([int]$p[2] -shl 8) -bor [int]$p[3]
+				$pos = ConvertFrom-PackedPosition $p 4
+				$data = ([int]$p[12] -shl 24) -bor ([int]$p[13] -shl 16) -bor ([int]$p[14] -shl 8) -bor [int]$p[15]
+				[PSCustomObject]@{ ms = [double]$_.read_ms; event = $event; x = $pos.x; y = $pos.y; z = $pos.z; data = $data }
+			})
+		$bUpdates = @($bRows | Where-Object { $_.name -eq 'minecraft:block_update' } | ForEach-Object {
+				$p = ConvertFrom-TraceB64 $_.b64
+				$pos = ConvertFrom-PackedPosition $p 0
+				$state = ConvertFrom-TraceVarInt $p 8
+				[PSCustomObject]@{ ms = [double]$_.read_ms; x = $pos.x; y = $pos.y; z = $pos.z; state = [int]$state.value }
+			})
+
+		foreach ($case in $casesRun) {
+			$x = [int]$case.x
+			$zCase = [int]$case.z
+			$starts = @($aSeen | Where-Object { $_.x -eq $x -and $_.z -eq $zCase -and $_.action -eq 0 })
+			$finishes = @($aSeen | Where-Object { $_.x -eq $x -and $_.z -eq $zCase -and $_.action -eq 3 })
+			$needFinishes = if ($case.kind -eq 'column' -or $case.kind -eq 'sneak') { 4 } else { 1 }
+			Add-Check $Result ("{0}: A sent the start and {1} finish(es)" -f $case.name, $needFinishes) `
+			($starts.Count -ge 1 -and $finishes.Count -ge $needFinishes) `
+			("starts={0} finishes={1}" -f $starts.Count, $finishes.Count)
+			$stages = @($bStages | Where-Object { $_.x -eq $x -and $_.z -eq $zCase })
+			$reset = @($stages | Where-Object { $_.stage -eq 0xFF })
+			Add-Check $Result ("{0}: B received the crack stages and their reset" -f $case.name) `
+			($stages.Count -ge 2 -and $reset.Count -ge 1) `
+			("stages={0} resets={1}" -f $stages.Count, $reset.Count)
+			$breaks = @($bBreaks | Where-Object { $_.event -eq 2001 -and $_.x -eq $x -and $_.z -eq $zCase })
+			$airs = @($bUpdates | Where-Object { $_.x -eq $x -and $_.z -eq $zCase -and $_.state -eq 0 })
+			Add-Check $Result ("{0}: B saw the break effect and the air update" -f $case.name) `
+			($breaks.Count -ge 1 -and $airs.Count -ge 1) `
+			("level_events={0} air_updates={1}" -f $breaks.Count, $airs.Count)
+		}
+
+		$artifact = [PSCustomObject]@{
+			cases   = @($casesRun)
+			actions = @($aSeen)
+			stages  = @($bStages)
+			breaks  = @($bBreaks)
+			updates = @($bUpdates)
+		}
+		$artifactPath = Join-Path $traceDir 's12-samples.json'
+		$artifact | ConvertTo-Json -Depth 5 | Set-Content $artifactPath -Encoding utf8
+		$script:s7Facts.Add("S12 artifact: $artifactPath")
+		Write-Host ("  [info] S12 artifact written: {0}" -f $artifactPath)
+	} else {
+		Add-Check $Result 'S12 traces are available' $false `
+			("trace files={0}; digger={1}; observer={2}" -f $files.Count, `
+				$(if ($null -ne $aTrace) { $aTrace.Name } else { 'none' }), `
+				$(if ($null -ne $bTrace) { $bTrace.Name } else { 'none' }))
+	}
+
+	$null = Invoke-TestCmd $portA (New-SessionCmd 's12-off' 'disconnect')
+	$null = Invoke-TestCmd $portB (New-SessionCmd 's12-offb' 'disconnect')
+	Start-Sleep -Seconds 3
+}
+
 $scenarioDir = Join-Path $here 'scenarios'
 $allResults = @()
 try {
 	Prepare-RunWorld
-	if (-not $isVanilla -and $OursDevGeometry -and (($Scenarios -contains 's10') -or ($Scenarios -contains 's11'))) {
+	if (-not $isVanilla -and $OursDevGeometry -and (($Scenarios -contains 's10') -or ($Scenarios -contains 's11') -or ($Scenarios -contains 's12'))) {
 		Write-DevGeometryFile $OursDevGeometry
 	}
 	Start-Stand
@@ -2125,6 +2432,7 @@ try {
 			's9' { Invoke-S9 $cfg $result }
 			's10' { Invoke-S10 $cfg $result }
 			's11' { Invoke-S11 $cfg $result }
+			's12' { Invoke-S12 $cfg $result }
 			default { throw "unknown scenario '$($cfg.id)'" }
 		}
 		Stop-ClientByName $cfg.playerA

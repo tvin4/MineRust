@@ -1,0 +1,47 @@
+{
+  "id": "s12",
+  "title": "survival dig states live: feet in water, ground column, sneak, air stand (16a.4 p.2/p.3b/p.4)",
+  "playerA": "Alice",
+  "playerB": "Bob",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "settleMs": 700,
+  "digSettleMs": 500,
+  "baseY": 200,
+  "forceload": [80, -50, 130, -10],
+  "platform": ["fill 80 199 -50 130 200 -10 minecraft:stone"],
+  "columnZ": -34,
+  "cases": [
+    {
+      "name": "water",
+      "kind": "water",
+      "x": 108,
+      "holdMs": 25000,
+      "block": "minecraft:dirt",
+      "digSettleMs": 800
+    },
+    {
+      "name": "ground",
+      "kind": "column",
+      "x": 100,
+      "holdMs": 14000,
+      "blocks": ["minecraft:grass_block", "minecraft:dirt", "minecraft:stone", "minecraft:oak_leaves"]
+    },
+    {
+      "name": "sneak",
+      "kind": "sneak",
+      "x": 104,
+      "holdMs": 14000,
+      "blocks": ["minecraft:grass_block", "minecraft:dirt", "minecraft:stone", "minecraft:oak_leaves"]
+    },
+    {
+      "name": "air",
+      "kind": "air",
+      "x": 112,
+      "holdMs": 6000,
+      "block": "minecraft:oak_leaves",
+      "digSettleMs": 0
+    }
+  ],
+  "notes": "A is teleported (RCON on vanilla, the client-side tp on ours) above each stand with pitch 90 and holds attack, so every dig goes straight down. water runs first: it absorbs the join/chunk-load burst of the run and its finish is trusted anyway (the digger's feet are in water), so a tick catch-up cannot turn it into a refused legitimate dig. It digs a dirt block under a one-deep walled pool at the feet (eyes dry) with a 25 s hold, because the client's in-water penalty may be 5x or 25x. ground/sneak dig a four-block column (grass, dirt, stone, leaves) in one 14 s hold: the bare-hand stone alone takes 7.5 s (150 ticks). air runs last with a 0 ms settle: the stand is 2.5 blocks above one isolated leaves block with bedrock below it, so a long hold cannot start a second, unintended dig. The aim check (raycast after the teleport) takes ~250 ms while the client's catch-up fall lasts ~50 ms of proxy time, so both attempts (settle 500 ms and 0 ms) began the dig while the player already stood on the block: the airborne state is unit-tested only, and a stand that presses attack before the aim check is still owed. Ours needs -HardnessReport (the timer) and -OursDevGeometry (the runner writes this command list there); vanilla builds the same list through the console. The artifact s12-samples.json carries A's player_action timings and B's stages/breaks/updates for the tick comparison. Submerged (eyes-in-water) digging stays a trace gap: its client time is 5-25x longer and does not fit one hold yet."
+}
