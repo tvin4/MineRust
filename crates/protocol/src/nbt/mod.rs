@@ -148,6 +148,50 @@ impl NbtTag {
         Ok(out)
     }
 
+    /// Encodes this value in the on-disk form: a type byte, the
+    /// length-prefixed root name and the payload.
+    ///
+    /// NBT files (and the gzip-compressed `playerdata` documents) carry the
+    /// root name that the network form omits ([`Self::encode_network`]). The
+    /// payload itself is the same.
+    pub fn encode_disk(&self, root_name: &str, out: &mut Vec<u8>) -> Result<(), NbtError> {
+        out.push(self.type_id());
+        write_mutf8(root_name, out)?;
+        self.encode_payload(out)
+    }
+
+    /// Convenience wrapper around [`Self::encode_disk`].
+    pub fn to_disk_bytes(&self, root_name: &str) -> Result<Vec<u8>, NbtError> {
+        let mut out = Vec::new();
+        self.encode_disk(root_name, &mut out)?;
+        Ok(out)
+    }
+
+    /// Decodes a disk NBT document: `type + root name + payload`.
+    ///
+    /// The root of a saved document is a compound (the vanilla playerdata
+    /// and world documents are). The root name is skipped, not validated:
+    /// every observed save writes an empty name, and the name has no
+    /// meaning for the value itself.
+    pub fn decode_disk(bytes: &[u8]) -> Result<Self, NbtError> {
+        let (type_id, rest) = bytes.split_first().ok_or(NbtError::UnexpectedEof)?;
+        if *type_id != 10 {
+            return Err(NbtError::InvalidTagType(*type_id));
+        }
+        let name_len = rest
+            .get(..2)
+            .map(|len| usize::from(u16::from_be_bytes([len[0], len[1]])))
+            .ok_or(NbtError::UnexpectedEof)?;
+        let payload = rest.get(2 + name_len..).ok_or(NbtError::UnexpectedEof)?;
+        // The network decoder wants the type byte in front of the payload;
+        // only the root name is dropped, everything after it is identical.
+        let mut network = Vec::with_capacity(payload.len() + 1);
+        network.push(*type_id);
+        network.extend_from_slice(payload);
+        let (tag, _) = Self::decode_network(&network)?;
+        Ok(tag)
+    }
+
     /// Appends the payload of this value (type byte excluded) to `out`.
     fn encode_payload(&self, out: &mut Vec<u8>) -> Result<(), NbtError> {
         match self {
@@ -418,5 +462,43 @@ mod tests {
         let tag = NbtTag::String("a".repeat(65536));
         let err = tag.to_network_bytes().expect_err("too long");
         assert!(matches!(err, NbtError::StringTooLong { length: 65536 }));
+    }
+
+    #[test]
+    fn disk_form_round_trips_with_its_root_name() {
+        let tag = compound_of(vec![
+            (
+                "Pos",
+                NbtTag::List(vec![
+                    NbtTag::Double(1.5),
+                    NbtTag::Double(64.0),
+                    NbtTag::Double(-2.25),
+                ]),
+            ),
+            ("Health", NbtTag::Float(20.0)),
+            ("foodLevel", NbtTag::Int(20)),
+        ]);
+        let disk = tag.to_disk_bytes("").expect("encodable");
+        assert_eq!(disk[0], 0x0A, "a compound root");
+        assert_eq!(&disk[1..3], &[0x00, 0x00], "an empty root name");
+        assert_eq!(NbtTag::decode_disk(&disk).expect("decodable"), tag);
+
+        let named = tag.to_disk_bytes("hello").expect("encodable");
+        assert_eq!(&named[1..3], &[0x00, 0x05], "the root name length");
+        assert_eq!(&named[3..8], b"hello");
+        assert_eq!(NbtTag::decode_disk(&named).expect("decodable"), tag);
+    }
+
+    #[test]
+    fn a_non_compound_disk_root_is_rejected() {
+        let bytes = NbtTag::Int(1).to_disk_bytes("x").expect("encodable");
+        assert!(matches!(
+            NbtTag::decode_disk(&bytes),
+            Err(NbtError::InvalidTagType(3))
+        ));
+        assert!(matches!(
+            NbtTag::decode_disk(&[0x0A]),
+            Err(NbtError::UnexpectedEof)
+        ));
     }
 }

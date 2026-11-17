@@ -1072,6 +1072,55 @@ impl BlockChangedAck {
     }
 }
 
+/// Clientbound Set Health: the player's health, food and saturation (play
+/// id 106).
+///
+/// SOURCE: the S7 vanilla join trace (`docs/PLAYERDATA.md` §1.3) — the packet
+/// arrives right after `player_position`: `health f32 BE + food varint +
+/// saturation f32 BE`. For the saved Alice the bytes were
+/// `41 7a aa ab 11 00 00 00 00` = health 15.666667, food 17, saturation 0.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SetHealth {
+    /// Current health, 0..20 (float on the wire).
+    pub health: f32,
+    /// Food level (`foodLevel`), 0..20.
+    pub food: i32,
+    /// Food saturation (`foodSaturationLevel`).
+    pub saturation: f32,
+}
+
+impl SetHealth {
+    /// Packet id of Set Health (play state, clientbound).
+    pub const ID: u32 = 106;
+
+    /// Key that resolves the Set Health id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::clientbound(ProtocolState::Play, "minecraft:set_health", Self::ID);
+
+    /// Encodes the payload (packet id excluded).
+    pub fn encode_payload(&self) -> Vec<u8> {
+        let mut writer = PacketWriter::new();
+        writer.write_f32(self.health);
+        writer.write_varint(self.food);
+        writer.write_f32(self.saturation);
+        writer.into_bytes()
+    }
+
+    /// Decodes the payload; the packet id must already be consumed.
+    pub fn decode_payload(reader: &mut PacketReader<'_>) -> Result<Self, CodecError> {
+        Ok(Self {
+            health: reader.read_f32()?,
+            food: reader.read_varint()?,
+            saturation: reader.read_f32()?,
+        })
+    }
+
+    /// Encodes the packet as a complete frame.
+    pub fn to_frame(&self) -> Result<Vec<u8>, CodecError> {
+        encode_frame(Self::ID, &self.encode_payload())
+    }
+}
+
 /// Clientbound Level Event: a world-wide effect tied to a position (play id
 /// 0x2F).
 ///
@@ -1517,6 +1566,39 @@ mod tests {
             );
             assert_eq!(decoded.encode_payload(), raw, "round-trips the trace bytes");
         }
+    }
+
+    #[test]
+    fn set_health_roundtrips_the_s7_join_bytes() {
+        // The S7 vanilla join of the saved Alice (`docs/PLAYERDATA.md` §1.3):
+        // health 15.666667, food 17, saturation 0.
+        let raw = hex("417aaaab1100000000");
+        let mut reader = PacketReader::new(&raw);
+        let decoded = SetHealth::decode_payload(&mut reader).expect("decodable");
+        reader.ensure_empty().expect("no trailing bytes");
+        assert_eq!(
+            decoded,
+            SetHealth {
+                health: 15.666_667,
+                food: 17,
+                saturation: 0.0,
+            }
+        );
+        assert_eq!(decoded.encode_payload(), raw, "round-trips the trace bytes");
+
+        // A new player's 20/20/5.
+        let fresh = SetHealth {
+            health: 20.0,
+            food: 20,
+            saturation: 5.0,
+        };
+        let bytes = fresh.encode_payload();
+        assert_eq!(bytes, hex("41a000001440a00000"));
+        let mut reader = PacketReader::new(&bytes);
+        assert_eq!(
+            SetHealth::decode_payload(&mut reader).expect("decodable"),
+            fresh
+        );
     }
 
     #[test]
