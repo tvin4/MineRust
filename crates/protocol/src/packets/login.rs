@@ -23,10 +23,11 @@ pub(crate) const MAX_SIGNATURE_CHARS: usize = 1024;
 /// the public protocol documentation
 /// (<https://minecraft.wiki/wiki/Java_Edition_protocol>). The protocol
 /// permits any UUID in Login Success; using the documented derivation keeps
-/// ids stable across restarts. It is checked only by tests against itself,
-/// never against a vanilla server.
-// SOURCE: wiki, unverified (see docs/SOURCES.md; the parity crate is meant
-// to confirm this against the real server).
+/// ids stable across restarts.
+///
+/// Confirmed against a vanilla 26.3 server (S15 V2, 17.11.2026): the UUID in
+/// `login_finished` equals these bytes with the version-3 and variant bits,
+/// and names that differ only by case produce different profiles.
 pub fn offline_uuid(name: &str) -> Uuid {
     let mut hash = md5::compute(format!("OfflinePlayer:{name}"));
     // RFC 4122 version 3 and variant 0b10, exactly as the game's
@@ -440,5 +441,9 @@ mod tests {
         // The derivation hashes `OfflinePlayer:<name>`: adding a prefix to
         // the input must change the result.
         assert_ne!(steve, offline_uuid("xSteve"));
+
+        // Case matters (S15 V2 on vanilla 26.3: `Alice` and `alice` are two
+        // profiles and both clients stay in the game).
+        assert_ne!(offline_uuid("Alice"), offline_uuid("alice"));
     }
 }
