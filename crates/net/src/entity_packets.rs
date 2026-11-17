@@ -150,7 +150,18 @@ fn spawn_attributes(entity_id: PlayerId, game_mode: i32) -> UpdateAttributes {
 
 /// Pushes the spawn sequence of a newly visible player, in the traced order:
 /// `player_info_update`, `add_entity`, `set_entity_data`, the first
-/// `move_entity_pos` (zero delta), `set_entity_data`, `update_attributes`.
+/// `move_entity_pos` (zero delta), `set_entity_data`, `entity_position_sync`,
+/// `update_attributes`.
+///
+/// The sync is the initial tracker correction vanilla sends once per join:
+/// in C5/C6 it is the first packet about B after the spawn pair and it is
+/// immediately followed by the first `update_attributes`. It is **not**
+/// triggered by `accept_teleportation` or `player_loaded`: aligning the two
+/// client clocks on the shared `player_info_update` puts it at B-time 814.3 ms
+/// (C5) / 700.5 ms (C6), while B acknowledges the teleport at 523/531 ms and
+/// reports `player_loaded` at 1530/1533 ms.
+// SOURCE: two-bot vanilla trace 26.3 (C5 seq 828, C6 seq 526), payload
+// `eid 01 01 <x> <y> <z> 02 <yaw> <pitch> 01`.
 pub fn push_spawn(
     entity: &EntitySpawn,
     out: &mut Vec<(PacketKey, Vec<u8>)>,
@@ -216,6 +227,30 @@ pub fn push_spawn(
         metadata: metadata_second(entity.game_mode).to_vec(),
     };
     out.push((SetEntityData::KEY, update.encode_payload()?));
+
+    // The initial tracker correction: absolute position and rotation, once per
+    // join, before the first attribute update. It is sent only for visible
+    // (survival/creative) entities: C5/C6 carry it, while the spectator spawns
+    // of C1/C2/C4 carry `update_attributes` directly and never a spawn sync
+    // (C1 has no sync at all). The trailing byte is 1 in C5/C6; its meaning is
+    // «не установлено».
+    // SOURCE: two-bot vanilla trace 26.3 (C5 seq 828, C6 seq 526; C1/C2/C4
+    // spectator spawn order).
+    if entity.game_mode != 3 {
+        let sync = EntityPositionSync {
+            entity_id: entity.id,
+            teleport_id: 1,
+            flags: 1,
+            x: entity.position.x,
+            y: entity.position.y,
+            z: entity.position.z,
+            rotation: 2,
+            yaw: entity.position.yaw,
+            pitch: entity.position.pitch,
+            tail: true,
+        };
+        out.push((EntityPositionSync::KEY, sync.encode_payload()?));
+    }
 
     out.push((
         UpdateAttributes::KEY,
@@ -536,6 +571,89 @@ mod tests {
              40 57 53 4c 42 0f a3 0c 40 5f 80 00 00 00 00 00 c0 35 c2 4f f3 bb e7 8f \
              00 40 45 45 00",
             "add_entity payload must match the vanilla S1b trace"
+        );
+    }
+
+    /// The spawn stream sends exactly one `entity_position_sync` before the
+    /// first `update_attributes`, with the C5 payload byte for byte.
+    // SOURCE: two-bot vanilla trace 26.3 (C5, eid 101, seq 828).
+    #[test]
+    fn spawn_sends_the_initial_position_sync_before_attributes() {
+        let spawn = EntitySpawn {
+            id: 101,
+            name: "TraceBotB".to_owned(),
+            uuid: [0x22; 16],
+            position: PlayerPos {
+                x: 96.5,
+                y: 145.0,
+                z: -31.5,
+                yaw: 0.0,
+                pitch: 0.0,
+                head_yaw: 0.0,
+                flags: 0,
+            },
+            game_mode: 0,
+            sneaking: false,
+            swimming: false,
+            forced: Forced::None,
+        };
+        let mut out = Vec::new();
+        push_spawn(&spawn, &mut out).expect("encodable");
+        let syncs: Vec<usize> = out
+            .iter()
+            .enumerate()
+            .filter(|(_, (key, _))| *key == EntityPositionSync::KEY)
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(syncs.len(), 1, "one initial sync per spawn");
+        let attributes = out
+            .iter()
+            .position(|(key, _)| *key == UpdateAttributes::KEY)
+            .expect("attributes are part of the spawn");
+        assert_eq!(syncs[0] + 1, attributes, "sync precedes the attributes");
+        assert_eq!(
+            out[syncs[0]].1,
+            parse_hex(
+                "65 01 01 40 58 20 00 00 00 00 00 40 62 20 00 00 00 00 00 \
+                 c0 3f 80 00 00 00 00 00 02 00 00 00 00 00 00 00 00 01"
+            )
+        );
+    }
+
+    /// A spectator spawn carries `update_attributes` directly: the spectator
+    /// traces (C1/C2/C4) have no spawn `entity_position_sync` at all (C1 has
+    /// none in the whole stream).
+    // SOURCE: two-bot vanilla trace 26.3 (C1 seq 4 attributes, no sync; C2/C4
+    // spectator spawn order).
+    #[test]
+    fn spectator_spawn_has_no_initial_position_sync() {
+        let spawn = EntitySpawn {
+            id: 118,
+            name: "TraceBotB".to_owned(),
+            uuid: [0x44; 16],
+            position: PlayerPos {
+                x: 96.5,
+                y: 145.0,
+                z: -31.5,
+                yaw: 0.0,
+                pitch: 0.0,
+                head_yaw: 0.0,
+                flags: 0,
+            },
+            game_mode: 3,
+            sneaking: false,
+            swimming: false,
+            forced: Forced::None,
+        };
+        let mut out = Vec::new();
+        push_spawn(&spawn, &mut out).expect("encodable");
+        assert!(
+            !out.iter().any(|(key, _)| *key == EntityPositionSync::KEY),
+            "spectator spawns must not carry the tracker sync"
+        );
+        assert!(
+            out.iter().any(|(key, _)| *key == UpdateAttributes::KEY),
+            "attributes are still part of the spawn"
         );
     }
 
