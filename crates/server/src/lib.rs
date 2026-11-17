@@ -65,6 +65,11 @@ pub enum RunError {
     /// (Шаг 15 п.2).
     #[error(transparent)]
     Geometry(#[from] geometry::GeometryError),
+    /// The player save store could not be opened (Шаг 18a): a bad path (the
+    /// world template or the vanilla stand), an unwritable directory or a
+    /// writer thread that could not start.
+    #[error(transparent)]
+    Playerdata(#[from] playerdata::PlayerdataError),
 }
 
 /// What each required chunk-serving path must point at (see
@@ -267,6 +272,55 @@ pub fn build_world(
     Ok((Some(net::Loader::spawn(Arc::new(world))?), info))
 }
 
+/// Opens the player save store and starts its writer thread (Шаг 18a).
+///
+/// Returns `None` when `save_dir` is unset: persistence stays off. Everything
+/// happens before the port is bound, so a bad save root (a path inside the
+/// world template or the vanilla stand, or an unwritable directory) fails the
+/// start instead of surfacing on someone's join.
+fn open_playerdata(
+    config: &ServerConfig,
+) -> Result<Option<(net::game::PlayerdataRuntime, playerdata::Writer)>, RunError> {
+    let Some(save_dir) = config.save_dir.as_deref().map(str::trim) else {
+        tracing::warn!(
+            "no save_dir configured: player state is not saved between sessions \
+             (see server.example.toml)"
+        );
+        return Ok(None);
+    };
+    // The schema every file is written with is the served save's: a mismatched
+    // DataVersion would make the game reconsider the whole player document.
+    let data_version = match config.world_dir.as_deref().map(str::trim) {
+        Some(dir) => world::read_level_dat(Path::new(dir).join("level.dat"))?.data_version,
+        None => 0,
+    };
+    let world_dir = config.world_dir.as_deref().map(str::trim);
+    let vanilla_dir = config.vanilla_server_dir.as_deref().map(str::trim);
+    let mut forbidden: Vec<(&'static str, &Path)> = Vec::new();
+    if let Some(dir) = world_dir {
+        forbidden.push(("world template", Path::new(dir)));
+    }
+    if let Some(dir) = vanilla_dir {
+        forbidden.push(("vanilla stand", Path::new(dir)));
+    }
+    let store = Arc::new(playerdata::Store::open(save_dir, data_version, &forbidden)?);
+    let (sink, writer) = playerdata::spawn((*store).clone(), playerdata::DEFAULT_CAPACITY)?;
+    let runtime = net::game::PlayerdataRuntime {
+        store,
+        sink,
+        force_gamemode: config.force_gamemode,
+        autosave_interval_ticks: config.autosave_interval_ticks,
+    };
+    tracing::info!(
+        save_dir,
+        data_version,
+        force_gamemode = config.force_gamemode,
+        autosave_interval_ticks = config.autosave_interval_ticks,
+        "player saves enabled"
+    );
+    Ok(Some((runtime, writer)))
+}
+
 /// Binds the configured address and serves connections until an I/O error.
 ///
 /// `game_data` holds the registries and tags loaded from the client jar
@@ -320,6 +374,13 @@ pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> Result<(), R
     if let Some(path) = config.dev_geometry.as_deref() {
         apply_dev_geometry(path, store.as_deref())?;
     }
+    // Player saves (Шаг 18a): the store and its writer start before the port
+    // is bound, so a refused save root fails the start. Without `save_dir`
+    // the runtime is `None` and the server warns that nothing is saved.
+    let (playerdata, playerdata_writer) = match open_playerdata(&config)? {
+        Some((runtime, writer)) => (Some(Arc::new(runtime)), Some(writer)),
+        None => (None, None),
+    };
     let listener = TcpListener::bind(&config.listen).await?;
     let local = listener.local_addr()?;
     tracing::info!(
@@ -338,6 +399,7 @@ pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> Result<(), R
         hardness: load_hardness(&config)?,
         default_game_mode: config.game_mode,
         dig_tolerance_ticks: config.dig_tolerance_ticks,
+        playerdata,
         ..net::game::GameConfig::default()
     };
     net::serve_with(
@@ -350,6 +412,15 @@ pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> Result<(), R
         world,
     )
     .await?;
+    // The game thread queued every online player's final snapshot before it
+    // left; drain the writer now (Шаг 18a). A timeout or a failed write is a
+    // warning: the server has already stopped serving.
+    if let Some(writer) = playerdata_writer {
+        match writer.shutdown(std::time::Duration::from_secs(5)) {
+            Ok(()) => tracing::info!("player saves flushed"),
+            Err(error) => tracing::warn!(%error, "the player writer did not stop cleanly"),
+        }
+    }
     Ok(())
 }
 
@@ -443,6 +514,9 @@ mod tests {
             game_mode: 0,
             spawn_override: None,
             dev_geometry: None,
+            save_dir: None,
+            force_gamemode: true,
+            autosave_interval_ticks: config::DEFAULT_AUTOSAVE_TICKS,
         }
     }
 

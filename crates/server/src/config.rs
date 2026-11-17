@@ -20,6 +20,20 @@ fn default_distances() -> i32 {
     DEFAULT_DISTANCES
 }
 
+/// Serde default of `force_gamemode` (Шаг 18a): the configured mode wins.
+fn default_true() -> bool {
+    true
+}
+
+/// Serde default of `autosave_interval_ticks` (Шаг 18a): three minutes at
+/// 20 TPS.
+fn default_autosave_ticks() -> u64 {
+    DEFAULT_AUTOSAVE_TICKS
+}
+
+/// Autosave period both the serde default and the example use.
+pub const DEFAULT_AUTOSAVE_TICKS: u64 = 6000;
+
 /// Serde default of `workers` (M4.3 A2): logical cores − 2, at least 1.
 ///
 /// The two spare cores are left to the network/tokio threads and the OS, so
@@ -221,9 +235,34 @@ pub struct ServerConfig {
     /// Optional working directory of the vanilla server installation.
     ///
     /// Contains `server.properties`, `logs/` and per-run world copies; used
-    /// only by the ignored parity tests of the `parity` crate.
+    /// only by the ignored parity tests of the `parity` crate, and refused as
+    /// a `save_dir` root (Шаг 18a) so player files never land there.
     #[serde(default)]
     pub vanilla_server_dir: Option<String>,
+    /// Optional directory the server saves player files in (Шаг 18a).
+    ///
+    /// Vanilla layout: `<save_dir>/players/data/<uuid>.dat`, one world per
+    /// directory. Absent (the default) turns persistence **off**: nothing is
+    /// written and every join starts at the spawn with 20/20/5 — a warning at
+    /// startup says so. The path must not be the world template or the vanilla
+    /// parity stand: the server refuses to start then, because player files
+    /// must never land in a world the project ships or compares against. Each
+    /// scenario run of `tools/testclient` points this at its own run
+    /// directory.
+    #[serde(default)]
+    pub save_dir: Option<String>,
+    /// Whether the configured `game_mode` wins over a saved `playerGameType`
+    /// on join (Шаг 18a). Default `true`: the operator's configured mode is
+    /// authoritative. Set it to `false` to let a returning player keep the
+    /// mode its file carries (a file without a usable mode still gets the
+    /// configured one).
+    #[serde(default = "default_true")]
+    pub force_gamemode: bool,
+    /// Autosave period in ticks (Шаг 18a). Default 6000 (three minutes at
+    /// 20 TPS). `0` disables the periodic save; a player quit and the server
+    /// stop still save.
+    #[serde(default = "default_autosave_ticks")]
+    pub autosave_interval_ticks: u64,
 }
 
 impl ServerConfig {
@@ -317,6 +356,13 @@ impl ServerConfig {
             return Err(ConfigError::Invalid(
                 "vanilla_server_dir is empty".to_owned(),
             ));
+        }
+        if self
+            .save_dir
+            .as_deref()
+            .is_some_and(|path| path.trim().is_empty())
+        {
+            return Err(ConfigError::Invalid("save_dir is empty".to_owned()));
         }
         if !(0..=3).contains(&self.game_mode) {
             return Err(ConfigError::Invalid(format!(

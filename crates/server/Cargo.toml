@@ -18,6 +18,7 @@ path = "src/main.rs"
 anyhow = { workspace = true }
 data = { path = "../data" }
 net = { path = "../net" }
+playerdata = { path = "../playerdata" }
 protocol = { path = "../protocol" }
 serde = { workspace = true }
 thiserror = { workspace = true }

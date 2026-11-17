@@ -13,7 +13,7 @@ use std::sync::Arc;
 use protocol::{
     ClientInformation, ConfirmTeleportation, FinishAck, FinishConfiguration, GameEvent, Handshake,
     LoginAcknowledged, LoginPlay, LoginStart, LoginSuccess, NextState, PacketReader,
-    PlayerInfoUpdate, RegistryData, SetCenterChunk, SetDefaultSpawnPosition,
+    PlayerInfoUpdate, RegistryData, SetCenterChunk, SetDefaultSpawnPosition, SetHealth,
     SynchronizePlayerPosition, UpdateTags,
 };
 use tokio::io::AsyncWriteExt;
@@ -251,6 +251,17 @@ async fn full_join_handshake_reaches_play_with_registry_data() {
     assert_eq!(teleport.teleport_id, 1);
     assert_eq!((teleport.x, teleport.y, teleport.z), (8.5, 64.0, 8.5));
     assert_eq!(teleport.flags, 0);
+
+    // Set Health follows the teleport (Шаг 18a): a player without a save
+    // joins with the fresh 20/20/5.
+    let (id, payload) = recv(&mut stream).await;
+    assert_eq!(id, SetHealth::ID, "expected set health");
+    let mut reader = PacketReader::new(&payload);
+    let health = SetHealth::decode_payload(&mut reader).expect("decodable");
+    reader.ensure_empty().expect("no trailing bytes");
+    assert_eq!(health.health, 20.0);
+    assert_eq!(health.food, 20);
+    assert_eq!(health.saturation, 5.0);
 
     // Confirm the teleport, then close: the server must drop the socket.
     let confirm = ConfirmTeleportation {

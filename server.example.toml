@@ -126,8 +126,32 @@ client_jar = "path/to/client.jar"
 # tests (crates/parity): an official server.jar from Mojang's version
 # manifest and the directory it runs in (eula.txt, server.properties,
 # per-run copies of the world template). The server itself ignores these.
+# `vanilla_server_dir` is also refused as a `save_dir` root (see below), so
+# player files never land in the parity stand's world.
 # vanilla_server_jar = "path/to/server.jar"
 # vanilla_server_dir = "path/to/vanilla"
+
+# Optional: the directory the server saves player files in (Шаг 18a). One
+# world per directory, vanilla layout:
+#   <save_dir>/players/data/<uuid>.dat
+# Absent turns persistence OFF with one startup warning: nothing is written
+# and every join starts at the world spawn with 20/20/5. The path must not be
+# the world template or the vanilla parity stand — the server refuses to
+# start then (player files must never land in a world the project ships or
+# compares against). The scenario runner points this at its own run directory.
+# save_dir = "MineRust-data/worlds/minecraft-v3"
+
+# Whether the configured `game_mode` wins over a saved `playerGameType` on
+# join (Шаг 18a). Default true: the operator's configured mode is
+# authoritative. Set false to let a returning player keep the mode its file
+# carries (a file without a usable mode still gets the configured one).
+# force_gamemode = true
+
+# Autosave period in ticks (Шаг 18a). Default 6000 — three minutes at 20 TPS.
+# 0 disables the periodic save; a player quit and the server stop still save.
+# The write never runs on the tick thread: the tick snapshots and a dedicated
+# writer thread does the disk work, atomically (`.tmp` + rename).
+# autosave_interval_ticks = 6000
 
 # Placeholders — replace with the real values from your game installation.
 protocol_version = 0
