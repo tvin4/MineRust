@@ -9,6 +9,7 @@ description = "Tokio networking layer for the MineRust server"
 [dependencies]
 data = { path = "../data" }
 getrandom = { workspace = true }
+playerdata = { path = "../playerdata" }
 protocol = { path = "../protocol" }
 serde = { workspace = true }
 serde_json = { workspace = true }

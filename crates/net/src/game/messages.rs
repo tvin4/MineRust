@@ -14,6 +14,7 @@ use protocol::Position;
 use tokio::sync::mpsc;
 
 use super::entities::{EntityMove, EntityRemove, EntitySpawn, EntityStateUpdate};
+use super::region::PlayerPos;
 
 /// Position of a player inside the game thread.
 ///
@@ -77,8 +78,20 @@ pub struct PlayerJoin {
     /// Block the player joins at (the save's spawn).
     pub spawn: Position,
     /// Game mode the join announces (M4.5 Шаг 7.3); from
-    /// [`GameConfig::default_game_mode`](super::GameConfig).
+    /// [`GameConfig::default_game_mode`](super::GameConfig), or the saved
+    /// `playerGameType` when `force_gamemode` is off (Шаг 18a).
     pub game_mode: i32,
+    /// Where the player enters the world (Шаг 18a): the saved pose of a
+    /// returning player, already resolved against the spawn override and the
+    /// dimension check, or `None` for a fresh player (the spawn block's
+    /// centre, [`PlayerPos::entry`]).
+    pub pose: Option<PlayerPos>,
+    /// Health the join announces (Шаг 18a); the fresh player's is 20.
+    pub health: f32,
+    /// Food level the join announces (Шаг 18a); the fresh player's is 20.
+    pub food: i32,
+    /// Food saturation the join announces (Шаг 18a); a fresh player's is 5.
+    pub saturation: f32,
     /// How the game thread reaches this connection.
     pub connection: PlayerConnection,
 }

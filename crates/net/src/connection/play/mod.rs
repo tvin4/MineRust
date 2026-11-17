@@ -34,14 +34,101 @@ use crate::error::ConnectionError;
 use crate::frame::{read_tracked, write_tracked};
 use crate::game::{
     chunk_of_position, BlockAction, GameHandle, KickFlag, MoveKind, MoveSlot, MoveState,
-    PlayerConnection, PlayerId, PlayerJoin, ServerMessage, ToGame, OUTBOUND_CAPACITY,
+    MoveUpdate, PlayerConnection, PlayerId, PlayerJoin, PlayerPos, PlayerdataRuntime,
+    ServerMessage, ToGame, OUTBOUND_CAPACITY,
 };
 use crate::loader::{LoadError, Loader};
 use crate::store::ChunkStore;
 
+use playerdata::{SavedPlayer, NEW_PLAYER_FOOD, NEW_PLAYER_HEALTH, NEW_PLAYER_SATURATION};
+
 use super::Client;
 
 use keep_alive::{keep_alive_millis, wait_for_deadline, KeepAliveWatch, KEEP_ALIVE_INTERVAL};
+
+/// Where a joining player enters and with which vitals (Шаг 18a), resolved
+/// once against the save and shared by the wire sequence and the player state.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct Entry {
+    /// Entry pose (a saved pose or the spawn block's centre).
+    pub(super) pose: PlayerPos,
+    /// Entry health.
+    pub(super) health: f32,
+    /// Entry food level.
+    pub(super) food: i32,
+    /// Entry food saturation.
+    pub(super) saturation: f32,
+}
+
+/// Reads one player's save off the store without blocking the async task
+/// (Шаг 18a). A broken file is logged by the runtime and read as "no file".
+async fn read_saved(runtime: Arc<PlayerdataRuntime>, player_name: &str) -> Option<SavedPlayer> {
+    let uuid = protocol::offline_uuid(player_name);
+    match tokio::task::spawn_blocking(move || runtime.read(uuid)).await {
+        Ok(saved) => saved,
+        Err(err) => {
+            warn!(
+                %err,
+                player = %player_name,
+                "the player read task failed, joining as a new player"
+            );
+            None
+        }
+    }
+}
+
+/// Game mode the join announces (Шаг 18a): the configured mode always wins
+/// with `force_gamemode`; without it a saved `playerGameType` is used when
+/// the file has one, otherwise the configured mode.
+fn resolve_game_mode(game: &GameHandle, saved: Option<&SavedPlayer>) -> i32 {
+    let configured = game.default_game_mode();
+    match game.playerdata() {
+        Some(runtime) if !runtime.force_gamemode => saved
+            .and_then(|saved| saved.game_mode)
+            .unwrap_or(configured),
+        _ => configured,
+    }
+}
+
+/// Where a joining player enters and with which vitals (Шаг 18a).
+///
+/// A saved pose is only used without a development spawn override and in the
+/// overworld; anything else joins at the spawn block's centre the join always
+/// used. The vitals are the file's, or the fresh 20/20/5.
+fn resolve_entry(info: &WorldInfo, saved: Option<&SavedPlayer>) -> Entry {
+    let fallback = PlayerPos::entry(info.player_spawn_override.unwrap_or(info.spawn));
+    let Some(saved) = saved else {
+        return Entry {
+            pose: fallback,
+            health: NEW_PLAYER_HEALTH,
+            food: NEW_PLAYER_FOOD,
+            saturation: NEW_PLAYER_SATURATION,
+        };
+    };
+    let pose = if info.player_spawn_override.is_none() && saved.is_overworld() {
+        PlayerPos {
+            x: saved.pose.x,
+            y: saved.pose.y,
+            z: saved.pose.z,
+            yaw: saved.pose.yaw,
+            pitch: saved.pose.pitch,
+            head_yaw: saved.pose.yaw,
+            flags: if saved.on_ground {
+                MoveUpdate::ON_GROUND
+            } else {
+                0
+            },
+        }
+    } else {
+        fallback
+    };
+    Entry {
+        pose,
+        health: saved.health,
+        food: saved.food,
+        saturation: saved.saturation,
+    }
+}
 
 /// Identifier of the dimension the player joins.
 const OVERWORLD: &str = "minecraft:overworld";
@@ -200,9 +287,27 @@ where
     );
     // Packet 1..6 of the join (module documentation) — recorded packet by
     // packet by the session trace as they go out.
-    // Game mode of the joining player: the login field, the tab-list entry
-    // and the mode-dependent metadata all come from here (M4.5 Шаг 7.3).
-    let game_mode = game.default_game_mode();
+    // The saved state of a returning player (Шаг 18a): read off the store on
+    // a blocking thread, never on the async task. `None` when persistence is
+    // off and when the file is missing or broken.
+    let saved = match game.playerdata() {
+        Some(runtime) => read_saved(Arc::clone(runtime), player_name).await,
+        None => None,
+    };
+    if let Some(saved) = &saved {
+        if !saved.is_overworld() {
+            warn!(
+                player = %player_name,
+                dimension = %saved.dimension,
+                "the saved dimension is not the overworld; joining at the world spawn"
+            );
+        }
+    }
+    // Game mode: the configuration wins unless `force_gamemode` is off and
+    // the file carries a usable `playerGameType` (Шаг 18a).
+    let game_mode = resolve_game_mode(&game, saved.as_ref());
+    // Where this player enters and with which vitals.
+    let entry = resolve_entry(&world.info, saved.as_ref());
     join::send_join(
         &mut writer,
         game_data,
@@ -210,6 +315,7 @@ where
         player_name,
         player_id,
         game_mode,
+        entry,
         ids,
         &world.info,
     )
@@ -226,6 +332,10 @@ where
         view_distance: radius,
         spawn: world.info.player_spawn_override.unwrap_or(world.info.spawn),
         game_mode,
+        pose: Some(entry.pose),
+        health: entry.health,
+        food: entry.food,
+        saturation: entry.saturation,
         connection: PlayerConnection {
             outbound,
             kick: Arc::clone(&kick),
@@ -266,12 +376,11 @@ where
             None
         }
     };
-    // The client's chunk cache centre (M4.4 B): the spawn chunk first, then
+    // The client's chunk cache centre (M4.4 B): the entry chunk first, then
     // the chunk of every `StreamChunks` event. The join window is built from
     // it once the world is ready, so a player that moved before the read
     // finished still gets exactly its current window.
-    let join_spawn = world.info.player_spawn_override.unwrap_or(world.info.spawn);
-    let mut stream_center = chunk_of_position(f64::from(join_spawn.x), f64::from(join_spawn.z));
+    let mut stream_center = chunk_of_position(entry.pose.x, entry.pose.z);
 
     // Frames are read on a background task: reading must survive the
     // select-loop branches below (a cancelled frame read would drop bytes

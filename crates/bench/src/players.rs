@@ -124,6 +124,10 @@ fn bench_player_at(index: usize, x: i32, y: i32, z: i32) -> BenchPlayer {
             view_distance: 10,
             spawn: protocol::Position { x, y, z },
             game_mode: 0,
+            pose: None,
+            health: 20.0,
+            food: 20,
+            saturation: 5.0,
             connection: PlayerConnection {
                 outbound,
                 kick: Arc::new(KickFlag::default()),

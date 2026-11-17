@@ -68,7 +68,11 @@ pub struct PlayerPos {
 impl PlayerPos {
     /// The entry position: the centre of the spawn block, the same point the
     /// join teleport sends (`join.rs`).
-    fn entry(spawn: protocol::Position) -> Self {
+    ///
+    /// Used when a player has no saved pose (`PlayerJoin::pose`, Шаг 18a) and
+    /// by the join's fallback for a save the server refuses (a non-overworld
+    /// dimension).
+    pub(crate) fn entry(spawn: protocol::Position) -> Self {
         Self {
             x: f64::from(spawn.x) + 0.5,
             y: f64::from(spawn.y),
@@ -136,6 +140,9 @@ pub struct DigState {
 pub struct Player {
     id: PlayerId,
     name: String,
+    /// Offline UUID of the player's name (Шаг 18a): the save file is named
+    /// after it, so it is derived once at join instead of per save.
+    uuid: Uuid,
     view_distance: i32,
     /// Game mode of this player (M4.5 Шаг 7.3): the login `game_mode`, the
     /// tab-list entry and the mode-dependent metadata bytes all come from it.
@@ -143,6 +150,13 @@ pub struct Player {
     teleport_confirmed: bool,
     spawn: protocol::Position,
     position: PlayerPos,
+    /// Health the join carried (Шаг 18a). Death and respawn are not modelled,
+    /// so it stays what the join announced; every save writes it back.
+    health: f32,
+    /// Food level the join carried (Шаг 18a).
+    food: i32,
+    /// Food saturation the join carried (Шаг 18a).
+    saturation: f32,
     /// Chunk the client's chunk-cache centre is at (M4.4 B): the join spawn
     /// chunk first, then the chunk of the newest applied move. The tick
     /// derives a [`StreamChunks`] event whenever this changes.
@@ -210,10 +224,17 @@ pub struct Player {
 
 impl Player {
     /// Builds a player from a join registration.
+    ///
+    /// The entry pose is the saved one carried by the join when there is one
+    /// (Шаг 18a), otherwise the centre of the spawn block. The head yaw
+    /// follows the body yaw (no separate head source, M4.5 Шаг 8).
     pub fn new(join: PlayerJoin) -> Self {
-        let position = PlayerPos::entry(join.spawn);
+        let mut position = join.pose.unwrap_or_else(|| PlayerPos::entry(join.spawn));
+        position.head_yaw = position.yaw;
         let window_center = chunk_of_position(position.x, position.z);
         Self {
+            // Read before `join.name` is moved into the field below.
+            uuid: protocol::offline_uuid(&join.name),
             id: join.id,
             name: join.name,
             view_distance: join.view_distance,
@@ -221,6 +242,9 @@ impl Player {
             teleport_confirmed: false,
             spawn: join.spawn,
             position,
+            health: join.health,
+            food: join.food,
+            saturation: join.saturation,
             window_center,
             visible: BTreeMap::new(),
             last_broadcast: None,
@@ -241,6 +265,26 @@ impl Player {
     /// Player id.
     pub fn id(&self) -> PlayerId {
         self.id
+    }
+
+    /// Offline UUID of the player (Шаг 18a).
+    pub fn uuid(&self) -> Uuid {
+        self.uuid
+    }
+
+    /// Health the join carried (Шаг 18a); written back on every save.
+    pub fn health(&self) -> f32 {
+        self.health
+    }
+
+    /// Food level the join carried (Шаг 18a).
+    pub fn food(&self) -> i32 {
+        self.food
+    }
+
+    /// Food saturation the join carried (Шаг 18a).
+    pub fn saturation(&self) -> f32 {
+        self.saturation
     }
 
     /// Game mode of this player (M4.5 Шаг 7.3).
@@ -757,6 +801,11 @@ impl Region {
     /// The ids the region owns, in ascending order.
     pub fn player_ids(&self) -> impl Iterator<Item = PlayerId> + '_ {
         self.players.keys().copied()
+    }
+
+    /// The players the region owns, in ascending id (autosave, diagnostics).
+    pub fn players(&self) -> impl Iterator<Item = &Player> + '_ {
+        self.players.values()
     }
 
     /// Adds a player; returns the one already under that id, if any.

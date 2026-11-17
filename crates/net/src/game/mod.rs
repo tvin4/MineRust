@@ -19,6 +19,7 @@ mod grid;
 mod messages;
 mod metrics;
 mod movement;
+mod playerdata;
 mod pool;
 mod region;
 mod replay;
@@ -68,6 +69,7 @@ pub use messages::{
 };
 pub use metrics::{TickMetrics, TickMetricsHandle};
 pub use movement::MoveUpdate;
+pub use playerdata::PlayerdataRuntime;
 pub use region::{
     AppliedMove, DigState, Kick, Player, PlayerPos, Region, RegionId, StreamChunks, TickOutcome,
     Transfer, SINGLE_REGION, SWING_DURATION_TICKS, SWING_THRESHOLD_TICKS,
@@ -84,6 +86,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
+use self::playerdata::{save_all, save_player};
 use metrics::Recorder;
 
 use crate::store::ChunkStore;
@@ -208,6 +211,11 @@ pub struct GameConfig {
     /// compressed a 6-tick dig into 2.65 server ticks). `Some(n)` stays
     /// available as a setting; the data is one stand, so this is temporary.
     pub dig_tolerance_ticks: Option<u32>,
+    /// Player save runtime (Шаг 18a). `None` keeps every player in memory
+    /// only: nothing is written and every join starts at the spawn with
+    /// fresh vitals. The connection reads the store at join and the game
+    /// thread queues snapshots for the writer.
+    pub playerdata: Option<Arc<PlayerdataRuntime>>,
 }
 
 impl Default for GameConfig {
@@ -225,6 +233,7 @@ impl Default for GameConfig {
             store: None,
             hardness: None,
             dig_tolerance_ticks: None,
+            playerdata: None,
         }
     }
 }
@@ -316,6 +325,9 @@ pub struct GameHandle {
     stop: Arc<AtomicBool>,
     /// Game mode the join announces (M4.5 Шаг 7.3); validated at spawn.
     default_game_mode: i32,
+    /// Player save runtime (Шаг 18a): read at join, kept so the connection
+    /// sees the same store the writer thread was started with.
+    playerdata: Option<Arc<PlayerdataRuntime>>,
 }
 
 impl GameHandle {
@@ -355,6 +367,7 @@ impl GameHandle {
         // `config` is no longer `Copy` (Шаг 13b: it owns the world store), so
         // the fields the handle needs are read before it moves into the loop.
         let default_game_mode = config.default_game_mode;
+        let playerdata = config.playerdata.clone();
         let join = std::thread::Builder::new()
             .name("minecraft-game".to_owned())
             .spawn(move || {
@@ -370,6 +383,7 @@ impl GameHandle {
             metrics,
             stop: Arc::clone(&stop),
             default_game_mode,
+            playerdata,
         };
         Ok((
             GameThread {
@@ -388,6 +402,12 @@ impl GameHandle {
     /// Game mode every joining player gets (M4.5 Шаг 7.3).
     pub fn default_game_mode(&self) -> i32 {
         self.default_game_mode
+    }
+
+    /// The player save runtime of this server, if persistence is configured
+    /// (Шаг 18a): the connection reads a player file from it at join.
+    pub fn playerdata(&self) -> Option<&Arc<PlayerdataRuntime>> {
+        self.playerdata.as_ref()
     }
 
     /// The last published tick metrics.
@@ -436,6 +456,12 @@ fn game_loop(
     scheduler.set_store(config.store.clone());
     let mut recorder = Recorder::new(config.period);
     let mut replay = Replay::new(open_replay());
+    // Autosave period in ticks; `0` disables the periodic save (Шаг 18a). The
+    // quit of a single player and the shutdown save still run.
+    let autosave_every = config
+        .playerdata
+        .as_ref()
+        .map_or(0, |runtime| runtime.autosave_interval_ticks);
     let started = Instant::now();
     let mut deadline = started + config.period;
     let mut last_log = started;
@@ -484,6 +510,14 @@ fn game_loop(
         let after_streams = Instant::now();
         deliver_entities(&mut scheduler, &outcome.entities);
         let after_entities = Instant::now();
+        // Autosave (Шаг 18a): the snapshot is queued for the writer thread,
+        // the tick never writes. The period is checked after the tick applied
+        // every position, so the saved pose is the one this tick settled on.
+        if autosave_every > 0 && tick.is_multiple_of(autosave_every) {
+            if let Some(runtime) = config.playerdata.as_deref() {
+                save_all(&scheduler, runtime);
+            }
+        }
         for kick in &outcome.kicks {
             warn!(
                 player = kick.id,
@@ -550,6 +584,11 @@ fn game_loop(
         }
     }
     recorder.finish(metrics);
+    // Players still online at stop: queue their final state. The server
+    // drains the writer after this thread has left (Шаг 18a).
+    if let Some(runtime) = config.playerdata.as_deref() {
+        save_all(&scheduler, runtime);
+    }
     if let Err(err) = replay.flush() {
         warn!(%err, "could not flush the replay journal");
     }
@@ -649,6 +688,11 @@ fn apply<W: std::io::Write>(
         ToGame::Quit { id } => {
             let region_id = scheduler.region_of(id);
             replay.record(tick, region_id, id, "quit", serde_json::json!({}));
+            // The player's final state goes to the save queue before the
+            // region drops it (Шаг 18a).
+            if let Some(runtime) = config.playerdata.as_deref() {
+                save_player(scheduler, runtime, id);
+            }
             // A dig left behind must stop showing cracks to its observers
             // (Шаг 16a.3); the state itself goes away with the player.
             if let Some(dig) = dig::take(scheduler, id) {

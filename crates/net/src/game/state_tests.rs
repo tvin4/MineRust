@@ -17,6 +17,10 @@ fn player(slot: &Arc<MoveSlot>) -> Player {
         view_distance: 10,
         spawn: Position::default(),
         game_mode: 0,
+        pose: None,
+        health: 20.0,
+        food: 20,
+        saturation: 5.0,
         connection: PlayerConnection {
             outbound,
             kick: Arc::new(KickFlag::default()),
@@ -156,6 +160,10 @@ fn the_tick_applies_input_without_movement() {
         view_distance: 10,
         spawn: Position::default(),
         game_mode: 0,
+        pose: None,
+        health: 20.0,
+        food: 20,
+        saturation: 5.0,
         connection: PlayerConnection {
             outbound,
             kick: Arc::new(KickFlag::default()),

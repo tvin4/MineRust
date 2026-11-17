@@ -50,6 +50,11 @@ pub fn join_view(
             z: spawn.2,
         },
         game_mode: 0,
+        // The spawn entry with fresh vitals (Шаг 18a); no save is involved.
+        pose: None,
+        health: 20.0,
+        food: 20,
+        saturation: 5.0,
         connection: PlayerConnection {
             outbound,
             kick: Arc::new(KickFlag::default()),

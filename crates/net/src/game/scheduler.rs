@@ -28,7 +28,7 @@ use crate::store::ChunkStore;
 use super::grid::RegionGrid;
 use super::messages::{PlayerId, PlayerJoin, ServerMessage};
 use super::pool::{Job, Pool};
-use super::region::{Kick, Region, RegionId, TickOutcome};
+use super::region::{Kick, Player, Region, RegionId, TickOutcome};
 
 /// Ticks every region once per tick, inline or through the region pool, then
 /// applies the transfers.
@@ -139,6 +139,19 @@ impl Scheduler {
     /// The chunk → region grid of this scheduler.
     pub fn grid(&self) -> RegionGrid {
         self.grid
+    }
+
+    /// Looks a player up by id through the `player_id → region_id` index
+    /// (persistence, diagnostics).
+    pub fn player(&self, id: PlayerId) -> Option<&Player> {
+        let region_id = self.region_of(id)?;
+        self.region(region_id)?.get(id)
+    }
+
+    /// Every online player across all regions, in region then id order
+    /// (autosave, diagnostics).
+    pub fn players(&self) -> impl Iterator<Item = &Player> {
+        self.regions.iter().flat_map(Region::players)
     }
 
     /// Attaches the ready chunk snapshot used by the swimming state pass.

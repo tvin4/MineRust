@@ -8,19 +8,22 @@
 //! 1. Login (play) — dimension, view distance, hashed seed;
 //! 2. Set Default Spawn Position — the save's spawn;
 //! 3. Player Info Update — the player into the tab list;
-//! 4. Set Center Chunk — the chunk cache centre, from the join spawn;
+//! 4. Set Center Chunk — the chunk cache centre, from the entry pose;
 //! 5. Game Event 13 — "start waiting for chunks" (closes the loading
 //!    screen);
-//! 6. Synchronize Player Position — the join teleport.
+//! 6. Synchronize Player Position — the join teleport;
+//! 7. Set Health — the player's health, food and saturation (Шаг 18a).
 //!
 //! SOURCE: wiki, unverified for this order and these field values; the live
 //! session trace (`MINECRAFT_SESSION_TRACE`) is what will line them up
-//! against the vanilla join recording packet by packet.
+//! against the vanilla join recording packet by packet. The Set Health id and
+//! payload follow the S7 vanilla join trace (`docs/PLAYERDATA.md` §1.3): it
+//! arrives right after `player_position`.
 
 use data::{GameData, PacketIds};
 use protocol::{
     GameEvent, LoginPlay, PlayerInfoEntry, PlayerInfoUpdate, ProtocolState, SetCenterChunk,
-    SetDefaultSpawnPosition, StatusInfo, SynchronizePlayerPosition,
+    SetDefaultSpawnPosition, SetHealth, StatusInfo, SynchronizePlayerPosition,
 };
 use tokio::io::AsyncWrite;
 use tracing::{info, warn};
@@ -28,15 +31,7 @@ use tracing::{info, warn};
 use crate::error::ConnectionError;
 use crate::frame::write_tracked;
 
-use super::{WorldInfo, DIMENSION_TYPE_REGISTRY, JOIN_TELEPORT_ID, OVERWORLD, SEA_LEVEL};
-
-/// The block the player joins at: the dev-only spawn override when set,
-/// otherwise the save's spawn. The default spawn packet still carries the
-/// save's spawn (`info.spawn`); only the join teleport and the cache centre
-/// follow the override.
-fn player_spawn(info: &WorldInfo) -> protocol::Position {
-    info.player_spawn_override.unwrap_or(info.spawn)
-}
+use super::{Entry, WorldInfo, DIMENSION_TYPE_REGISTRY, JOIN_TELEPORT_ID, OVERWORLD, SEA_LEVEL};
 
 /// Sends the whole join sequence described in the module documentation.
 ///
@@ -56,6 +51,7 @@ pub(super) async fn send_join<W>(
     player_name: &str,
     entity_id: i32,
     game_mode: i32,
+    entry: Entry,
     ids: &PacketIds,
     info: &WorldInfo,
 ) -> Result<(), ConnectionError>
@@ -156,13 +152,11 @@ where
     )
     .await?;
 
-    // Centre of the cache: the position the player joined at (`spawn`),
-    // expressed in chunks — vanilla keeps its view centred on the player.
-    let player_spawn = player_spawn(info);
-    let center = SetCenterChunk {
-        chunk_x: player_spawn.x >> 4,
-        chunk_z: player_spawn.z >> 4,
-    };
+    // Centre of the cache: the pose the player enters at (a saved pose or
+    // the spawn block's centre), expressed in chunks — vanilla keeps its
+    // view centred on the player.
+    let (chunk_x, chunk_z) = crate::game::chunk_of_position(entry.pose.x, entry.pose.z);
+    let center = SetCenterChunk { chunk_x, chunk_z };
     write_tracked(
         writer,
         ProtocolState::Play,
@@ -194,14 +188,14 @@ where
 
     let teleport = SynchronizePlayerPosition {
         teleport_id: JOIN_TELEPORT_ID,
-        x: f64::from(player_spawn.x) + 0.5,
-        y: f64::from(player_spawn.y),
-        z: f64::from(player_spawn.z) + 0.5,
+        x: entry.pose.x,
+        y: entry.pose.y,
+        z: entry.pose.z,
         velocity_x: 0.0,
         velocity_y: 0.0,
         velocity_z: 0.0,
-        yaw: 0.0,
-        pitch: 0.0,
+        yaw: entry.pose.yaw,
+        pitch: entry.pose.pitch,
         flags: 0, // fully absolute teleport
     };
     write_tracked(
@@ -211,6 +205,22 @@ where
         &teleport.encode_payload(),
     )
     .await?;
+
+    // Set Health right after the teleport (Шаг 18a): the S7 vanilla join of
+    // the saved Alice carried it immediately after `player_position`.
+    let health = SetHealth {
+        health: entry.health,
+        food: entry.food,
+        saturation: entry.saturation,
+    };
+    write_tracked(
+        writer,
+        ProtocolState::Play,
+        ids.id(SetHealth::KEY),
+        &health.encode_payload(),
+    )
+    .await?;
+
     info!(player = %player_name, %entity_id, "player joined");
     Ok(())
 }

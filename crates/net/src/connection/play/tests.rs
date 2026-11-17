@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use protocol::{
     ChunkBatchFinished, ChunkBatchStart, ForgetLevelChunk, GameEvent, LevelChunkWithLight,
-    LoginPlay, PacketKey, PlayerInfoUpdate, SetCenterChunk, SetDefaultSpawnPosition,
+    LoginPlay, PacketKey, PlayerInfoUpdate, SetCenterChunk, SetDefaultSpawnPosition, SetHealth,
     SynchronizePlayerPosition,
 };
 use tokio::io::{AsyncWriteExt, BufReader};
@@ -254,7 +254,7 @@ fn test_status() -> StatusInfo {
 }
 
 /// The join sequence every play connection sends first.
-fn join_keys() -> [PacketKey; 6] {
+fn join_keys() -> [PacketKey; 7] {
     [
         LoginPlay::KEY,
         SetDefaultSpawnPosition::KEY,
@@ -262,7 +262,287 @@ fn join_keys() -> [PacketKey; 6] {
         SetCenterChunk::KEY,
         GameEvent::KEY,
         SynchronizePlayerPosition::KEY,
+        SetHealth::KEY,
     ]
+}
+
+// ---------------------------------------------------------------------------
+// Player saves (Шаг 18a): where a returning player enters, the game-mode rule
+// and the wire order of the saved pose and Set Health.
+// ---------------------------------------------------------------------------
+
+/// A unique directory under the system temp root.
+fn temp_dir(name: &str) -> std::path::PathBuf {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock after the epoch")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!(
+        "minerust-play-{name}-{}-{stamp}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    dir
+}
+
+/// A playerdata runtime over a throwaway store. The writer must be shut down
+/// by the test; nothing else keeps the thread alive.
+fn playerdata_runtime(
+    force_gamemode: bool,
+    name: &str,
+) -> (Arc<PlayerdataRuntime>, playerdata::Writer) {
+    let store = playerdata::Store::open(temp_dir(name), 5023, &[]).expect("store");
+    let (sink, writer) = playerdata::spawn(store.clone(), 8).expect("writer");
+    let runtime = PlayerdataRuntime {
+        store: Arc::new(store),
+        sink,
+        force_gamemode,
+        autosave_interval_ticks: 0,
+    };
+    (Arc::new(runtime), writer)
+}
+
+/// A game thread with an explicit configured mode and optional saves.
+fn game_with(mode: i32, runtime: Option<Arc<PlayerdataRuntime>>) -> GameHandle {
+    GameHandle::spawn(crate::game::GameConfig {
+        default_game_mode: mode,
+        playerdata: runtime,
+        ..crate::game::GameConfig::default()
+    })
+    .expect("spawn the game thread")
+    .1
+}
+
+/// The saved player the entry tests read: a recognizable pose and vitals.
+fn saved_player(dimension: &str) -> SavedPlayer {
+    saved_player_in(dimension, true)
+}
+
+/// [`saved_player`] with an explicit `OnGround`.
+fn saved_player_in(dimension: &str, on_ground: bool) -> SavedPlayer {
+    SavedPlayer {
+        pose: playerdata::Pose {
+            x: 100.5,
+            y: 70.0,
+            z: -20.25,
+            yaw: 90.0,
+            pitch: 12.5,
+        },
+        health: 15.5,
+        food: 17,
+        saturation: 2.5,
+        on_ground,
+        game_mode: Some(1),
+        dimension: dimension.to_owned(),
+    }
+}
+
+/// The entry pose of a player without a save: the spawn block's centre.
+fn spawn_pose(info: &WorldInfo) -> PlayerPos {
+    PlayerPos::entry(info.player_spawn_override.unwrap_or(info.spawn))
+}
+
+#[test]
+fn a_saved_overworld_pose_becomes_the_entry_pose() {
+    let info = WorldInfo::default();
+    let saved = saved_player(playerdata::OVERWORLD);
+    let entry = resolve_entry(&info, Some(&saved));
+
+    assert_eq!(entry.pose.x, saved.pose.x);
+    assert_eq!(entry.pose.y, saved.pose.y);
+    assert_eq!(entry.pose.z, saved.pose.z);
+    assert_eq!(entry.pose.yaw, saved.pose.yaw);
+    assert_eq!(entry.pose.pitch, saved.pose.pitch);
+    assert_eq!(
+        entry.pose.head_yaw, saved.pose.yaw,
+        "the head follows the body"
+    );
+    assert!(entry.pose.on_ground(), "OnGround is carried into the flags");
+    assert_eq!(entry.health, saved.health);
+    assert_eq!(entry.food, saved.food);
+    assert_eq!(entry.saturation, saved.saturation);
+}
+
+#[test]
+fn a_saved_non_overworld_joins_at_the_spawn_but_keeps_its_vitals() {
+    let info = WorldInfo::default();
+    let saved = saved_player("minecraft:the_nether");
+    let entry = resolve_entry(&info, Some(&saved));
+
+    assert_eq!(
+        entry.pose,
+        spawn_pose(&info),
+        "only the overworld is joinable; the pose falls back to the spawn"
+    );
+    assert_eq!(
+        entry.health, saved.health,
+        "the vitals are still the file's"
+    );
+    assert_eq!(entry.food, saved.food);
+    assert_eq!(entry.saturation, saved.saturation);
+}
+
+#[test]
+fn a_spawn_override_beats_a_saved_pose() {
+    let info = WorldInfo {
+        player_spawn_override: Some(protocol::Position { x: 4, y: 70, z: -2 }),
+        ..WorldInfo::default()
+    };
+    let saved = saved_player(playerdata::OVERWORLD);
+    let entry = resolve_entry(&info, Some(&saved));
+
+    assert_eq!(
+        entry.pose,
+        spawn_pose(&info),
+        "a development override is authoritative for the entry"
+    );
+    assert_eq!(entry.pose.x, 4.5);
+    assert_eq!(entry.pose.z, -1.5);
+}
+
+#[test]
+fn a_player_without_a_file_gets_the_spawn_and_fresh_vitals() {
+    let info = WorldInfo::default();
+    let entry = resolve_entry(&info, None);
+
+    assert_eq!(entry.pose, spawn_pose(&info));
+    assert_eq!(entry.health, playerdata::NEW_PLAYER_HEALTH);
+    assert_eq!(entry.food, playerdata::NEW_PLAYER_FOOD);
+    assert_eq!(entry.saturation, playerdata::NEW_PLAYER_SATURATION);
+}
+
+#[test]
+fn a_saved_pose_that_is_not_on_the_ground_clears_the_flag() {
+    let info = WorldInfo::default();
+    let saved = saved_player_in(playerdata::OVERWORLD, false);
+    let entry = resolve_entry(&info, Some(&saved));
+
+    assert!(!entry.pose.on_ground(), "OnGround=0 must not claim ground");
+}
+
+#[test]
+fn the_configured_game_mode_wins_when_forced() {
+    let (runtime, writer) = playerdata_runtime(true, "force-on");
+    let game = game_with(2, Some(runtime));
+    let saved = saved_player(playerdata::OVERWORLD);
+
+    assert_eq!(
+        resolve_game_mode(&game, Some(&saved)),
+        2,
+        "force_gamemode = true always uses the configuration"
+    );
+    writer
+        .shutdown(Duration::from_secs(10))
+        .expect("writer stops");
+}
+
+#[test]
+fn a_saved_game_mode_is_used_when_not_forced() {
+    let (runtime, writer) = playerdata_runtime(false, "force-off");
+    let game = game_with(2, Some(runtime));
+    let mut saved = saved_player(playerdata::OVERWORLD);
+    saved.game_mode = Some(1);
+
+    assert_eq!(
+        resolve_game_mode(&game, Some(&saved)),
+        1,
+        "force_gamemode = false lets the file decide"
+    );
+    writer
+        .shutdown(Duration::from_secs(10))
+        .expect("writer stops");
+}
+
+#[test]
+fn a_file_without_a_mode_still_gets_the_configured_one() {
+    let (runtime, writer) = playerdata_runtime(false, "mode-absent");
+    let game = game_with(3, Some(runtime));
+    let mut saved = saved_player(playerdata::OVERWORLD);
+    saved.game_mode = None;
+
+    assert_eq!(
+        resolve_game_mode(&game, Some(&saved)),
+        3,
+        "a file without playerGameType does not override the configuration"
+    );
+    writer
+        .shutdown(Duration::from_secs(10))
+        .expect("writer stops");
+}
+
+#[test]
+fn a_server_without_saves_always_uses_the_configured_mode() {
+    let game = game_with(1, None);
+    let saved = saved_player(playerdata::OVERWORLD);
+
+    assert_eq!(resolve_game_mode(&game, Some(&saved)), 1);
+}
+
+#[tokio::test]
+async fn the_join_teleports_to_the_entry_pose_then_sets_health() {
+    let ids = PacketIds::compiled();
+    let (client, server) = tokio::io::duplex(1 << 16);
+    let (_server_read, mut server_write) = tokio::io::split(server);
+    let game_data = GameData::default();
+    let status = test_status();
+    let info = WorldInfo::default();
+    let entry = Entry {
+        pose: PlayerPos {
+            x: 100.5,
+            y: 70.0,
+            z: -20.25,
+            yaw: 90.0,
+            pitch: 12.5,
+            head_yaw: 90.0,
+            flags: 0,
+        },
+        health: 15.5,
+        food: 17,
+        saturation: 2.5,
+    };
+    join::send_join(
+        &mut server_write,
+        &game_data,
+        &status,
+        "Alice",
+        7,
+        0,
+        entry,
+        &ids,
+        &info,
+    )
+    .await
+    .expect("join sequence");
+
+    let mut client = BufReader::new(client);
+    // The first five join packets, then the teleport and Set Health are
+    // decoded from the wire (not from the arguments).
+    for key in &join_keys()[..5] {
+        let (id, _) = next_packet(&mut client).await;
+        assert_eq!(id, ids.id(*key), "join sequence packet");
+    }
+
+    // Set Health is the last join packet; the teleport before it carries the
+    // entry pose.
+    let (id, payload) = next_packet(&mut client).await;
+    assert_eq!(id, ids.id(SynchronizePlayerPosition::KEY));
+    let teleport =
+        SynchronizePlayerPosition::decode_payload(&mut protocol::PacketReader::new(&payload))
+            .expect("decodable teleport");
+    assert_eq!((teleport.x, teleport.y, teleport.z), (100.5, 70.0, -20.25));
+    assert_eq!((teleport.yaw, teleport.pitch), (90.0, 12.5));
+
+    let (id, payload) = next_packet(&mut client).await;
+    assert_eq!(
+        id,
+        ids.id(SetHealth::KEY),
+        "Set Health follows the teleport"
+    );
+    let health = SetHealth::decode_payload(&mut protocol::PacketReader::new(&payload))
+        .expect("decodable Set Health");
+    assert_eq!(health.health, 15.5);
+    assert_eq!(health.food, 17);
+    assert_eq!(health.saturation, 2.5);
 }
 
 /// The property of step 3.3c: while the loader pool is stuck inside the

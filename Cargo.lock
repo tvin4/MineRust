@@ -516,6 +516,7 @@ version = "0.1.0"
 dependencies = [
  "data",
  "getrandom 0.3.4",
+ "playerdata",
  "protocol",
  "serde",
  "serde_json",
@@ -743,6 +744,7 @@ dependencies = [
  "data",
  "flate2",
  "net",
+ "playerdata",
  "protocol",
  "serde",
  "serde_json",

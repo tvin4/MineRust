@@ -28,6 +28,10 @@ fn join_fixture_with(
         view_distance: 10,
         spawn: Position::default(),
         game_mode: 0,
+        pose: None,
+        health: 20.0,
+        food: 20,
+        saturation: 5.0,
         connection: PlayerConnection {
             outbound,
             kick: Arc::clone(&kick),
