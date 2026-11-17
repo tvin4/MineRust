@@ -116,9 +116,9 @@
   true), `autosave_interval_ticks`. Без `save_dir` сохранение выключено
   (`warn`). Тесты: 13 в `playerdata`, 10 новых в `net` (entry, режим,
   `set_health` в join), 3 на снапшот/quit/автосейв; `--test join`/`--test
-  status` читают `Set Health`. Живой S13 — **не запускался** (стенд не
-  собран); смерть/респавн, inventory и online-UUID — вне шага. Решения —
-  `docs/DECISIONS.md` «Шаг 18a», детали — `docs/PLAYERDATA.md` §11.
+  status` читают `Set Health`. Живой S13 закрыт в шаге 19a (0 failed, r7);
+  смерть/респавн, inventory и online-UUID — вне шага. Решения —
+  `docs/DECISIONS.md` «Шаг 18a», детали — `docs/PLAYERDATA.md` §11–12.
 
 - **17.11.2026, шаг 18.0 (хвосты 17).** 18.0.1: `dig_tolerance_ticks` по
   умолчанию `None` (сервер доверяет finish клиента; `Some(n)` остаётся
