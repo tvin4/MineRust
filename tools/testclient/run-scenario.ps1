@@ -1665,6 +1665,12 @@ function Write-DevGeometryFile {
 		$cfg = Get-Content $scenarioFile.FullName -Raw | ConvertFrom-Json
 		foreach ($cmd in (Get-S12Commands $cfg)) { $lines.Add([string]$cmd) }
 	}
+	if ($Scenarios -contains 's14') {
+		$scenarioFile = Get-ChildItem (Join-Path $here 'scenarios') -Filter 's14-*.json' | Select-Object -First 1
+		if (-not $scenarioFile) { throw 'no s14 scenario file to build the geometry from' }
+		$cfg = Get-Content $scenarioFile.FullName -Raw | ConvertFrom-Json
+		foreach ($cmd in (Get-S14Commands $cfg)) { $lines.Add([string]$cmd) }
+	}
 	if ($lines.Count -eq 0) { throw 'no dev geometry for the selected scenarios' }
 	$lines | Set-Content -LiteralPath $Path -Encoding utf8
 	Write-Host ("  [info] dev geometry: {0} commands written to {1}" -f $lines.Count, $Path)
@@ -2164,6 +2170,332 @@ function Get-S12Commands {
 	return $lines
 }
 
+# S14: one command list per cell kind, built once for both the vanilla console
+# and our dev-geometry file, so the two stands always carry the same world.
+function Get-S14Commands {
+	param($Cfg)
+	$lines = New-Object System.Collections.Generic.List[string]
+	foreach ($cmd in @($Cfg.platform)) { $lines.Add([string]$cmd) }
+	$base = [int]$Cfg.baseY
+	$feet = $base + 1
+	foreach ($row in @($Cfg.rows)) {
+		$z = [int]$row.z
+		foreach ($kind in @($Cfg.kinds)) {
+			$x = [int]$kind.x
+			switch ([string]$kind.kind) {
+				'plant' {
+					# A land plant needs a dirt-like support; the platform is stone.
+					$lines.Add(("setblock {0} {1} {2} minecraft:dirt" -f $x, $base, $z))
+					$lines.Add(("setblock {0} {1} {2} {3}" -f $x, $feet, $z, [string]$kind.block))
+				}
+				'pool1' {
+					$lines.Add(("fill {0} {1} {2} {3} {4} {5} minecraft:stone" -f ($x - 1), $feet, ($z - 1), ($x + 1), $feet, ($z + 1)))
+					$lines.Add(("setblock {0} {1} {2} minecraft:water" -f $x, $feet, $z))
+					$lines.Add(("setblock {0} {1} {2} {3}" -f $x, $feet, $z, [string]$kind.block))
+				}
+				'pool2' {
+					$lines.Add(("fill {0} {1} {2} {3} {4} {5} minecraft:stone" -f ($x - 1), $feet, ($z - 1), ($x + 1), ($feet + 1), ($z + 1)))
+					$lines.Add(("setblock {0} {1} {2} minecraft:water" -f $x, $feet, $z))
+					$lines.Add(("setblock {0} {1} {2} minecraft:water" -f $x, ($feet + 1), $z))
+					$lines.Add(("setblock {0} {1} {2} minecraft:tall_seagrass[half=lower]" -f $x, $feet, $z))
+					$lines.Add(("setblock {0} {1} {2} minecraft:tall_seagrass[half=upper]" -f $x, ($feet + 1), $z))
+				}
+				'pool3' {
+					$lines.Add(("fill {0} {1} {2} {3} {4} {5} minecraft:stone" -f ($x - 1), $feet, ($z - 1), ($x + 1), ($feet + 2), ($z + 1)))
+					$lines.Add(("setblock {0} {1} {2} minecraft:water" -f $x, $feet, $z))
+					$lines.Add(("setblock {0} {1} {2} minecraft:water" -f $x, ($feet + 1), $z))
+					$lines.Add(("setblock {0} {1} {2} minecraft:water" -f $x, ($feet + 2), $z))
+					$lines.Add(("setblock {0} {1} {2} minecraft:kelp_plant" -f $x, $feet, $z))
+					$lines.Add(("setblock {0} {1} {2} minecraft:kelp_plant" -f $x, ($feet + 1), $z))
+					$lines.Add(("setblock {0} {1} {2} minecraft:kelp[age=5]" -f $x, ($feet + 2), $z))
+				}
+				'slab' {
+					$lines.Add(("setblock {0} {1} {2} minecraft:oak_slab[type=bottom,waterlogged=true]" -f $x, $feet, $z))
+				}
+				'stairs' {
+					$lines.Add(("setblock {0} {1} {2} minecraft:oak_stairs[facing=east,half=bottom,shape=straight,waterlogged=true]" -f $x, $feet, $z))
+				}
+				'water' {
+					$lines.Add(("fill {0} {1} {2} {3} {4} {5} minecraft:stone" -f ($x - 1), $feet, ($z - 1), ($x + 1), $feet, ($z + 1)))
+					$lines.Add(("setblock {0} {1} {2} minecraft:water" -f $x, $feet, $z))
+				}
+				default { throw "S14: unknown kind '$($kind.kind)'" }
+			}
+		}
+	}
+	return $lines
+}
+
+# Standing height of A for one S14 cell: on the platform for the plants and the
+# pools, on top of the half-slab and on the stair step for the waterlogged
+# building blocks.
+function Get-S14StandY {
+	param($Kind, [int]$Base)
+	switch ([string]$Kind.kind) {
+		'slab' { return $Base + 1.5 }
+		'stairs' { return $Base + 2.0 }
+		default { return $Base + 1.0 }
+	}
+}
+
+# Whether the crosshair hit is one of the cells the kind may be aimed at: the
+# plant/tip cell of a pool can be any part of the water column, because a
+# two- or three-deep pool lifts the feet and the ray reaches the highest part.
+function Test-S14Aim {
+	param($Kind, [int]$Base, [int]$Z, $Hit)
+	if ($null -eq $Hit) { return $false }
+	if ([int]$Hit.x -ne [int]$Kind.x -or [int]$Hit.z -ne $Z) { return $false }
+	$y = [int]$Hit.y
+	switch ([string]$Kind.kind) {
+		'pool2' { return ($y -ge ($Base + 1) -and $y -le ($Base + 2)) }
+		'pool3' { return ($y -ge ($Base + 1) -and $y -le ($Base + 3)) }
+		default { return ($y -eq ($Base + 1)) }
+	}
+}
+
+# S14 (Шаг 18) — instant-break and fluid blocks.
+#
+# Two rows (hold and tap) over nine one-cell kinds, every cell unique, so the
+# trace rows are attributed by position. A is teleported into the cell, the
+# crosshair is confirmed on it, A holds or taps attack, and both A's observe
+# and the proxy traces are read back: serverbound player_action per cell,
+# clientbound block_changed_ack to A, and B's crack stages, level_event 2001,
+# replacement block_update and neighbour updates.
+function Invoke-S14 {
+	param($Cfg, $Result)
+	$portA = [int]$Cfg.controlPortA
+	$portB = [int]$Cfg.controlPortB
+	$nickA = [string]$Cfg.playerA
+	$nickB = [string]$Cfg.playerB
+	$settle = [int]$Cfg.settleMs
+	$base = [int]$Cfg.baseY
+	$feet = $base + 1
+	$holdMs = [int]$Cfg.holdMs
+	$tapMs = [int]$Cfg.tapMs
+	$inv = [System.Globalization.CultureInfo]::InvariantCulture
+	$commands = Get-S14Commands $Cfg
+
+	$watermark = Get-Date
+	$null = Start-Client $nickA $portA $watermark
+	$null = Start-Client $nickB $portB (Get-Date)
+	$observer = Wait-ObserverChunksStable $portB 30
+	$script:s7Facts.Add(("S14 B chunk drain: settled={0} loadedChunks={1}" -f `
+				$observer.settled, $observer.loadedChunks))
+
+	if (-not $isVanilla) {
+		if (-not $OursDevGeometry) {
+			Add-Check $Result 'S14 geometry is available on our server' $false `
+				'pass -OursDevGeometry <file>: the runner writes the s14 commands there before start'
+			$null = Invoke-TestCmd $portA (New-SessionCmd 's14-off' 'disconnect')
+			$null = Invoke-TestCmd $portB (New-SessionCmd 's14-offb' 'disconnect')
+			Start-Sleep -Seconds 3
+			return
+		}
+		if (-not $HardnessReport) {
+			Add-Check $Result 'the survival dig timer is on' $false `
+				'pass -HardnessReport <hardness.json>: without it our server trusts every finish and times nothing'
+			$null = Invoke-TestCmd $portA (New-SessionCmd 's14-off' 'disconnect')
+			$null = Invoke-TestCmd $portB (New-SessionCmd 's14-offb' 'disconnect')
+			Start-Sleep -Seconds 3
+			return
+		}
+		$script:s7Facts.Add("S14 dev geometry applied at startup: $OursDevGeometry")
+		$script:s7Facts.Add("S14 hardness report: $HardnessReport")
+	} else {
+		$fl = @($Cfg.forceload)
+		if ($fl.Count -eq 4) {
+			Invoke-VanillaConsole ("forceload add {0} {1} {2} {3}" -f $fl[0], $fl[1], $fl[2], $fl[3]) | Out-Null
+			Start-Sleep -Milliseconds 1000
+		}
+		foreach ($cmd in $commands) { Invoke-VanillaConsole $cmd | Out-Null }
+		Start-Sleep -Seconds 2
+		Invoke-VanillaConsole 'gamerule doImmediateRespawn true' | Out-Null
+		Invoke-VanillaConsole 'difficulty peaceful' | Out-Null
+		Invoke-VanillaConsole 'gamerule doMobSpawning false' | Out-Null
+		Start-Sleep -Milliseconds 500
+	}
+
+	$runs = New-Object System.Collections.ArrayList
+	foreach ($row in @($Cfg.rows)) {
+		$z = [int]$row.z
+		$mode = [string]$row.mode
+		foreach ($kind in @($Cfg.kinds)) {
+			# A kind may be restricted to some rows: a waterlogged slab/stairs
+			# (hardness 2.0) is not broken by a 500 ms tap, and the dandelion tap
+			# read the support block below in the first run (a harness raycast
+			# flake; the rule is already covered by short grass and leaf litter).
+			if ($null -ne $kind.rows -and (@($kind.rows) -notcontains [string]$row.name)) { continue }
+			$x = [int]$kind.x
+			$name = ("{0}-{1}" -f $row.name, $kind.name)
+			$standY = Get-S14StandY $kind $base
+			$observeOnly = $false
+			if ($null -ne $kind.observeOnly) { $observeOnly = [bool]$kind.observeOnly }
+
+			# Wait until the crosshair is on the expected cell: the chunk and the
+			# teleport (and, in a pool, the float) must settle before the click.
+			# A second teleport re-snaps the client if the first ray read is
+			# stale, so one flaky read cannot fail the cell.
+			$aim = $null
+			$aimed = $false
+			for ($attempt = 1; $attempt -le 2 -and -not $aimed; $attempt++) {
+				if ($isVanilla) {
+					$line = [string]::Format($inv, "tp {0} {1} {2} {3} 0 90", `
+							$nickA, ($x + 0.5), $standY, ($z + 0.5))
+					Invoke-StandRcon $line | Out-Null
+				} else {
+					$null = Invoke-TestCmd $portA (New-TpCmd "$name-tp$attempt" ($x + 0.5) $standY ($z + 0.5) 0 90)
+				}
+				$aimDeadline = (Get-Date).AddSeconds(6)
+				while ((Get-Date) -lt $aimDeadline) {
+					Start-Sleep -Milliseconds 250
+					$aim = (Invoke-TestCmd $portA (New-ObserveCmd "$name-aim$attempt")).result
+					if ($null -eq $aim -or $null -eq $aim.hitBlock) { continue }
+					if ($aim.hitType -eq 'BLOCK' -and (Test-S14Aim $kind $base $z $aim.hitBlock)) {
+						$aimed = $true
+						break
+					}
+				}
+			}
+			$aimFact = 'no observe result'
+			if ($null -ne $aim -and $null -ne $aim.hitBlock) {
+				$aimFact = ("hitType={0} block=({1},{2},{3})" -f $aim.hitType, `
+						$aim.hitBlock.x, $aim.hitBlock.y, $aim.hitBlock.z)
+			} elseif ($null -ne $aim) {
+				$aimFact = ("hitType={0}" -f $aim.hitType)
+			}
+			if (-not $observeOnly) {
+				Add-Check $Result ("{0}: A aims at the block" -f $name) $aimed $aimFact
+			}
+
+			$caseSettle = if ($null -ne $kind.digSettleMs) { [int]$kind.digSettleMs } else { [int]$Cfg.digSettleMs }
+			if ($aimed -and $caseSettle -gt 0) { Start-Sleep -Milliseconds $caseSettle }
+
+			$caseHold = if ($null -ne $kind.holdMs) { [int]$kind.holdMs } else { $holdMs }
+			$attacked = $false
+			if ($aimed -and -not $observeOnly) {
+				if ($mode -eq 'tap') {
+					$null = Invoke-TestCmd $portA (New-KeyCmd "$name-tap" 'attack' 'tap' $tapMs)
+				} else {
+					$null = Invoke-TestCmd $portA (New-KeyCmd "$name-down" 'attack' 'down')
+					Start-Sleep -Milliseconds $caseHold
+					$null = Invoke-TestCmd $portA (New-KeyCmd "$name-up" 'attack' 'up')
+				}
+				$attacked = $true
+			}
+			Start-Sleep -Milliseconds $settle
+			$after = (Invoke-TestCmd $portA (New-ObserveCmd "$name-after")).result
+
+			# The block at the dug cell, read from the observe that owns it: the
+			# feet cell in every case but a pool whose float lifts the feet past
+			# it (there the support or head block carries the cell).
+			$cellBlock = $null
+			$where = 'unknown'
+			if ($null -ne $after -and $null -ne $after.pos) {
+				$feetY = [int][Math]::Floor([double]$after.pos.y)
+				if ($feetY -eq $feet) { $cellBlock = $after.feetBlock; $where = 'feet' }
+				elseif (($feetY - 1) -eq $feet) { $cellBlock = $after.supportBlock; $where = 'support' }
+				elseif (($feetY + 1) -eq $feet) { $cellBlock = $after.headBlock; $where = 'head' }
+			}
+			$cellId = 'unknown'
+			$cellFluid = 'unknown'
+			if ($null -ne $cellBlock) {
+				$cellId = [string]$cellBlock.id
+				$cellFluid = [string]$cellBlock.fluid
+			}
+			$afterPos = 'no observe result'
+			if ($null -ne $after -and $null -ne $after.pos) {
+				$afterPos = [string]::Format($inv, "{0:0.00},{1:0.00},{2:0.00}", `
+						[double]$after.pos.x, [double]$after.pos.y, [double]$after.pos.z)
+			}
+			if ($aimed -or $observeOnly) {
+				$expectId = if ([string]$kind.expect -eq 'water') { 'minecraft:water' } else { 'minecraft:air' }
+				Add-Check $Result ("{0}: the cell is {1} after the dig" -f $name, $expectId) `
+				($cellId -eq $expectId) ("{0}Block id={1} fluid={2} pos={3}" -f $where, $cellId, $cellFluid, $afterPos)
+			}
+
+			$runs.Add([PSCustomObject]@{
+					name = $name; row = [string]$row.name; mode = $mode
+					kind = [string]$kind.kind; x = $x; y = $feet; z = $z
+					aimed = $aimed; attacked = $attacked; observeOnly = $observeOnly
+					aim = $aimFact; afterPos = $afterPos
+					replacement = $cellId; fluid = $cellFluid; where = $where
+				}) | Out-Null
+		}
+	}
+
+	# --- traces ------------------------------------------------------------
+	Start-Sleep -Seconds 1
+	$files = @(Get-NewTraceFiles $traceDir $watermark)
+	$aTrace = Select-TraceByPattern $files 'minecraft:player_action'
+	$bTrace = $null
+	if ($null -ne $aTrace) {
+		$bTrace = Select-TraceByPattern $files 'minecraft:(block_destruction|level_event)' @($aTrace.FullName)
+	}
+	if ($null -ne $aTrace -and $null -ne $bTrace) {
+		$kindNames = @('minecraft:player_action', 'minecraft:punch', 'minecraft:block_update', `
+				'minecraft:block_changed_ack', 'minecraft:block_destruction', 'minecraft:level_event')
+		$aRows = @(Get-TraceBlockRows $aTrace.FullName $kindNames)
+		$bRows = @(Get-TraceBlockRows $bTrace.FullName $kindNames)
+
+		$report = New-Object System.Collections.ArrayList
+		foreach ($run in $runs) {
+			$x = [int]$run.x
+			$z = [int]$run.z
+			$aActions = @($aRows | Where-Object { $_.name -eq 'minecraft:player_action' -and $_.dir -eq 'serverbound' -and $_.x -eq $x -and $_.z -eq $z -and $_.y -ge $feet -and $_.y -le ($feet + 3) })
+			$cellSeqs = @($aActions | ForEach-Object { [int]$_.seq })
+			$aAcks = @($aRows | Where-Object { $_.name -eq 'minecraft:block_changed_ack' -and $_.dir -eq 'clientbound' -and ($cellSeqs -contains [int]$_.seq) })
+			$aUpdates = @($aRows | Where-Object { $_.name -eq 'minecraft:block_update' -and $_.dir -eq 'clientbound' -and $_.x -eq $x -and $_.z -eq $z -and $_.y -ge $feet -and $_.y -le ($feet + 3) })
+			$bStages = @($bRows | Where-Object { $_.name -eq 'minecraft:block_destruction' -and $_.dir -eq 'clientbound' -and $_.x -eq $x -and $_.z -eq $z -and $_.y -ge $feet -and $_.y -le ($feet + 3) })
+			$bEvents = @($bRows | Where-Object { $_.name -eq 'minecraft:level_event' -and $_.dir -eq 'clientbound' -and $_.x -eq $x -and $_.z -eq $z -and $_.y -ge $feet -and $_.y -le ($feet + 3) })
+			$bUpdates = @($bRows | Where-Object { $_.name -eq 'minecraft:block_update' -and $_.dir -eq 'clientbound' -and $_.x -eq $x -and $_.z -eq $z -and $_.y -ge $feet -and $_.y -le ($feet + 3) })
+			$starts = @($aActions | Where-Object { $_.action -eq 0 })
+			$finishes = @($aActions | Where-Object { $_.action -eq 3 })
+			$aborts = @($aActions | Where-Object { $_.action -eq 2 })
+			if ($run.attacked) {
+				Add-Check $Result ("{0}: A sent a start for the cell" -f $run.name) ($starts.Count -ge 1) `
+					("starts={0} finishes={1} aborts={2}" -f $starts.Count, $finishes.Count, $aborts.Count)
+			}
+			$bStates = @($bUpdates | ForEach-Object { $_.state })
+			$report.Add([PSCustomObject]@{
+					name = $run.name; row = $run.row; mode = $run.mode; kind = $run.kind
+					x = $x; y = $run.y; z = $z; aimed = $run.aimed; attacked = $run.attacked
+					observeOnly = $run.observeOnly; replacement = $run.replacement
+					fluid = $run.fluid; afterPos = $run.afterPos
+					starts = @($starts | ForEach-Object { [int]$_.action })
+					startSeq = @($starts | ForEach-Object { [int]$_.seq })
+					finishSeq = @($finishes | ForEach-Object { [int]$_.seq })
+					abortSeq = @($aborts | ForEach-Object { [int]$_.seq })
+					aAckSeqs = @($aAcks | ForEach-Object { [int]$_.seq })
+					aUpdateStates = @($aUpdates | ForEach-Object { [int]$_.state })
+					bStages = @($bStages | ForEach-Object { [int]$_.stage })
+					bEvents = @($bEvents | ForEach-Object { ("{0}/{1}" -f [int]$_.event, [int]$_.data) })
+					bUpdateStates = @($bUpdates | ForEach-Object { ("y{0}={1}" -f [int]$_.y, [int]$_.state) })
+				}) | Out-Null
+			Write-Host ("  [info] S14 {0}: starts={1} finishes={2} aborts={3} ack={4} aUpdates=[{5}] bUpdates=[{6}] bEvents=[{7}] bStages={8}" -f `
+					$run.name, $starts.Count, $finishes.Count, $aborts.Count, $aAcks.Count, `
+					($report[-1].aUpdateStates -join ','), ($report[-1].bUpdateStates -join ','), `
+					($report[-1].bEvents -join ','), $report[-1].bStages.Count)
+		}
+
+		$artifact = [PSCustomObject]@{
+			rows = @($report)
+		}
+		$artifactPath = Join-Path $traceDir 's14-samples.json'
+		$artifact | ConvertTo-Json -Depth 6 | Set-Content $artifactPath -Encoding utf8
+		$script:s7Facts.Add("S14 artifact: $artifactPath")
+		Write-Host ("  [info] S14 artifact written: {0}" -f $artifactPath)
+	} else {
+		Add-Check $Result 'S14 traces are available' $false `
+			("trace files={0}; digger={1}; observer={2}" -f $files.Count, `
+				$(if ($null -ne $aTrace) { $aTrace.Name } else { 'none' }), `
+				$(if ($null -ne $bTrace) { $bTrace.Name } else { 'none' }))
+	}
+
+	$null = Invoke-TestCmd $portA (New-SessionCmd 's14-off' 'disconnect')
+	$null = Invoke-TestCmd $portB (New-SessionCmd 's14-offb' 'disconnect')
+	Start-Sleep -Seconds 3
+}
+
 function Invoke-S12 {
 	param($Cfg, $Result)
 	$portA = [int]$Cfg.controlPortA
@@ -2396,7 +2728,7 @@ $scenarioDir = Join-Path $here 'scenarios'
 $allResults = @()
 try {
 	Prepare-RunWorld
-	if (-not $isVanilla -and $OursDevGeometry -and (($Scenarios -contains 's10') -or ($Scenarios -contains 's11') -or ($Scenarios -contains 's12'))) {
+	if (-not $isVanilla -and $OursDevGeometry -and (($Scenarios -contains 's10') -or ($Scenarios -contains 's11') -or ($Scenarios -contains 's12') -or ($Scenarios -contains 's14'))) {
 		Write-DevGeometryFile $OursDevGeometry
 	}
 	Start-Stand
@@ -2433,6 +2765,7 @@ try {
 			's10' { Invoke-S10 $cfg $result }
 			's11' { Invoke-S11 $cfg $result }
 			's12' { Invoke-S12 $cfg $result }
+			's14' { Invoke-S14 $cfg $result }
 			default { throw "unknown scenario '$($cfg.id)'" }
 		}
 		Stop-ClientByName $cfg.playerA

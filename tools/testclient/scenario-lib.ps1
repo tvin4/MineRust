@@ -271,8 +271,12 @@ function New-ObserveCmd {
 }
 
 function New-KeyCmd {
-	param([string]$Id, [string]$Key, [string]$Action = 'tap')
-	return '{"id":"' + $Id + '","cmd":"key","args":{"key":"' + $Key + '","action":"' + $Action + '"}}'
+	param([string]$Id, [string]$Key, [string]$Action = 'tap', [int]$HoldMs = 0)
+	$json = '{"id":"' + $Id + '","cmd":"key","args":{"key":"' + $Key + '","action":"' + $Action + '"'
+	# hold_ms only matters for a tap and is omitted otherwise, so existing
+	# callers keep the exact request they always sent.
+	if ($HoldMs -gt 0) { $json += ',"hold_ms":' + $HoldMs }
+	return $json + '}}'
 }
 
 function New-SessionCmd {
@@ -302,4 +306,71 @@ function Add-Check {
 	$Scenario.checks.Add([PSCustomObject]@{ name = $Name; pass = $Pass; fact = $Fact }) | Out-Null
 	if (-not $Pass) { $Scenario.failed = $true }
 	Write-Host ("  [{0}] {1} - {2}" -f $(if ($Pass) { 'PASS' } else { 'FAIL' }), $Name, $Fact)
+}
+
+# --- block-position trace decoding -----------------------------------------
+
+# Reads one mcproxy JSONL trace and decodes the block position of the packet
+# kinds named in `Names` (names and ids from reports/packets.json). Every row
+# is returned as an object carrying the packet's own fields; a kind whose
+# layout is not decoded here is returned with only `ms/dir/name` so a count is
+# still available. Field layouts (Шаг 13b/Шаг 18): block_update = pos + state
+# varint; block_changed_ack = sequence varint; block_destruction = entityId
+# varint + pos + stage byte; level_event = event int32 + pos + data int32.
+function Get-TraceBlockRows {
+	param([string]$Path, [string[]]$Names)
+	$wanted = @{}
+	foreach ($name in $Names) { $wanted[[string]$name] = $true }
+	$rows = New-Object System.Collections.ArrayList
+	$lines = @(Get-Content -LiteralPath $Path)
+	foreach ($line in $lines) {
+		if ([string]::IsNullOrWhiteSpace($line)) { continue }
+		$row = $null
+		try { $row = $line | ConvertFrom-Json } catch { continue }
+		if ($null -eq $row -or -not $wanted.ContainsKey([string]$row.name)) { continue }
+		$p = ConvertFrom-TraceB64 ([string]$row.b64)
+		$out = [ordered]@{
+			ms   = [double]$row.read_ms
+			dir  = [string]$row.dir
+			name = [string]$row.name
+		}
+		switch ([string]$row.name) {
+			'minecraft:block_update' {
+				$pos = ConvertFrom-PackedPosition $p 0
+				$state = ConvertFrom-TraceVarInt $p 8
+				$out.x = $pos.x; $out.y = $pos.y; $out.z = $pos.z; $out.state = [int]$state.value
+			}
+			'minecraft:block_changed_ack' {
+				$seq = ConvertFrom-TraceVarInt $p 0
+				$out.seq = [int]$seq.value
+			}
+			'minecraft:block_destruction' {
+				$eid = ConvertFrom-TraceVarInt $p 0
+				$pos = ConvertFrom-PackedPosition $p $eid.next
+				$out.eid = [int]$eid.value
+				$out.x = $pos.x; $out.y = $pos.y; $out.z = $pos.z
+				$out.stage = [int]$p[$eid.next + 8]
+			}
+			'minecraft:player_action' {
+				$action = ConvertFrom-TraceVarInt $p 0
+				$pos = ConvertFrom-PackedPosition $p $action.next
+				$out.action = [int]$action.value
+				$out.x = $pos.x; $out.y = $pos.y; $out.z = $pos.z
+				$out.face = [int]$p[$action.next + 8]
+				$seq = ConvertFrom-TraceVarInt $p ($action.next + 9)
+				$out.seq = [int]$seq.value
+			}
+			'minecraft:level_event' {
+				# [int] casts matter: PowerShell shifts a [byte] in byte width.
+				$event = ([int]$p[0] -shl 24) -bor ([int]$p[1] -shl 16) -bor ([int]$p[2] -shl 8) -bor [int]$p[3]
+				$pos = ConvertFrom-PackedPosition $p 4
+				$data = ([int]$p[12] -shl 24) -bor ([int]$p[13] -shl 16) -bor ([int]$p[14] -shl 8) -bor [int]$p[15]
+				$out.event = $event
+				$out.x = $pos.x; $out.y = $pos.y; $out.z = $pos.z; $out.data = $data
+			}
+			'default' { }
+		}
+		$rows.Add([PSCustomObject]$out) | Out-Null
+	}
+	return $rows
 }

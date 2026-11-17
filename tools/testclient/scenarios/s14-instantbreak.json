@@ -1,0 +1,86 @@
+{
+  "id": "s14",
+  "title": "instant-break and fluid blocks: start-only acceptance, water replacement, cascades (Шаг 18)",
+  "playerA": "Alice",
+  "playerB": "Bob",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "settleMs": 900,
+  "digSettleMs": 600,
+  "baseY": 200,
+  "holdMs": 700,
+  "tapMs": 500,
+  "forceload": [80, -50, 130, -10],
+  "platform": ["fill 80 199 -50 130 200 -10 minecraft:stone"],
+  "rows": [
+    { "name": "hold", "z": -34, "mode": "hold" },
+    { "name": "tap", "z": -30, "mode": "tap" }
+  ],
+  "kinds": [
+    {
+      "name": "short_grass",
+      "kind": "plant",
+      "x": 96,
+      "block": "minecraft:short_grass",
+      "expect": "air"
+    },
+    {
+      "name": "leaf_litter",
+      "kind": "plant",
+      "x": 100,
+      "block": "minecraft:leaf_litter[facing=north,segment_amount=1]",
+      "expect": "air"
+    },
+    {
+      "name": "dandelion",
+      "kind": "plant",
+      "x": 104,
+      "block": "minecraft:dandelion",
+      "expect": "air",
+      "rows": ["hold"]
+    },
+    {
+      "name": "seagrass",
+      "kind": "pool1",
+      "x": 108,
+      "block": "minecraft:seagrass",
+      "expect": "water"
+    },
+    {
+      "name": "tall_seagrass",
+      "kind": "pool2",
+      "x": 112,
+      "expect": "water"
+    },
+    {
+      "name": "kelp",
+      "kind": "pool3",
+      "x": 116,
+      "expect": "water"
+    },
+    {
+      "name": "waterlogged_slab",
+      "kind": "slab",
+      "x": 120,
+      "expect": "water",
+      "holdMs": 4200,
+      "rows": ["hold"]
+    },
+    {
+      "name": "waterlogged_stairs",
+      "kind": "stairs",
+      "x": 124,
+      "expect": "water",
+      "holdMs": 4200,
+      "rows": ["hold"]
+    },
+    {
+      "name": "water_source",
+      "kind": "water",
+      "x": 128,
+      "expect": "water",
+      "observeOnly": true
+    }
+  ],
+  "notes": "Шаг 18 diagnosis + vanilla rules. Row 'hold' (z=-34) and row 'tap' (z=-30) carry the same nine blocks, built by Get-S14Commands from the platform plus each cell's own commands: land plants (short_grass, leaf_litter, dandelion) sit in the feet cell (y=201) on a dirt support so the straight-down crosshair reaches them; seagrass sits in a 1x1 one-deep walled pool (feet wet, eyes dry); tall_seagrass fills a two-deep walled pool (lower y=201, upper y=202); kelp fills a three-deep walled pool (kelp_plant, kelp_plant, kelp[age=5]); the waterlogged bottom slab and the waterlogged bottom stairs are on the platform top (y=201, hardness 2.0) so a break must leave water; the last cell is a plain walled water source that is only observed. A is teleported into the cell (x+0.5, z+0.5, pitch 90) and either holds attack for holdMs or taps it for tapMs. Every cell is one block and the rows are separate, so a hold that outlives the instant break only starts a stone dig whose packets are filtered out by position. Ours needs -HardnessReport and -OursDevGeometry (the runner writes the same command list there); vanilla builds it through the console. Traces: A gives the serverbound player_action start/finish/abort per cell and the clientbound block_changed_ack; B gives the crack stages, level_event 2001, block_update of the replacement state and any neighbour updates. The artifact s14-samples.json carries all of it for the rule tables. A kind may carry 'rows' to run only in some rows: the waterlogged slab/stairs are hold-only (a 500 ms tap cannot open a hardness 2.0 block) and the dandelion is hold-only (its first tap read hit the support below; the short-grass and leaf-litter taps already prove the start-only instant rule)."
+}
