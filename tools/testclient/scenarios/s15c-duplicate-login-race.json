@@ -1,0 +1,13 @@
+{
+  "id": "s15c",
+  "title": "duplicate login (step 21.0 V4): two connections started back to back",
+  "playerA": "Race",
+  "playerB": "Race",
+  "instanceA": "-a",
+  "instanceB": "-b",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "settleMs": 5000,
+  "fastLaunch": true,
+  "expectOutcome": "observe"
+}

@@ -1,0 +1,12 @@
+{
+  "id": "s15b",
+  "title": "duplicate login (step 21.0 V2): names that differ only by case",
+  "playerA": "Alice",
+  "playerB": "alice",
+  "instanceA": "-a",
+  "instanceB": "-b",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "settleMs": 3000,
+  "expectOutcome": "both_stay"
+}

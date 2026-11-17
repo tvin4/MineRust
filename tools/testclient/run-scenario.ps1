@@ -1,4 +1,4 @@
-# tools/testclient - scenario orchestrator (stage V).
+﻿# tools/testclient - scenario orchestrator (stage V).
 #
 # Runs the visibility scenarios S1-S7 against the vanilla test stand:
 # vanilla server (E:\MineRust-data\vanilla; RCON 25575 for existing scenarios) behind mcproxy
@@ -22,39 +22,39 @@ param(
 	[string]$RunDir = '',
 	[ValidateSet('vanilla', 'ours')]
 	[string]$Target = 'vanilla',
-	# Game mode new players join in on our server (Шаг 14c). -1 (the default)
+	# Game mode new players join in on our server (РЁР°Рі 14c). -1 (the default)
 	# leaves the generated server-ours.toml untouched (survival). The S9
 	# creative run uses 1: our server has no RCON to switch modes in game.
 	[int]$OursGameMode = -1,
-	# Development-only spawn override for our server (Шаг 14d): "x,y,z" is
+	# Development-only spawn override for our server (РЁР°Рі 14d): "x,y,z" is
 	# written into the generated server-ours.toml as spawn_override. Empty
 	# (the default) leaves the config untouched (the save's spawn). S8 uses it
 	# to place the joining player above open water, since our server has no
 	# RCON to teleport the player in game.
 	[string]$OursSpawnOverride = '',
-	# Development-only geometry file for our server (Шаг 15 п.2): setblock/fill
+	# Development-only geometry file for our server (РЁР°Рі 15 Рї.2): setblock/fill
 	# commands applied to the in-memory store at startup. Empty leaves the
 	# generated config untouched. For S10 the runner writes the file from the
 	# scenario definition before the stand starts (-OursDevGeometry is the path).
 	[string]$OursDevGeometry = '',
-	# Data-generation hook (Шаг 15 п.5): when set, the S11 vanilla run asks the
+	# Data-generation hook (РЁР°Рі 15 Рї.5): when set, the S11 vanilla run asks the
 	# connected test client to dump every block state's collision-shape bottom
 	# (public BlockState API) to this file. The server's collision_report reads
 	# that file; it stays outside the repository.
 	[string]$CollisionReport = '',
-	# Hardness report for our server (Шаг 16a.4 п.4): the path is written into
+	# Hardness report for our server (РЁР°Рі 16a.4 Рї.4): the path is written into
 	# the generated server-ours.toml as hardness_report, which switches the
 	# survival dig timer on. It is never committed (E:\MineRust-data).
 	[string]$HardnessReport = '',
-	# Шаг 19a: the S13 checks run the release build (same sources, same
+	# РЁР°Рі 19a: the S13 checks run the release build (same sources, same
 	# recipe as S12) instead of target\debug.
 	[switch]$Release,
-	# Шаг 19a: player saves. The save root is written into the generated
+	# РЁР°Рі 19a: player saves. The save root is written into the generated
 	# config; an empty value keeps the server's persistence off. The autosave
 	# period is in ticks (-1 leaves the config value).
 	[string]$OursSaveDir = '',
 	[int]$OursAutosaveTicks = -1,
-	# Шаг 19a: force_gamemode for the generated config ('' leaves it).
+	# РЁР°Рі 19a: force_gamemode for the generated config ('' leaves it).
 	[ValidateSet('', 'true', 'false')]
 	[string]$OursForceGamemode = '',
 	[switch]$KeepStand
@@ -307,7 +307,7 @@ function Start-Stand {
 			}
 		}
 		if ($HardnessReport) {
-			# Шаг 16a.4 п.4: the survival dig timer needs the exported hardness
+			# РЁР°Рі 16a.4 Рї.4: the survival dig timer needs the exported hardness
 			# scale. The path stays outside the repository, like the collision
 			# report above.
 			$hardnessPath = $HardnessReport -replace '\\', '/'
@@ -318,7 +318,7 @@ function Start-Stand {
 			}
 		}
 		if ($OursSaveDir) {
-			# Player saves (Шаг 19a): the root is generated per run, never the
+			# Player saves (РЁР°Рі 19a): the root is generated per run, never the
 			# template and never vanilla\world. Forward slashes, as above.
 			$savePath = $OursSaveDir -replace '\\', '/'
 			if ($config -match '(?m)^save_dir\s*=') {
@@ -454,6 +454,64 @@ function Stop-Client {
 	Stop-ClientByName $Nick
 	Start-Sleep -Seconds 2
 	return Get-Date
+}
+
+# Launches one test client without waiting for the join gate (S15 V4 starts
+# two connections back to back, so the first may still be in configuration
+# when the second logs in). Returns { pid, uuid } like Start-Client.
+function Start-ClientNoWait {
+	param([string]$Nick, [int]$ControlPort, [string]$Instance = '')
+	Stop-ClientByName ($Nick + $Instance)
+	$out = & $launchScript -Nick $Nick -Address '127.0.0.1:25565' -ControlPort $ControlPort -Instance $Instance
+	$pidOut = [int]($out | Select-Object -Last 1)
+	$uuid = $null
+	foreach ($line in $out) {
+		if ($line -match 'offline uuid ([0-9a-f-]+)') { $uuid = $Matches[1] }
+	}
+	return [PSCustomObject]@{ pid = $pidOut; uuid = $uuid }
+}
+
+# Waits until one client reports that it is in the game. Used by the ordered
+# S15 runs: the first client is followed by the second, so only its own state
+# matters, and a duplicate login of the first leaves the second in play. The
+# trace-based Wait-S15Outcome below cannot tell the two same-name clients
+# apart (the kick of the first lands in both traces' poll window), so the
+# ordered path must not use it.
+function Wait-S15Play {
+	param([int]$ControlPort, [int]$TimeoutSec = 120)
+	$deadline = (Get-Date).AddSeconds($TimeoutSec)
+	while ((Get-Date) -lt $deadline) {
+		try {
+			$resp = Invoke-TestCmd $ControlPort (New-ObserveCmd 's15-play') 3000
+			if ($resp.ok -and $resp.result.inGame) { return 'play' }
+		} catch { }
+		Start-Sleep -Milliseconds 300
+	}
+	return 'timeout'
+}
+
+# Waits until one S15 connection either reaches play or receives a disconnect.
+# `observe` answers at the main menu too, so a rejected connection is told
+# apart by its fresh trace rather than by a timeout. Returns 'play',
+# 'disconnect' or 'timeout'.
+function Wait-S15Outcome {
+	param([int]$ControlPort, [datetime]$Since, [int]$TimeoutSec = 90)
+	$deadline = (Get-Date).AddSeconds($TimeoutSec)
+	$tracePollAt = Get-Date
+	while ((Get-Date) -lt $deadline) {
+		try {
+			$resp = Invoke-TestCmd $ControlPort (New-ObserveCmd 's15-wait') 3000
+			if ($resp.ok -and $resp.result.inGame) { return 'play' }
+		} catch { }
+		if ((Get-Date) -ge $tracePollAt) {
+			foreach ($file in @(Get-NewTraceFiles $traceDir $Since)) {
+				if (Test-TraceHasDisconnect $file.FullName) { return 'disconnect' }
+			}
+			$tracePollAt = (Get-Date).AddSeconds(2)
+		}
+		Start-Sleep -Milliseconds 300
+	}
+	return 'timeout'
 }
 
 # --- S1: pose persistence across relaunch (owner flow) ---------------------
@@ -1336,7 +1394,7 @@ function Invoke-S8 {
 			$observer.settled, $observer.loadedChunks))
 
 	if (-not $isVanilla) {
-		# Ours (Шаг 14d): no RCON, so the water run uses the dev-only spawn
+		# Ours (РЁР°Рі 14d): no RCON, so the water run uses the dev-only spawn
 		# override. -OursSpawnOverride puts the joining player above open water
 		# (config only, the save and the template stay untouched); A falls in
 		# and B observes the swimming metadata our server computes from the
@@ -1358,7 +1416,7 @@ function Invoke-S8 {
 			("feet={0} head={1} pose={2} onGround={3} y={4}" -f `
 				$wet.feetBlock.id, $wet.headBlock.id, $wet.pose, $wet.onGround, $wet.pos.y)
 
-		# At rest in water the Шаг 14e rule says A is NOT swimming: the bit
+		# At rest in water the РЁР°Рі 14e rule says A is NOT swimming: the bit
 		# follows `feet_in_water && sprint`, so a still player reports the
 		# standing pose with no 0x10 bit. This is the check the old 14d run
 		# got wrong (it expected SWIMMING at rest).
@@ -1484,7 +1542,7 @@ function Invoke-S9 {
 			$observer.settled, $observer.loadedChunks))
 
 	if (-not $isVanilla) {
-		# Ours (Шаг 14c): creative comes from the generated config
+		# Ours (РЁР°Рі 14c): creative comes from the generated config
 		# (-OursGameMode 1 patches game_mode into server-ours.toml); there is
 		# no RCON to switch modes in game. Without it the scenario stays the
 		# recorded vanilla-trace gap.
@@ -1546,7 +1604,7 @@ function Invoke-S9 {
 		("pose={0} pos=({1},{2},{3})" -f $witness.pose, $witness.pos.x, $witness.pos.y, $witness.pos.z)
 
 	if (-not $isVanilla) {
-		# Ours (Шаг 14c): the wire facts of "B sees the block gone" — the
+		# Ours (РЁР°Рі 14c): the wire facts of "B sees the block gone" вЂ” the
 		# break level_event (event 2001, data = the destroyed state id)
 		# reaches B before the air block_update, the S3/S9 observer order.
 		$bFiles = Get-NewTraceFiles $traceDir $watermark
@@ -1596,7 +1654,7 @@ function Invoke-S9 {
 	Start-Sleep -Seconds 3
 }
 
-# --- S10: swimming/crawling decision data (Шаг 14e) -------------------------
+# --- S10: swimming/crawling decision data (РЁР°Рі 14e) -------------------------
 # Builds small geometries in the air above spawn and replays a fixed input
 # program in each, sampling A (self labels) and B (remote labels) as reference
 # facts. The byte-level truth stays in the mcproxy traces; the samples and the
@@ -1665,7 +1723,7 @@ function Get-S10Build {
 }
 
 # Writes the dev-only geometry of the selected scenarios to a file our server
-# applies to its in-memory store at startup (dev_geometry, Шаг 15 п.2). Must run
+# applies to its in-memory store at startup (dev_geometry, РЁР°Рі 15 Рї.2). Must run
 # before Start-Stand: our server has no /fill, so the geometry has to be in the
 # store before the port opens. S10 and S11 share the format and the file.
 function Write-DevGeometryFile {
@@ -1917,7 +1975,7 @@ function Invoke-S10 {
 	Start-Sleep -Seconds 3
 }
 
-# --- S11: forced crouch/crawl under a low ceiling (Шаг 15 п.5) --------------
+# --- S11: forced crouch/crawl under a low ceiling (РЁР°Рі 15 Рї.5) --------------
 # Static geometry, the same procedure on both targets: a roof strip at y=202
 # (head level for feet at y=201) and one isolated block at the same height over
 # a probe cell. A stands in the open, is moved under the isolated block, back to
@@ -2156,7 +2214,7 @@ function Invoke-S11 {
 	Start-Sleep -Seconds 3
 }
 
-# --- S12: survival dig states, live (Шаг 16a.4 п.2/п.3b/п.4) ----------------
+# --- S12: survival dig states, live (РЁР°Рі 16a.4 Рї.2/Рї.3b/Рї.4) ----------------
 # Four stands on the S10 platform, all dug straight down (pitch 90) by holding
 # attack: a 4-block ground column (grass, dirt, stone, leaves), the same column
 # sneaking, a block under water at the feet, and a block under an air stand (the
@@ -2297,7 +2355,7 @@ function Test-S14Aim {
 	}
 }
 
-# S14 (Шаг 18) — instant-break and fluid blocks.
+# S14 (РЁР°Рі 18) вЂ” instant-break and fluid blocks.
 #
 # Two rows (hold and tap) over nine one-cell kinds, every cell unique, so the
 # trace rows are attributed by position. A is teleported into the cell, the
@@ -2768,7 +2826,7 @@ function Invoke-S12 {
 	Start-Sleep -Seconds 3
 }
 
-# Шаг 19a: the effective game mode of the generated config.
+# РЁР°Рі 19a: the effective game mode of the generated config.
 function Get-OursConfigMode {
 	$mode = 0
 	$path = Join-Path $RunDir 'server-ours.toml'
@@ -2838,7 +2896,7 @@ function Get-FreshTrace {
 	return $files[$files.Count - 1]
 }
 
-# S13 (Шаг 19a): playerdata on the live stand.
+# S13 (РЁР°Рі 19a): playerdata on the live stand.
 function Invoke-S13 {
 	param($Cfg, $Result)
 	$portA = [int]$Cfg.controlPortA
@@ -3042,7 +3100,7 @@ function Invoke-S13 {
 	$script:s7Facts.Add(("S13 hashes: template files={0} changed={1}; vanilla world files={2} changed={3}" -f $templateAfter.Count, $templateDiff.Count, $vanillaAfter.Count, $vanillaDiff.Count))
 }
 
-# S13-stop (Шаг 19a): a graceful stop flushes the last snapshot.
+# S13-stop (РЁР°Рі 19a): a graceful stop flushes the last snapshot.
 function Invoke-S13Stop {
 	param($Cfg, $Result)
 	$portA = [int]$Cfg.controlPortA
@@ -3089,7 +3147,7 @@ function Invoke-S13Stop {
 	$script:oursPid = $null
 }
 
-# S13-gamemode (Шаг 19a): force_gamemode=false lets the file decide.
+# S13-gamemode (РЁР°Рі 19a): force_gamemode=false lets the file decide.
 function Invoke-S13Gamemode {
 	param($Cfg, $Result)
 	$portA = [int]$Cfg.controlPortA
@@ -3123,7 +3181,7 @@ function Invoke-S13Gamemode {
 	Start-Sleep -Seconds 2
 }
 
-# --- S15 (Шаг 20a): duplicate login on one name ---------------------------
+# --- S15 (РЁР°Рі 20a): duplicate login on one name ---------------------------
 # The scenario opens a second connection with the same player name and
 # records what the first connection receives. The vanilla trace is the
 # source for the kick packet and its text; our server must match it.
@@ -3187,32 +3245,66 @@ function ConvertFrom-TraceDisconnectText {
 	return $value
 }
 
-# Classifies the fresh traces by login name and play-state disconnect.
+# Canonical UUID string and profile name of a clientbound `login_finished`
+# payload: 16 UUID bytes (network order) followed by the name String.
+function Get-TraceLoginProfile {
+	param([byte[]]$Bytes)
+	if ($Bytes.Length -lt 17) { throw 'truncated login_finished payload' }
+	$hex = ($Bytes[0..15] | ForEach-Object { '{0:x2}' -f $_ }) -join ''
+	$uuid = '{0}-{1}-{2}-{3}-{4}' -f $hex.Substring(0, 8), $hex.Substring(8, 4), $hex.Substring(12, 4), $hex.Substring(16, 4), $hex.Substring(20, 12)
+	$name = (ConvertFrom-TraceString $Bytes 16).value
+	return [PSCustomObject]@{ uuid = $uuid; name = $name }
+}
+
+# Classifies the fresh traces by profile name and by whatever disconnect the
+# connection received. Login- and configuration-phase rejections carry no
+# play state, so every trace with a profile counts; the disconnect may be a
+# play packet (NBT component) or a login packet (wire String with JSON).
 function Get-S15TraceFacts {
 	param([datetime]$Since)
 	$facts = @()
 	foreach ($file in @(Get-NewTraceFiles $traceDir $Since)) {
 		$rows = Read-Trace $file.FullName
-		$name = Get-TraceLoginName $rows
+		$finished = @($rows | Where-Object { $_.dir -eq 'clientbound' -and $_.state -eq 'login' -and $_.name -eq 'minecraft:login_finished' } | Select-Object -First 1)
+		$profile = $null
+		if ($finished.Count -gt 0) {
+			$profile = Get-TraceLoginProfile (ConvertFrom-TraceB64 $finished[0].b64)
+		}
+		$name = if ($profile) { $profile.name } else { Get-TraceLoginName $rows }
 		if (-not $name) { continue }
-		if (@($rows | Where-Object { $_.state -eq 'play' }).Count -eq 0) { continue }
-		$disconnects = @(Get-TracePlayDisconnects $rows)
-		$loginRow = @($rows | Where-Object { $_.dir -eq 'clientbound' -and $_.state -eq 'play' -and $_.name -eq 'minecraft:login' } | Select-Object -First 1)
+		$states = @($rows | ForEach-Object { $_.state } | Sort-Object -Unique)
+		$playRows = @($rows | Where-Object { $_.state -eq 'play' })
+		$disconnectRow = @($rows | Where-Object {
+			$_.dir -eq 'clientbound' -and
+			($_.name -eq 'minecraft:disconnect' -or $_.name -eq 'minecraft:login_disconnect')
+		} | Select-Object -First 1)
+		$loginRow = @($playRows | Where-Object { $_.dir -eq 'clientbound' -and $_.name -eq 'minecraft:login' } | Select-Object -First 1)
 		$text = $null
 		$seq = $null
 		$readMs = $null
-		if ($disconnects.Count -gt 0) {
-			$seq = [int]$disconnects[0].seq
-			$readMs = [double]$disconnects[0].read_ms
-			$text = ConvertFrom-TraceDisconnectText (ConvertFrom-TraceB64 $disconnects[0].b64)
+		$disconnectState = $null
+		if ($disconnectRow.Count -gt 0) {
+			$seq = [int]$disconnectRow[0].seq
+			$readMs = [double]$disconnectRow[0].read_ms
+			$disconnectState = [string]$disconnectRow[0].state
+			$bytes = ConvertFrom-TraceB64 $disconnectRow[0].b64
+			$text = if ($disconnectRow[0].state -eq 'play') {
+				ConvertFrom-TraceDisconnectText $bytes
+			} else {
+				(ConvertFrom-TraceString $bytes 0).value
+			}
 		}
 		$facts += [PSCustomObject]@{
 			file             = $file.Name
 			name             = $name
+			uuid             = $(if ($profile) { $profile.uuid } else { $null })
+			states           = ($states -join ',')
+			reachedPlay      = ($playRows.Count -gt 0)
 			loginSeq         = $(if ($loginRow.Count -gt 0) { [int]$loginRow[0].seq } else { $null })
 			loginReadMs      = $(if ($loginRow.Count -gt 0) { [double]$loginRow[0].read_ms } else { $null })
-			disconnects      = $disconnects.Count
+			disconnects      = $disconnectRow.Count
 			disconnectSeq    = $seq
+			disconnectState  = $disconnectState
 			disconnectReadMs = $readMs
 			text             = $text
 		}
@@ -3222,81 +3314,130 @@ function Get-S15TraceFacts {
 
 function Invoke-S15 {
 	param($Cfg, $Result)
-	$nick = [string]$Cfg.playerA
+	$nickA = [string]$Cfg.playerA
+	$nickB = if ($Cfg.playerB) { [string]$Cfg.playerB } else { $nickA }
+	$sameName = [string]::Equals($nickA, $nickB, [StringComparison]::Ordinal)
 	$portA = [int]$Cfg.controlPortA
 	$portB = [int]$Cfg.controlPortB
 	$instanceA = [string]$Cfg.instanceA
 	$instanceB = [string]$Cfg.instanceB
 	$settleMs = [int]$Cfg.settleMs
+	$outcome = if ($Cfg.expectOutcome) { [string]$Cfg.expectOutcome } else { 'old_kicked' }
+	$fast = [bool]$Cfg.fastLaunch
+	$expected = [string]$Cfg.expectedKickText
 
+	# V1/V2: the first connection joins, then the second one connects. V4:
+	# both launches are started back to back, so the first may still be in
+	# configuration when the second logs in.
 	$watermark = Get-Date
-	$launchA = Start-Client $nick $portA $watermark 120 $instanceA
+	if ($fast) {
+		$launchA = Start-ClientNoWait $nickA $portA $instanceA
+		$launchB = Start-ClientNoWait $nickB $portB $instanceB
+		$outcomeA = Wait-S15Outcome $portA $watermark 120
+		$outcomeB = Wait-S15Outcome $portB $watermark 120
+	} else {
+		$launchA = Start-ClientNoWait $nickA $portA $instanceA
+		$outcomeA = Wait-S15Play $portA 120
+		Add-Check $Result 'S15: the first connection joined' ($outcomeA -eq 'play') `
+			("outcome={0}" -f $outcomeA)
+		$script:s7Facts.Add("S15 first join: outcome=$outcomeA uuid=$($launchA.uuid)")
+		$launchB = Start-ClientNoWait $nickB $portB $instanceB
+		$outcomeB = Wait-S15Play $portB 120
+	}
 	if (-not $launchA.uuid) { throw 'S15: could not resolve the offline UUID' }
-	$obsA1 = (Invoke-TestCmd $portA (New-ObserveCmd 's15-a-in')).result
-	Add-Check $Result 'S15: the first connection joined' ($obsA1.inGame -eq $true) `
-		("inGame={0}" -f $obsA1.inGame)
-	$script:s7Facts.Add("S15 first join: inGame=$($obsA1.inGame) uuid=$($launchA.uuid)")
-
-	# The second connection of the same name: separate game dir and control
-	# port, same offline UUID (the name alone drives it).
-	$secondAt = Get-Date
-	$launchB = Start-Client $nick $portB $secondAt 120 $instanceB
-	$obsB = (Invoke-TestCmd $portB (New-ObserveCmd 's15-b-in')).result
-	Add-Check $Result 'S15: the second connection joined under the same name' ($obsB.inGame -eq $true) `
-		("inGame={0}" -f $obsB.inGame)
+	$script:s7Facts.Add(("S15 launch: A='{0}' uuid={1} outcome={2}; B='{3}' uuid={4} outcome={5}" -f
+		$nickA, $launchA.uuid, $outcomeA, $nickB, $launchB.uuid, $outcomeB))
 	Start-Sleep -Milliseconds $settleMs
 
-	# The old client must have been returned to the menu by the server.
-	$obsA2 = $null
-	try { $obsA2 = (Invoke-TestCmd $portA (New-ObserveCmd 's15-a-after') 2000).result } catch { }
-	Add-Check $Result 'S15: the first connection was dropped' ($obsA2 -eq $null -or $obsA2.inGame -ne $true) `
-		("inGame={0}" -f $(if ($obsA2) { $obsA2.inGame } else { 'no answer' }))
-	$obsB2 = $null
-	try { $obsB2 = (Invoke-TestCmd $portB (New-ObserveCmd 's15-b-after') 2000).result } catch { }
-	Add-Check $Result 'S15: the second connection stays in the game' ($obsB2 -ne $null -and $obsB2.inGame -eq $true) `
-		("inGame={0}" -f $(if ($obsB2) { $obsB2.inGame } else { 'no answer' }))
+	# What each client sees in the end. `observe` also answers at the menu,
+	# so a rejected or kicked connection is visible as inGame=false.
+	$obsA = $null
+	try { $obsA = (Invoke-TestCmd $portA (New-ObserveCmd 's15-a-after') 2000).result } catch { }
+	$obsB = $null
+	try { $obsB = (Invoke-TestCmd $portB (New-ObserveCmd 's15-b-after') 2000).result } catch { }
+	$inGameA = ($obsA -ne $null -and $obsA.inGame -eq $true)
+	$inGameB = ($obsB -ne $null -and $obsB.inGame -eq $true)
+	$script:s7Facts.Add("S15 after settle: A inGame=$inGameA, B inGame=$inGameB")
 
-	# Classify the fresh traces by login name and the play-state disconnect.
-	# The proxy may flush the kick row a little after the client is already
-	# back in the menu (the r2 vanilla run read the trace too early), so poll.
+	# Classify the fresh traces. The proxy may flush a kick row a little after
+	# the client is already back in the menu (the r2 vanilla run read the trace
+	# too early), so poll; stop early when the expected quiet state is seen.
 	$deadline = (Get-Date).AddSeconds(20)
-	$playTraces = @()
+	$traces = @()
 	do {
-		$playTraces = @(Get-S15TraceFacts $watermark)
-		$kicked = @($playTraces | Where-Object { $_.name -eq $nick -and $_.disconnects -gt 0 })
+		$traces = @(Get-S15TraceFacts $watermark | Where-Object { $_.name -eq $nickA -or $_.name -eq $nickB })
+		$kicked = @($traces | Where-Object { $_.disconnects -gt 0 })
 		if ($kicked.Count -gt 0) { break }
+		$allPlay = $traces.Count -ge 2 -and @($traces | Where-Object { $_.reachedPlay }).Count -ge 2
+		if ($allPlay -and $inGameA -and $inGameB) { break }
 		Start-Sleep -Milliseconds 500
 	} while ((Get-Date) -lt $deadline)
-	$sameName = @($playTraces | Where-Object { $_.name -eq $nick })
-	Add-Check $Result 'S15: both connections are traced under the same name' ($sameName.Count -eq 2) `
-		(($playTraces | ForEach-Object { "$($_.file):$($_.name)" }) -join ', ')
-	$kicked = @($sameName | Where-Object { $_.disconnects -gt 0 })
-	$survivors = @($sameName | Where-Object { $_.disconnects -eq 0 })
-	Add-Check $Result 'S15: the server disconnects exactly the first connection' ($kicked.Count -eq 1 -and $survivors.Count -eq 1) `
-		("kicked=$($kicked.Count) survivors=$($survivors.Count)")
+	if ($traces.Count -eq 0) {
+		Add-Check $Result 'S15: the connections are traced' $false 'no fresh trace with a profile'
+		return
+	}
+
+	$kicked = @($traces | Where-Object { $_.disconnects -gt 0 })
+	$survivors = @($traces | Where-Object { $_.disconnects -eq 0 })
+	if ($outcome -eq 'old_kicked') {
+		Add-Check $Result 'S15: the first connection was dropped' (-not $inGameA) `
+			("inGame={0}" -f $(if ($obsA) { $obsA.inGame } else { 'no answer' }))
+		Add-Check $Result 'S15: the second connection stays in the game' $inGameB `
+			("inGame={0}" -f $(if ($obsB) { $obsB.inGame } else { 'no answer' }))
+		Add-Check $Result 'S15: both connections are traced under the same name' ($sameName -and $traces.Count -eq 2) `
+			(($traces | ForEach-Object { "$($_.file):$($_.name)" }) -join ', ')
+		Add-Check $Result 'S15: the server disconnects exactly the first connection' ($kicked.Count -eq 1 -and $survivors.Count -eq 1) `
+			("kicked=$($kicked.Count) survivors=$($survivors.Count)")
+	} elseif ($outcome -eq 'new_rejected') {
+		Add-Check $Result 'S15: the first connection stays in the game' $inGameA `
+			("inGame={0}" -f $(if ($obsA) { $obsA.inGame } else { 'no answer' }))
+		Add-Check $Result 'S15: the second connection is not in the game' (-not $inGameB) `
+			("inGame={0}" -f $(if ($obsB) { $obsB.inGame } else { 'no answer' }))
+		Add-Check $Result 'S15: the second name receives exactly one disconnect' ($kicked.Count -eq 1 -and $kicked[0].name -eq $nickB) `
+			(($kicked | ForEach-Object { "$($_.file):$($_.name)" }) -join ', ')
+	} elseif ($outcome -eq 'both_stay') {
+		Add-Check $Result 'S15: the first connection stays in the game' $inGameA `
+			("inGame={0}" -f $(if ($obsA) { $obsA.inGame } else { 'no answer' }))
+		Add-Check $Result 'S15: the second connection stays in the game' $inGameB `
+			("inGame={0}" -f $(if ($obsB) { $obsB.inGame } else { 'no answer' }))
+		Add-Check $Result 'S15: neither connection receives a disconnect' ($kicked.Count -eq 0) `
+			("kicked=$($kicked.Count)")
+		Add-Check $Result 'S15: both connections reached play' (@($traces | Where-Object { $_.reachedPlay }).Count -eq 2) `
+			(($traces | ForEach-Object { "$($_.file):$($_.name):play=$($_.reachedPlay)" }) -join ', ')
+		if (-not $sameName) {
+			$uuids = @($traces | Where-Object { $_.uuid } | ForEach-Object { $_.uuid } | Sort-Object -Unique)
+			Add-Check $Result 'S15: the two names keep distinct profiles' ($uuids.Count -eq 2) `
+				(($traces | ForEach-Object { "$($_.name)=$($_.uuid)" }) -join ', ')
+		}
+	} else {
+		# V4: the outcome itself is the fact; record who stayed and who was
+		# disconnected without asserting a shape that is a race.
+		Add-Check $Result 'S15: at least one connection reached play' (@($traces | Where-Object { $_.reachedPlay }).Count -ge 1) `
+			(($traces | ForEach-Object { "$($_.file):$($_.name):play=$($_.reachedPlay)" }) -join ', ')
+	}
 	if ($kicked.Count -eq 1) {
 		$kick = $kicked[0]
-		Add-Check $Result 'S15: the kick carries a text component' (-not [string]::IsNullOrWhiteSpace($kick.text)) `
+		Add-Check $Result 'S15: the disconnect carries a text component' (-not [string]::IsNullOrWhiteSpace($kick.text)) `
 			("text='$($kick.text)'")
-		$expected = [string]$Cfg.expectedKickText
 		if ($expected) {
-			Add-Check $Result 'S15: the kick text matches the recorded vanilla text' ($kick.text -eq $expected) `
+			Add-Check $Result 'S15: the disconnect text matches the recorded vanilla text' ($kick.text -eq $expected) `
 				("got='$($kick.text)' want='$expected'")
 		}
-		$script:s7Facts.Add(("S15 kick: trace='{0}' seq={1} read_ms={2:N1} text={3}" -f $kick.file, $kick.disconnectSeq, $kick.disconnectReadMs, $kick.text))
 	}
-	foreach ($t in $playTraces) {
-		$script:s7Facts.Add(("S15 trace '{0}': name={1} login_seq={2} login_read_ms={3:N1} disconnects={4}" -f $t.file, $t.name, $t.loginSeq, $t.loginReadMs, $t.disconnects))
+	foreach ($t in $traces) {
+		$script:s7Facts.Add(("S15 trace '{0}': name={1} uuid={2} states={3} play={4} login_seq={5} login_read_ms={6:N1} disconnects={7} disconnect_state={8} disconnect_seq={9} disconnect_read_ms={10:N1} text={11}" -f
+			$t.file, $t.name, $t.uuid, $t.states, $t.reachedPlay, $t.loginSeq, $t.loginReadMs, $t.disconnects, $t.disconnectState, $t.disconnectSeq, $t.disconnectReadMs, $t.text))
 	}
 	# The vanilla server log lines about the duplicate are the human-readable
 	# counterpart of the packet; they are recorded, not asserted.
 	if ($isVanilla) {
-		$logLines = @(Get-Content $vanillaLog -ErrorAction SilentlyContinue | Where-Object { $_ -match [regex]::Escape($nick) } |
-			Where-Object { $_.Length -lt 400 } | Select-Object -Last 8)
+		$logLines = @(Get-Content $vanillaLog -ErrorAction SilentlyContinue | Where-Object {
+			($_ -match [regex]::Escape($nickA)) -or ($_ -match [regex]::Escape($nickB))
+		} | Where-Object { $_.Length -lt 400 } | Select-Object -Last 12)
 		foreach ($line in $logLines) { $script:s7Facts.Add("S15 vanilla log: $line") }
 	}
 
-	$null = Invoke-TestCmd $portB (New-SessionCmd 's15-b-off' 'disconnect')
+	try { $null = Invoke-TestCmd $portB (New-SessionCmd 's15-b-off' 'disconnect') } catch { }
 	Start-Sleep -Seconds 2
 }
 
@@ -3305,7 +3446,7 @@ $allResults = @()
 try {
 	Prepare-RunWorld
 	if (-not $isVanilla -and (($Scenarios -contains 's13') -or ($Scenarios -contains 's13-stop') -or ($Scenarios -contains 's13-gamemode'))) {
-		# Шаг 19a: the player save root lives inside the run directory. The
+		# РЁР°Рі 19a: the player save root lives inside the run directory. The
 		# gamemode variant reuses the directory of the preceding s13 run, so
 		# its file (with the patched mode) is still there.
 		if (-not $OursSaveDir) {
@@ -3371,6 +3512,8 @@ try {
 			's13-stop' { Invoke-S13Stop $cfg $result }
 			's13-gamemode' { Invoke-S13Gamemode $cfg $result }
 			's15' { Invoke-S15 $cfg $result }
+			's15b' { Invoke-S15 $cfg $result }
+			's15c' { Invoke-S15 $cfg $result }
 			default { throw "unknown scenario '$($cfg.id)'" }
 		}
 		Stop-ClientByName $cfg.playerA

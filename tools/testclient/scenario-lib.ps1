@@ -97,12 +97,31 @@ function Read-Trace {
 		} catch {
 			$message = $_.Exception.Message
 			if ($attempt -eq 3 -or $lines.Count -eq 0) {
+				# A live append can also leave a line that ends with '}' but is
+				# still torn (S15 V2 r1 read it at 38k lines). One bad record
+				# must not abort a scenario, so keep the lines that parse.
+				# This is the rare path: whole-file parsing is the fast one.
+				$valid = @()
+				foreach ($line in $lines) {
+					try { $valid += ($line | ConvertFrom-Json) } catch { }
+				}
+				if ($valid.Count -gt 0) { return $valid }
 				throw "trace '$Path' is not valid JSONL ($($lines.Count) lines): $($message.Substring(0, [Math]::Min(200, $message.Length)))"
 			}
 			$lines = @($lines | Select-Object -First ($lines.Count - 1))
 		}
 	}
 	return @()
+}
+
+# Cheap live check: does the trace already contain a disconnect row? Used
+# while a client is still connected; a full JSON parse of a growing 40 MB
+# trace every second is both slow and racy.
+function Test-TraceHasDisconnect {
+	param([string]$Path)
+	if (-not (Test-Path -LiteralPath $Path)) { return $false }
+	$hit = Select-String -Path $Path -Pattern '"name":"minecraft:(login_)?disconnect"' -Quiet -ErrorAction SilentlyContinue
+	return [bool]$hit
 }
 
 # Counts serverbound rows whose name matches the pattern (regex).
