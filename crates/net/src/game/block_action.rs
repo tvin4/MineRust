@@ -197,11 +197,14 @@ fn step_per_tick(store: &Arc<ChunkStore>, rules: DigRules<'_>, position: Positio
 ///
 /// The time check is skipped while the digger is in a state the bare-hand
 /// ground model does not describe — airborne or standing in water
-/// ([`steady_state`]): the vanilla client itself divides the mining speed by
-/// five there, so our `speed/hardness/30` step is up to five times too fast and
-/// a strict check would roll back a legitimate dig. Trusting the client in
-/// those states is the plan's option (b) and is recorded as debt — the stages
-/// we broadcast there still follow the ground cadence.
+/// ([`steady_state`]). The check is a *lower* bound on the elapsed time, so a
+/// client that is slower there (vanilla divides its mining speed by five) would
+/// pass it anyway; the skip is a safety net against the opposite error, a
+/// client whose tick catch-up compresses the finish below the bound (observed
+/// live in the 2026-11-17_0131 run). Trusting the client in those states is the
+/// plan's option (b). The real divergence is the **stage cadence**: we keep
+/// broadcasting at the ground `speed/hardness/30` while vanilla's crack is up
+/// to five times slower there, and this is recorded as debt.
 ///
 /// A finish for a block with no timed dig (no report, unknown state, instant
 /// block, or a different position) falls back to the pre-16a.3 trust path.
@@ -235,8 +238,9 @@ fn finish(
     let dig = dig::take(scheduler, id);
     if let Some(dig) = dig {
         dig::reset(scheduler, id, dig.position);
-        // The client's own mining speed drops by a factor of five while it is
-        // airborne or in water, so the ground step cannot judge those digs.
+        // A dig made airborne or in water is not judged by the ground step:
+        // the client is slower there, so its answer would pass anyway, but a
+        // tick catch-up can also compress it below the bound (see above).
         let steady = steady_state(scheduler, id, store);
         let too_early = rules.tolerance_ticks.is_some_and(|tolerance| {
             steady && dig.position == position && dig.progress + tolerance as f32 * dig.step < 1.0
@@ -288,9 +292,10 @@ fn finish(
 /// the player is airborne and again while it is in water, so a dig there takes
 /// up to `5 × 30·hardness` ticks. The five vanilla digs of 2026-11-14 are all
 /// on dry ground (`docs/BLOCK-BREAKING.md` §1.7), so no trace measures that
-/// penalty yet: until one does, the finish in those states is trusted and the
-/// time check is skipped (plan §6 п.8, option b) while the stages still follow
-/// the ground cadence. This is **debt**, not parity.
+/// penalty yet. A slower dig passes the lower-bound check by itself; skipping
+/// it in those states (plan §6 п.8, option b) protects against a client tick
+/// catch-up that compresses the finish. The stages still follow the ground
+/// cadence, which is the actual **debt**, not parity.
 ///
 /// The state comes from the last movement packet the client sent
 /// ([`PlayerPos::on_ground`](super::region::PlayerPos::on_ground)) and the

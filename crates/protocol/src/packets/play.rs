@@ -1078,7 +1078,9 @@ impl BlockChangedAck {
 /// where `data` is the block state id the block had before it was removed
 /// (S3: `data 9` = `grass_block`; S9: `data 450` = `dark_oak_leaves`, both
 /// from `reports/blocks.json`). The neighbouring break effects `2019`/`2020`
-/// reach only the digger; we do not send them.
+/// are **not** digger-only: in the 1644 trace both the digger and the
+/// observer received 12x`2019` and 4x`2020` (data 1) for the dug position
+/// (BLOCK-BREAKING.md §1.9). We do not send them (16a.5).
 ///
 /// The trailing byte is **not established**: the traces always carry `0x00`,
 /// so we reproduce it as a constant [hypothesis: a global-event flag].
