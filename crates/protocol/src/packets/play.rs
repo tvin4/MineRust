@@ -934,8 +934,11 @@ impl SynchronizePlayerPosition {
 ///
 /// SOURCE: our vanilla S3 trace (`docs/BLOCK-BREAKING.md` §1.2/§1.3): after a
 /// break finishes, the digger and every observer receive the removed block as
-/// `packed pos (8 B) + state varint 0` (air). `packets.json` carries only the
-/// id and direction.
+/// `packed pos (8 B) + state varint 0` (air). The S14 trace (§1.12) shows the
+/// same packet carrying a non-zero state: a waterlogged slab, a seagrass, a
+/// tall seagrass or a kelp is replaced by the water source (`state 89`,
+/// `reports/blocks.json`), so the state is not always air. `packets.json`
+/// carries only the id and direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockUpdate {
     /// Block the update is about.
@@ -1072,12 +1075,16 @@ impl BlockChangedAck {
 /// Clientbound Level Event: a world-wide effect tied to a position (play id
 /// 0x2F).
 ///
-/// SOURCE: our vanilla traces. The block-break event (`2001`) reaches the
-/// observers of a broken block — never the digger — as
+/// SOURCE: our vanilla traces. The block-break event (`2001`) of the **aimed**
+/// block reaches the observers of a broken block — never the digger — as
 /// `event i32 BE + packed pos (8 B) + data i32 BE + one trailing byte 0x00`,
 /// where `data` is the block state id the block had before it was removed
-/// (S3: `data 9` = `grass_block`; S9: `data 450` = `dark_oak_leaves`, both
-/// from `reports/blocks.json`). The neighbouring break effects `2019`/`2020`
+/// (S3: `data 9` = `grass_block`; S9: `data 450` = `dark_oak_leaves`; S14:
+/// `data 2363` = `short_grass`, `2370` = `seagrass`, `2371`/`2372` = the two
+/// halves of `tall_seagrass`, `18421`/`18424` = kelp, `15179` = the
+/// waterlogged slab, `5533` = the waterlogged stairs, all from
+/// `reports/blocks.json`). A **cascade** part of the break (Шаг 18, §1.12)
+/// reaches the digger as well. The neighbouring break effects `2019`/`2020`
 /// are **not** digger-only: in the 1644 trace both the digger and the
 /// observer received 12x`2019` and 4x`2020` (data 1) for the dug position
 /// (BLOCK-BREAKING.md §1.9). We do not send them (16a.5).
@@ -1698,6 +1705,64 @@ mod tests {
             |packet| Ok(packet.encode_payload()),
             LevelEvent::decode_payload,
         );
+    }
+
+    /// The S14 instant-break and water-block payloads, straight from the
+    /// 2026-11-17 vanilla trace (`docs/BLOCK-BREAKING.md` §1.12): the digger's
+    /// `block_update` of the replacement (air for short grass, the water
+    /// source for seagrass/kelp/waterlogged), the observer's break
+    /// `level_event` (data = the broken state id), and the acks that echo the
+    /// client's own sequences. The instant-break sequence is start-only, so the
+    /// acks are the start sequences (1, 25, 39, 40).
+    #[test]
+    fn s14_instant_break_packets_roundtrip_the_trace() {
+        for (x, y, z, state, raw) in [
+            (96, 201, -34, 0, "0000183ffffde0c900"),
+            (108, 201, -34, 89, "00001b3ffffde0c959"),
+            (116, 201, -34, 89, "00001d3ffffde0c959"),
+            (120, 201, -34, 89, "00001e3ffffde0c959"),
+        ] {
+            crate::packets::test_support::check(
+                BlockUpdate {
+                    position: Position { x, y, z },
+                    state,
+                },
+                raw,
+                |packet| Ok(packet.encode_payload()),
+                BlockUpdate::decode_payload,
+            );
+        }
+        for (x, y, z, data, raw) in [
+            (96, 201, -34, 2363, "000007d10000183ffffde0c90000093b00"),
+            (108, 201, -34, 2370, "000007d100001b3ffffde0c90000094200"),
+            (112, 201, -34, 2372, "000007d100001c3ffffde0c90000094400"),
+            (112, 202, -34, 2371, "000007d100001c3ffffde0ca0000094300"),
+            (116, 201, -34, 18421, "000007d100001d3ffffde0c9000047f500"),
+            (116, 202, -34, 18445, "000007d100001d3ffffde0ca0000480d00"),
+            (116, 203, -34, 18424, "000007d100001d3ffffde0cb000047f800"),
+            (120, 201, -34, 15179, "000007d100001e3ffffde0c900003b4b00"),
+            (124, 201, -34, 5533, "000007d100001f3ffffde0c90000159d00"),
+        ] {
+            crate::packets::test_support::check(
+                LevelEvent {
+                    event: LevelEvent::EVENT_BLOCK_BREAK,
+                    position: Position { x, y, z },
+                    data,
+                    trailing: LevelEvent::TRACED_TRAILING,
+                },
+                raw,
+                |packet| Ok(packet.encode_payload()),
+                LevelEvent::decode_payload,
+            );
+        }
+        for (sequence, raw) in [(1, "01"), (25, "19"), (39, "27"), (40, "28")] {
+            crate::packets::test_support::check(
+                BlockChangedAck { sequence },
+                raw,
+                |packet| Ok(packet.encode_payload()),
+                BlockChangedAck::decode_payload,
+            );
+        }
     }
 
     #[test]
