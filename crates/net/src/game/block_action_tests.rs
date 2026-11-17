@@ -6,6 +6,7 @@
 //! what a later join would read from the store.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use data::{BlockHardness, BlockStates};
 use protocol::{
@@ -1137,12 +1138,13 @@ fn breaking_tall_seagrass_removes_both_halves() {
 }
 
 /// `kelp` grows as a column: breaking a part removes every kelp block above it
-/// (Шаг 18), each leaving water.
+/// (Шаг 18), each leaving water — but one block per tick, as vanilla does: the
+/// block above loses support only after the one below is gone (Шаг 22).
 ///
 /// The break-effect audience follows S14 (§1.12): the **aimed** block reaches
 /// the observers only, every **cascade** block above reaches the digger too.
 #[test]
-fn breaking_kelp_removes_the_column_above() {
+fn breaking_kelp_removes_the_column_above_one_block_per_tick() {
     let store = store_with_traced_chunk();
     store
         .set_block(93, 123, -22, 7)
@@ -1155,15 +1157,10 @@ fn breaking_kelp_removes_the_column_above() {
 
     act(&mut scheduler, &store, PlayerAction::ACTION_FINISH, 4);
 
-    for y in [123, 124, 125] {
-        assert_eq!(
-            store.block(93, y, -22),
-            Some(2),
-            "the kelp at y={y} becomes water"
-        );
-    }
-    // The digger: no break effect for the aimed bottom, then each cascade
-    // block above announces to it too.
+    assert_eq!(store.block(93, 123, -22), Some(2), "the aimed kelp goes");
+    assert_eq!(store.block(93, 124, -22), Some(7), "the one above waits");
+    assert_eq!(store.block(93, 125, -22), Some(8), "the top waits too");
+    // The digger: no break effect for the aimed bottom, its update first.
     expect_block_state(
         &mut receiver_a,
         Position {
@@ -1173,15 +1170,29 @@ fn breaking_kelp_removes_the_column_above() {
         },
         2,
     );
+    expect_ack(&mut receiver_a, 4);
+    // The observer: the aimed bottom's effect, then its update.
+    let bottom = Position {
+        x: 93,
+        y: 123,
+        z: -22,
+    };
+    expect_level_event(&mut receiver_b, bottom, 7);
+    expect_block_state(&mut receiver_b, bottom, 2);
+
+    // The next block breaks on the next tick, the top one on the tick after.
+    let now = Instant::now();
+    let _ = scheduler.tick(1, now);
+    assert_eq!(store.block(93, 124, -22), Some(7), "nothing on tick 1");
+    let _ = scheduler.tick(2, now);
+    assert_eq!(store.block(93, 124, -22), Some(2), "the middle goes");
+    assert_eq!(store.block(93, 125, -22), Some(8), "the top still waits");
+    let _ = scheduler.tick(3, now);
+    assert_eq!(store.block(93, 125, -22), Some(2), "the top goes last");
     for (y, broken) in [(124, 7), (125, 8)] {
         let position = Position { x: 93, y, z: -22 };
         expect_level_event(&mut receiver_a, position, broken);
         expect_block_state(&mut receiver_a, position, 2);
-    }
-    expect_ack(&mut receiver_a, 4);
-    // The observer: the aimed bottom first, then the cascade above.
-    for (y, broken) in [(123, 7), (124, 7), (125, 8)] {
-        let position = Position { x: 93, y, z: -22 };
         expect_level_event(&mut receiver_b, position, broken);
         expect_block_state(&mut receiver_b, position, 2);
     }

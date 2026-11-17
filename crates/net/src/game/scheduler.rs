@@ -45,6 +45,16 @@ pub struct Scheduler {
     grid: RegionGrid,
     /// Ready block snapshot used to derive swimming metadata.
     store: Option<std::sync::Arc<ChunkStore>>,
+    /// Kelp blocks above a broken one, one per tick (Шаг 22).
+    ///
+    /// A break outside the tick loop (a queued action or a finished dig)
+    /// queues the block directly above; [`Self::tick`] applies the entries
+    /// whose tick arrived at its start, and each applied entry queues the next
+    /// one, which is what makes the column fall one block per tick.
+    pending_breaks: Vec<super::break_block::PendingBreak>,
+    /// Number of the last **completed** tick. A break that arrives before
+    /// tick `T` sees `T - 1` and queues the cascade for `T + 1`.
+    current_tick: u64,
     /// Tests measure the dispatch on a single region; production always
     /// ticks one region inline (the transfer costs more than it saves).
     #[cfg(test)]
@@ -95,9 +105,39 @@ impl Scheduler {
             pool,
             grid,
             store: None,
+            pending_breaks: Vec::new(),
+            current_tick: 0,
             #[cfg(test)]
             force_dispatch: false,
         }
+    }
+
+    /// Number of the last completed tick (see [`Self::tick`]).
+    pub(crate) fn current_tick(&self) -> u64 {
+        self.current_tick
+    }
+
+    /// Queues a kelp block above a broken one for its tick.
+    pub(crate) fn push_pending_break(&mut self, pending: super::break_block::PendingBreak) {
+        self.pending_breaks.push(pending);
+    }
+
+    /// Removes and returns the queued breaks due at `tick`, in insertion order.
+    pub(crate) fn take_due_pending_breaks(
+        &mut self,
+        tick: u64,
+    ) -> Vec<super::break_block::PendingBreak> {
+        let mut due = Vec::new();
+        let mut keep = Vec::with_capacity(self.pending_breaks.len());
+        for pending in self.pending_breaks.drain(..) {
+            if pending.due <= tick {
+                due.push(pending);
+            } else {
+                keep.push(pending);
+            }
+        }
+        self.pending_breaks = keep;
+        due
     }
 
     /// The regions, in id order.
@@ -233,6 +273,9 @@ impl Scheduler {
     /// the Шаг 3.5 benchmark can time the visibility pass apart from the rest
     /// of the tick.
     pub fn tick(&mut self, tick: u64, now: Instant) -> TickOutcome {
+        // The delayed kelp cascade is minecraft world state: it runs before the
+        // regions so a block that breaks now is the one the tick broadcasts.
+        super::break_block::tick_pending(self, tick);
         let mut outcome = self.tick_core(tick, now);
         // M4.5 Шаг 3: the visibility pass sees the final owner and positions,
         // so a player that crossed a boundary this tick is already in its new
@@ -240,6 +283,7 @@ impl Scheduler {
         // replay journal.
         self.update_swimming();
         outcome.entities = self.refresh_entities();
+        self.current_tick = tick;
         outcome
     }
 

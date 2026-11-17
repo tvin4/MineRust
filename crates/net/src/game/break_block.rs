@@ -13,7 +13,11 @@
 //!   both halves);
 //! - `minecraft:kelp`/`minecraft:kelp_plant` grow as a column: breaking a
 //!   part removes every kelp block above it (the trace carries `2001` for the
-//!   whole three-column).
+//!   whole three-column). Unlike the double plant, the column above does not
+//!   go at once: each block above loses its support only after the one below
+//!   was removed, so one block breaks per tick (Шаг 22, owner's live check of
+//!   the vanilla client). A broken kelp therefore queues the block above for
+//!   the next tick instead of deleting the whole column in the break tick.
 //!
 //! Everything else is a single block that leaves air. The other double plants
 //! (tall grass, large fern, the flowers) and the other growing plants (cave
@@ -40,11 +44,29 @@ use super::scheduler::Scheduler;
 /// Block name of the water source a water-carrying break leaves behind.
 const WATER_BLOCK: &str = "minecraft:water";
 
+/// One kelp block above a broken one, waiting for its own tick.
+///
+/// Vanilla does not remove the whole column in the break tick: the block above
+/// loses support only after the block below it was removed, so the column goes
+/// down one block per tick. The queue keeps the store the break happened in,
+/// so a tick with several columns is applied without a global lookup.
+#[derive(Debug)]
+pub(crate) struct PendingBreak {
+    /// Server tick the block breaks on.
+    pub(crate) due: u64,
+    /// Cell to break.
+    pub(crate) position: Position,
+    /// Store holding the cell.
+    pub(crate) store: Arc<ChunkStore>,
+}
+
 /// Removes `position` and every block its break cascades into, replacing each
 /// with what the S14 trace shows, and announces them.
 ///
-/// The aimed block is announced first, then the cascade parts (the trace order:
-/// tall_seagrass upper then lower, kelp top-down). A write that fails is warned
+/// The aimed block goes first, then the instant cascade parts (the other half
+/// of a `tall_seagrass`). Kelp above the aimed block is *not* removed here:
+/// the block directly above is queued for the next tick, and each block then
+/// queues the one above it (see [`tick_pending`]). A write that fails is warned
 /// about and skipped: the read before it proved the cell writable, so a failure
 /// is a race or malformed data, never a guess.
 pub(super) fn break_blocks(
@@ -54,26 +76,88 @@ pub(super) fn break_blocks(
     position: Position,
     state: i32,
 ) {
-    let mut targets = vec![(position, state, true)];
-    targets.extend(
-        cascade(store, position, state)
-            .into_iter()
-            .map(|(p, s)| (p, s, false)),
-    );
-    for (target, broken, aimed) in targets {
-        let replacement = replacement(store, broken);
-        match store.set_block(target.x, target.y, target.z, replacement) {
-            Ok(_) => announce(scheduler, digger, target, broken, replacement, aimed),
-            Err(err) => warn!(
-                player = digger,
-                x = target.x,
-                y = target.y,
-                z = target.z,
-                %err,
-                "block write failed, the cell is left unchanged"
-            ),
-        }
+    let next_due = scheduler.current_tick() + 2;
+    break_one(scheduler, store, position, state, Some(digger), next_due);
+    for (target, broken) in instant_cascade(store, position, state) {
+        break_one(scheduler, store, target, broken, None, next_due);
     }
+}
+
+/// Applies the queued kelp blocks whose tick arrived.
+///
+/// Each entry re-reads its cell: a block that is no longer kelp (another break
+/// or a chunk unload won the race) is skipped. A broken block queues the one
+/// above it for the *next* tick, which is what makes the column fall one block
+/// per tick instead of at once.
+pub(super) fn tick_pending(scheduler: &mut Scheduler, tick: u64) {
+    for pending in scheduler.take_due_pending_breaks(tick) {
+        let PendingBreak {
+            position, store, ..
+        } = pending;
+        let Some(state) = store.block(position.x, position.y, position.z) else {
+            continue;
+        };
+        if !is_kelp(&store, state) {
+            continue;
+        }
+        break_one(scheduler, &store, position, state, None, tick + 1);
+    }
+}
+
+/// Removes one block, announces it and, when it was kelp, queues the block
+/// above for `next_due`.
+fn break_one(
+    scheduler: &mut Scheduler,
+    store: &Arc<ChunkStore>,
+    position: Position,
+    state: i32,
+    aimed: Option<PlayerId>,
+    next_due: u64,
+) {
+    let new_state = replacement(store, state);
+    match store.set_block(position.x, position.y, position.z, new_state) {
+        Ok(_) => {
+            announce(scheduler, aimed, position, state, new_state);
+            if is_kelp(store, state) {
+                queue_above(scheduler, store, position, next_due);
+            }
+        }
+        Err(err) => warn!(
+            x = position.x,
+            y = position.y,
+            z = position.z,
+            %err,
+            "block write failed, the cell is left unchanged"
+        ),
+    }
+}
+
+/// Whether `state` is one of the two kelp blocks.
+fn is_kelp(store: &ChunkStore, state: i32) -> bool {
+    matches!(
+        store.blocks().block_name(state),
+        Some("minecraft:kelp" | "minecraft:kelp_plant")
+    )
+}
+
+/// Queues the block directly above a broken kelp for `due`, when it is kelp.
+fn queue_above(scheduler: &mut Scheduler, store: &Arc<ChunkStore>, position: Position, due: u64) {
+    let above = Position {
+        x: position.x,
+        y: position.y + 1,
+        z: position.z,
+    };
+    let Some(state) = store.block(above.x, above.y, above.z) else {
+        return;
+    };
+    if !is_kelp(store, state) {
+        return;
+    }
+    scheduler.push_pending_break(PendingBreak {
+        due,
+        position: above,
+        store: Arc::clone(store),
+    });
 }
 
 /// The state a broken block is replaced by: a water source when the block
@@ -86,10 +170,10 @@ fn replacement(store: &ChunkStore, state: i32) -> i32 {
     }
 }
 
-/// The extra blocks a break removes, from the S14 vanilla trace: the other
-/// half of a `tall_seagrass` and every kelp block above a `kelp`/
-/// `kelp_plant`. Everything else returns no extra block.
-fn cascade(store: &ChunkStore, position: Position, state: i32) -> Vec<(Position, i32)> {
+/// The extra blocks a break removes in the same tick, from the S14 vanilla
+/// trace: the other half of a `tall_seagrass`. Kelp is handled by the
+/// per-tick queue instead, so it returns no extra block here.
+fn instant_cascade(store: &ChunkStore, position: Position, state: i32) -> Vec<(Position, i32)> {
     let Some(name) = store.blocks().block_name(state) else {
         return Vec::new();
     };
@@ -110,29 +194,6 @@ fn cascade(store: &ChunkStore, position: Position, state: i32) -> Vec<(Position,
             }
             extra
         }
-        "minecraft:kelp" | "minecraft:kelp_plant" => {
-            let mut extra = Vec::new();
-            let mut y = position.y + 1;
-            while let Some(above) = store.block(position.x, y, position.z) {
-                if matches!(
-                    store.blocks().block_name(above),
-                    Some("minecraft:kelp" | "minecraft:kelp_plant")
-                ) {
-                    extra.push((
-                        Position {
-                            x: position.x,
-                            y,
-                            z: position.z,
-                        },
-                        above,
-                    ));
-                    y += 1;
-                } else {
-                    break;
-                }
-            }
-            extra
-        }
         _ => Vec::new(),
     }
 }
@@ -149,11 +210,10 @@ fn cascade(store: &ChunkStore, position: Position, state: i32) -> Vec<(Position,
 /// `block_update` always reaches everyone.
 fn announce(
     scheduler: &mut Scheduler,
-    digger: PlayerId,
+    aimed: Option<PlayerId>,
     position: Position,
     broken_state: i32,
     replacement: i32,
-    aimed: bool,
 ) {
     let ids: Vec<PlayerId> = scheduler
         .regions()
@@ -161,7 +221,7 @@ fn announce(
         .flat_map(|region| region.player_ids())
         .collect();
     for id in &ids {
-        if aimed && *id == digger {
+        if aimed == Some(*id) {
             continue;
         }
         deliver(
