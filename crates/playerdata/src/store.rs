@@ -240,27 +240,24 @@ impl Store {
     }
 }
 
-/// The vanilla file name of a UUID: the first three groups are written with
-/// their bytes reversed (`10920508-d5d8-3eed-...` →
-/// `08059210-d8d5-ed3e-...`).
+/// The vanilla file name of a UUID: the UUID's wire bytes in order, with
+/// dashes after the 4th, 6th and 8th byte. The first three groups are
+/// therefore reversed relative to the UUID string the game prints:
+/// `[10 92 05 08 d5 d8 3e ed ...]` (the wire bytes of
+/// `08059210-d8d5-ed3e-...`) is the file
+/// `10920508-d5d8-3eed-....dat`.
 ///
-/// SOURCE: the owner's real `.dat` files (`docs/PLAYERDATA.md` §1.1).
+/// SOURCE: the vanilla server's own files in
+/// `E:\MineRust-data\vanilla\world\players\data` (Alice `10920508-...`,
+/// Bob `faa5dca3-...`) and the frozen template's ParityBot file
+/// (`docs/PLAYERDATA.md` §1.1).
 pub fn file_name(uuid: Uuid) -> String {
     let mut name = String::with_capacity(36);
-    let reversed = [&uuid[0..4], &uuid[4..6], &uuid[6..8]];
-    for (index, group) in reversed.iter().enumerate() {
-        if index > 0 {
+    for (index, byte) in uuid.iter().enumerate() {
+        if index == 4 || index == 6 || index == 8 || index == 10 {
             name.push('-');
         }
-        for byte in group.iter().rev() {
-            push_hex(byte, &mut name);
-        }
-    }
-    for group in [&uuid[8..10], &uuid[10..16]] {
-        name.push('-');
-        for byte in group.iter() {
-            push_hex(byte, &mut name);
-        }
+        push_hex(byte, &mut name);
     }
     name
 }
@@ -605,8 +602,21 @@ mod tests {
     }
 
     #[test]
-    fn the_file_name_reverses_only_the_first_three_groups() {
-        assert_eq!(file_name(uuid()), "08059210-d8d5-ed3e-4d95-bc0c5b0c1f6f");
+    fn the_file_name_matches_the_vanilla_player_file() {
+        assert_eq!(file_name(uuid()), "10920508-d5d8-3eed-4d95-bc0c5b0c1f6f");
+
+        // The frozen template's ParityBot file, byte for byte:
+        // `players/data/ff1070c9-7b1a-3e30-a01e-89fe7a426681.dat`
+        // (docs/PLAYERDATA.md §1.1). `uuid()` above is the same shape for
+        // Alice's bytes, so this is the vanilla naming rule, not a round trip.
+        let parity_bot = [
+            0xff, 0x10, 0x70, 0xc9, 0x7b, 0x1a, 0x3e, 0x30, 0xa0, 0x1e, 0x89, 0xfe, 0x7a, 0x42,
+            0x66, 0x81,
+        ];
+        assert_eq!(
+            file_name(parity_bot),
+            "ff1070c9-7b1a-3e30-a01e-89fe7a426681"
+        );
     }
 
     #[test]
