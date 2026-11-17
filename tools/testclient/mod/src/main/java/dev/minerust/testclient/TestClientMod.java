@@ -33,6 +33,9 @@ public class TestClientMod implements ClientModInitializer {
 		new TeleportCommand(minecraft).register(dispatcher);
 		new ShapeReportCommand(minecraft).register(dispatcher);
 		new HardnessReportCommand(minecraft).register(dispatcher);
+		// Шаг 17b: diagnostic-only manual start/stop dig (never used by
+		// scenarios); measures when the vanilla server accepts a finish.
+		new DigPacketCommand(minecraft, ticks).register(dispatcher);
 		int port = Integer.getInteger("testclient.port", DEFAULT_PORT);
 		new ControlServer(port, dispatcher).start();
 		ClientTickEvents.END_CLIENT_TICK.register(client -> {
