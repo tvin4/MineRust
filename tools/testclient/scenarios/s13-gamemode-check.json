@@ -1,0 +1,10 @@
+{
+  "id": "s13-gamemode",
+  "title": "playerdata (step 19a): force_gamemode=false lets the saved playerGameType win",
+  "playerA": "Alice",
+  "playerB": "Bob",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "poseTolerance": 0.75,
+  "rotationTolerance": 1.5
+}

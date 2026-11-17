@@ -46,6 +46,17 @@ param(
 	# the generated server-ours.toml as hardness_report, which switches the
 	# survival dig timer on. It is never committed (E:\MineRust-data).
 	[string]$HardnessReport = '',
+	# Шаг 19a: the S13 checks run the release build (same sources, same
+	# recipe as S12) instead of target\debug.
+	[switch]$Release,
+	# Шаг 19a: player saves. The save root is written into the generated
+	# config; an empty value keeps the server's persistence off. The autosave
+	# period is in ticks (-1 leaves the config value).
+	[string]$OursSaveDir = '',
+	[int]$OursAutosaveTicks = -1,
+	# Шаг 19a: force_gamemode for the generated config ('' leaves it).
+	[ValidateSet('', 'true', 'false')]
+	[string]$OursForceGamemode = '',
 	[switch]$KeepStand
 )
 $ErrorActionPreference = 'Stop'
@@ -57,11 +68,12 @@ $vanillaDir = 'E:\MineRust-data\vanilla'
 $templateWorldDir = 'E:\MineRust-data\world-template-v3'
 $script:activeWorldDir = $null
 $serverJar = 'E:\MineRust-data\server.jar'
-$mcproxyExe = 'E:\projects\MineRust\target\debug\mcproxy.exe'
+$buildProfile = if ($Release) { 'release' } else { 'debug' }
+$mcproxyExe = "E:\projects\MineRust\target\$buildProfile\mcproxy.exe"
 # Stage G target: our own Rust server (workspace server.toml, listen patched
 # to 25566 because mcproxy reads its upstream port from the vanilla
 # server.properties).
-$serverExe = 'E:\projects\MineRust\target\debug\server.exe'
+$serverExe = "E:\projects\MineRust\target\$buildProfile\server.exe"
 $repoServerToml = 'E:\projects\MineRust\server.toml'
 $isVanilla = ($Target -eq 'vanilla')
 if (-not $RunDir) { $RunDir = Join-Path 'E:\MineRust-data\autotests' (Get-Date -Format 'yyyy-MM-dd_HHmm') }
@@ -305,6 +317,30 @@ function Start-Stand {
 				$config = $config.TrimEnd() + "`r`nhardness_report = `"$hardnessPath`"`r`n"
 			}
 		}
+		if ($OursSaveDir) {
+			# Player saves (Шаг 19a): the root is generated per run, never the
+			# template and never vanilla\world. Forward slashes, as above.
+			$savePath = $OursSaveDir -replace '\\', '/'
+			if ($config -match '(?m)^save_dir\s*=') {
+				$config = $config -replace '(?m)^save_dir\s*=.*$', "save_dir = `"$savePath`""
+			} else {
+				$config = $config.TrimEnd() + "`r`nsave_dir = `"$savePath`"`r`n"
+			}
+		}
+		if ($OursAutosaveTicks -ge 0) {
+			if ($config -match '(?m)^autosave_interval_ticks\s*=') {
+				$config = $config -replace '(?m)^autosave_interval_ticks\s*=.*$', "autosave_interval_ticks = $OursAutosaveTicks"
+			} else {
+				$config = $config.TrimEnd() + "`r`nautosave_interval_ticks = $OursAutosaveTicks`r`n"
+			}
+		}
+		if ($OursForceGamemode) {
+			if ($config -match '(?m)^force_gamemode\s*=') {
+				$config = $config -replace '(?m)^force_gamemode\s*=.*$', "force_gamemode = $OursForceGamemode"
+			} else {
+				$config = $config.TrimEnd() + "`r`nforce_gamemode = $OursForceGamemode`r`n"
+			}
+		}
 		$config | Set-Content $oursConfig -Encoding utf8
 		Start-Process -FilePath $serverExe -ArgumentList '--config', $oursConfig `
 			-WorkingDirectory (Split-Path -Parent $repoServerToml) `
@@ -375,6 +411,12 @@ function Invoke-StandRcon {
 # Returns { pid, uuid }. $Since guards against stale "joined" lines.
 function Start-Client {
 	param([string]$Nick, [int]$ControlPort, [datetime]$Since, [int]$TimeoutSec = 120)
+	# A previous client of the same nick may still be alive after `disconnect`
+	# (the game returns to the main menu instead of exiting) and holds its log
+	# files and natives DLLs. The server-side quit has already been waited for
+	# by the caller, so stopping the leftover process here is safe and makes
+	# the relaunch deterministic (S13 re-entry).
+	Stop-ClientByName $Nick
 	$out = & $launchScript -Nick $Nick -Address '127.0.0.1:25565' -ControlPort $ControlPort
 	$pidOut = [int]($out | Select-Object -Last 1)
 	$uuid = $null
@@ -2724,16 +2766,396 @@ function Invoke-S12 {
 	Start-Sleep -Seconds 3
 }
 
+# Шаг 19a: the effective game mode of the generated config.
+function Get-OursConfigMode {
+	$mode = 0
+	$path = Join-Path $RunDir 'server-ours.toml'
+	if (Test-Path -LiteralPath $path) {
+		$hit = Select-String -LiteralPath $path -Pattern '^\s*game_mode\s*=\s*(\d+)' | Select-Object -First 1
+		if ($hit) { $mode = [int]$hit.Matches[0].Groups[1].Value }
+	}
+	if ($OursGameMode -ge 0) { $mode = $OursGameMode }
+	return $mode
+}
+
+# Vanilla game mode id -> the name the test client's observe reports.
+function ConvertTo-GameModeName {
+	param([int]$Mode)
+	switch ($Mode) {
+		0 { return 'survival' }
+		1 { return 'creative' }
+		2 { return 'adventure' }
+		3 { return 'spectator' }
+		default { return "unknown($Mode)" }
+	}
+}
+
+# Waits until the file exists and its mtime is newer than $Since.
+function Wait-FileNewer {
+	param([string]$Path, [datetime]$Since, [int]$Seconds = 15)
+	$deadline = (Get-Date).AddSeconds($Seconds)
+	while ((Get-Date) -lt $deadline) {
+		if (Test-Path -LiteralPath $Path) {
+			if ((Get-Item -LiteralPath $Path).LastWriteTime -gt $Since) { return $true }
+		}
+		Start-Sleep -Milliseconds 250
+	}
+	return $false
+}
+
+# Waits until the client reports that it left the world. `disconnectFromWorld`
+# runs the client's own save screen first, so the server sees the quit a few
+# seconds after the command; a dead control server also counts as left.
+function Wait-ClientLeft {
+	param([int]$Port, [int]$Seconds = 25)
+	$deadline = (Get-Date).AddSeconds($Seconds)
+	while ((Get-Date) -lt $deadline) {
+		try {
+			$obs = Invoke-TestCmd $Port (New-ObserveCmd 'left-check') 2000
+			if ($obs.ok -and $obs.result.inGame -ne $true) { return $true }
+		} catch {
+			return $true
+		}
+		Start-Sleep -Milliseconds 500
+	}
+	return $false
+}
+
+# Horizontal distance between two traced/observed poses.
+function Get-XzDistance {
+	param($A, $B)
+	return [Math]::Sqrt([Math]::Pow($A.x - $B.x, 2) + [Math]::Pow($A.z - $B.z, 2))
+}
+
+# The trace of the one connection opened after $Since (the newest when more
+# than one exists); callers snapshot before a launch so exactly one is new.
+function Get-FreshTrace {
+	param([datetime]$Since)
+	$files = @(Get-NewTraceFiles $traceDir $Since)
+	if ($files.Count -eq 0) { return $null }
+	return $files[$files.Count - 1]
+}
+
+# S13 (Шаг 19a): playerdata on the live stand.
+function Invoke-S13 {
+	param($Cfg, $Result)
+	$portA = [int]$Cfg.controlPortA
+	$portB = [int]$Cfg.controlPortB
+	$nickA = [string]$Cfg.playerA
+	$nickB = [string]$Cfg.playerB
+	$poseTol = [double]$Cfg.poseTolerance
+	$rotTol = [double]$Cfg.rotationTolerance
+	$saveDir = $OursSaveDir
+	$configMode = Get-OursConfigMode
+
+	$templateBefore = Get-TreeFingerprint $templateWorldDir
+	$vanillaWorld = Join-Path $vanillaDir 'world'
+	$vanillaBefore = Get-TreeFingerprint $vanillaWorld
+	$script:s7Facts.Add("S13 save_dir: $saveDir")
+	$script:s7Facts.Add("S13 config game_mode: $configMode; force_gamemode: '$OursForceGamemode'; autosave: $OursAutosaveTicks ticks")
+
+	# --- first session: join, walk, turn, autosave while connected ----------
+	$watermark = Get-Date
+	$launchA = Start-Client $nickA $portA $watermark
+	if (-not $launchA.uuid) { throw 'S13: could not resolve Alice offline UUID' }
+	$uuidBytes = ConvertTo-NetworkUuidBytes ([guid]::Parse($launchA.uuid))
+	$playerFile = Get-PlayerDataPath $saveDir $launchA.uuid
+	$entry1 = (Invoke-TestCmd $portA (New-ObserveCmd 's13-entry')).result
+	$script:s7Facts.Add(("S13 entry: pos=({0},{1},{2}) yaw={3} pitch={4}" -f $entry1.pos.x, $entry1.pos.y, $entry1.pos.z, $entry1.rot.yaw, $entry1.rot.pitch))
+
+	$null = Invoke-TestCmd $portA (New-KeyCmd 's13-walk-on' 'up' 'down')
+	Start-Sleep -Milliseconds ([int]$Cfg.walkMs)
+	$null = Invoke-TestCmd $portA (New-KeyCmd 's13-walk-off' 'up' 'up')
+	$null = Invoke-TestCmd $portA (New-LookCmd 's13-look' ([int]$Cfg.lookDx) ([int]$Cfg.lookDy))
+	Start-Sleep -Milliseconds 500
+	$moved = (Invoke-TestCmd $portA (New-ObserveCmd 's13-moved')).result
+	$walked = Get-XzDistance $moved.pos $entry1.pos
+	Add-Check $Result 'S13: Alice moved and turned before the save' ($walked -gt 0.5 -and [Math]::Abs($moved.rot.yaw) -gt 1.0 -and [Math]::Abs($moved.rot.pitch) -gt 1.0) `
+		("walked={0:N2} pos=({1},{2},{3}) yaw={4} pitch={5}" -f $walked, $moved.pos.x, $moved.pos.y, $moved.pos.z, $moved.rot.yaw, $moved.rot.pitch)
+	$script:s7Facts.Add(("S13 moved: pos=({0},{1},{2}) yaw={3} pitch={4} walked={5:N2}" -f $moved.pos.x, $moved.pos.y, $moved.pos.z, $moved.rot.yaw, $moved.rot.pitch, $walked))
+
+	# Autosave (interval 200 ticks): the file must appear while A is still
+	# connected, and the server must still answer. The autosave of a shared
+	# tick counter may fire while the walk is still going on, so the check
+	# waits for a write strictly newer than the observation: by then Alice
+	# stands still and the file has to carry the observed pose.
+	$movedAt = Get-Date
+	$autoSeen = Wait-FileNewer $playerFile $movedAt 30
+	$alive = $false
+	try { $alive = ((Invoke-TestCmd $portA (New-ObserveCmd 's13-autosave-alive') 3000).result.inGame -eq $true) } catch { }
+	$autoFacts = $null
+	if ($autoSeen) {
+		$autoFacts = Get-PlayerNbtFacts $playerFile
+	}
+	$autoMatches = $false
+	if ($autoFacts -and $autoFacts.pos) {
+		$autoPose = [PSCustomObject]@{ x = $autoFacts.pos[0]; y = $autoFacts.pos[1]; z = $autoFacts.pos[2] }
+		$autoMatches = ((Get-XzDistance $autoPose $moved.pos) -le $poseTol)
+	}
+	$autoText = ("file={0} exists, server alive={1}, pose matches the moved pose={2}" -f $playerFile, $alive, $autoMatches)
+	if ($autoFacts) { $autoText += '; Pos=(' + ($autoFacts.pos -join ',') + ')' } else { $autoText += '; no facts' }
+	Add-Check $Result 'S13 (3): autosave wrote the file while Alice was connected' ($autoSeen -and $alive -and $autoMatches) $autoText
+	if ($autoFacts) { $script:s7Facts.Add(("S13 autosave: Pos=({0}) Rotation=({1}) Health={2} foodLevel={3} DataVersion={4} playerGameType={5}" -f ($autoFacts.pos -join ','), ($autoFacts.rotation -join ','), $autoFacts.health, $autoFacts.foodLevel, $autoFacts.dataVersion, $autoFacts.gameType)) }
+
+	# --- quit: the same pose is left in the file ---------------------------
+	$beforeQuit = (Invoke-TestCmd $portA (New-ObserveCmd 's13-before-quit')).result
+	$quitAt = Get-Date
+	$null = Invoke-TestCmd $portA (New-SessionCmd 's13-off' 'disconnect')
+	$left = Wait-ClientLeft $portA 25
+	$written = Wait-FileNewer $playerFile $quitAt 20
+	Add-Check $Result 'S13: the quit wrote the player file' $written `
+		("{0} (client left={1}, autosave {2} ticks)" -f $playerFile, $left, $OursAutosaveTicks)
+	if (-not $written) { return }
+	$saved = Get-PlayerNbtFacts $playerFile
+	if (-not $saved.pos) { Add-Check $Result 'S13: the file carries Pos' $false 'no Pos tag'; return }
+	$savedPose = [PSCustomObject]@{ x = $saved.pos[0]; y = $saved.pos[1]; z = $saved.pos[2] }
+	$quitPose = [PSCustomObject]@{ x = $beforeQuit.pos.x; y = $beforeQuit.pos.y; z = $beforeQuit.pos.z }
+	$posError = Get-XzDistance $savedPose $quitPose
+	$yawError = [Math]::Abs([double]$saved.rotation[0] - [double]$beforeQuit.rot.yaw)
+	$pitchError = [Math]::Abs([double]$saved.rotation[1] - [double]$beforeQuit.rot.pitch)
+	Add-Check $Result 'S13: the saved pose and rotation match the session' ($posError -le $poseTol -and $yawError -le $rotTol -and $pitchError -le $rotTol) `
+		("Pos file=({0},{1},{2}) observed=({3},{4},{5}) dxz={6:N3}; yaw file={7} observed={8} d={9:N3}; pitch file={10} observed={11} d={12:N3}; tolerances pose={13} rot={14}" -f `
+			$saved.pos[0], $saved.pos[1], $saved.pos[2], $beforeQuit.pos.x, $beforeQuit.pos.y, $beforeQuit.pos.z, $posError, `
+			$saved.rotation[0], $beforeQuit.rot.yaw, $yawError, $saved.rotation[1], $beforeQuit.rot.pitch, $pitchError, $poseTol, $rotTol)
+	$fields = ("Pos=({0}) Rotation=({1}) Health={2} foodLevel={3} foodSaturationLevel={4} DataVersion={5} playerGameType={6} Dimension={7} OnGround={8}" -f `
+		($saved.pos -join ','), ($saved.rotation -join ','), $saved.health, $saved.foodLevel, $saved.saturation, $saved.dataVersion, $saved.gameType, $saved.dimension, $saved.onGround)
+	$script:s7Facts.Add("S13 saved file: $fields")
+	Add-Check $Result 'S13: the file has the expected schema fields' ($saved.dataVersion -ne $null -and $saved.gameType -ne $null -and $saved.health -ne $null -and $saved.foodLevel -ne $null) $fields
+
+	# (1) force_gamemode=true: make the file disagree, then check the join
+	# takes the configured mode.
+	Set-PlayerNbtInt $playerFile 'playerGameType' 2
+	$patched = Get-PlayerNbtFacts $playerFile
+	$script:s7Facts.Add("S13 force check: playerGameType patched to $($patched.gameType), configured mode $configMode")
+	Start-Sleep -Seconds 2
+
+	$rejoinAt = Get-Date
+	$launchA2 = Start-Client $nickA $portA $rejoinAt
+	Start-Sleep -Seconds 2
+	$aTrace = Get-FreshTrace $rejoinAt
+	if (-not $aTrace) { Add-Check $Result 'S13: the re-entry trace was captured' $false 'no fresh proxy trace'; return }
+	$aRows = Read-Trace $aTrace.FullName
+	$entry = Get-TracePlayerPosition $aRows
+	$rejoin = (Invoke-TestCmd $portA (New-ObserveCmd 's13-rejoin')).result
+	$modeName = [string]$rejoin.gameMode
+	$entryPos = if ($entry) { [PSCustomObject]@{ x = $entry.x; y = $entry.y; z = $entry.z } } else { $null }
+	$entryError = if ($entryPos) { Get-XzDistance $entryPos $savedPose } else { [double]::PositiveInfinity }
+	$entryYaw = if ($entry) { [Math]::Abs([double]$entry.yaw - [double]$saved.rotation[0]) } else { [double]::PositiveInfinity }
+	$entryPitch = if ($entry) { [Math]::Abs([double]$entry.pitch - [double]$saved.rotation[1]) } else { [double]::PositiveInfinity }
+	Add-Check $Result 'S13: the re-entry teleports to the saved pose and rotation' ($entry -ne $null -and $entryError -le 0.01 -and $entryYaw -le 0.01 -and $entryPitch -le 0.01) `
+		("player_position=({0},{1},{2}) yaw={3} pitch={4}; saved=({5},{6},{7}) yaw={8} pitch={9}; dxz={10:N4}" -f `
+			$(if ($entry) { $entry.x } else { 'none' }), $(if ($entry) { $entry.y } else { 'none' }), $(if ($entry) { $entry.z } else { 'none' }), `
+			$(if ($entry) { $entry.yaw } else { 'none' }), $(if ($entry) { $entry.pitch } else { 'none' }), `
+			$saved.pos[0], $saved.pos[1], $saved.pos[2], $saved.rotation[0], $saved.rotation[1], $entryError)
+	$script:s7Facts.Add(("S13 re-entry: player_position=({0}) yaw={1} pitch={2}, client gameMode={3}" -f $(if ($entry) { "$($entry.x),$($entry.y),$($entry.z)" } else { 'none' }), $(if ($entry) { $entry.yaw } else { 'none' }), $(if ($entry) { $entry.pitch } else { 'none' }), $modeName))
+	Add-Check $Result 'S13 (1, force_gamemode=true): the configured mode wins over the file' ($modeName -eq (ConvertTo-GameModeName $configMode)) `
+		("client gameMode={0}, configured={1}, file playerGameType={2}" -f $modeName, (ConvertTo-GameModeName $configMode), $patched.gameType)
+
+	# --- B joins later and sees A in the saved pose -------------------------
+	$bWatermark = Get-Date
+	$launchB = Start-Client $nickB $portB $bWatermark
+	Start-Sleep -Seconds 2
+	$bTrace = Get-FreshTrace $bWatermark
+	if (-not $bTrace) { Add-Check $Result 'S13: the B trace was captured' $false 'no fresh proxy trace'; return }
+	$bRows = Read-Trace $bTrace.FullName
+	$spawn = Get-TraceAddEntityPos $bRows $uuidBytes
+	$spawnError = if ($spawn) { Get-XzDistance ([PSCustomObject]@{ x = $spawn.x; y = $spawn.y; z = $spawn.z }) $savedPose } else { [double]::PositiveInfinity }
+	Add-Check $Result 'S13: B sees A at the saved pose' ($spawn -ne $null -and $spawnError -le 0.05) `
+		("add_entity seq={0} pos=({1},{2},{3}); saved=({4},{5},{6}); dxz={7:N3}" -f $spawn.seq, $(if ($spawn) { $spawn.x } else { 'none' }), $(if ($spawn) { $spawn.y } else { 'none' }), $(if ($spawn) { $spawn.z } else { 'none' }), $saved.pos[0], $saved.pos[1], $saved.pos[2], $spawnError)
+	$script:s7Facts.Add(("S13 B add_entity: seq={0} pos=({1},{2},{3})" -f $(if ($spawn) { $spawn.seq } else { 'none' }), $(if ($spawn) { $spawn.x } else { 'none' }), $(if ($spawn) { $spawn.y } else { 'none' }), $(if ($spawn) { $spawn.z } else { 'none' })))
+
+	# (5) autosave cost while two players are online. The tick only snapshots
+	# and enqueues (`autosave queued`: save_us + players); the disk write is on
+	# the writer thread. The tick phase lines are reported as context only:
+	# `late_ms` is dominated by the OS wake-up delay and by chunk/entity batch
+	# delivery when the clients join, not by the save.
+	Start-Sleep -Seconds 12
+	$autosaveLines = @(Select-String -LiteralPath $oursLog -Pattern 'autosave queued' -ErrorAction SilentlyContinue)
+	$plainAutosave = @($autosaveLines | ForEach-Object { $_.Line -replace '\x1b\[[0-9;]*m', '' })
+	$autosaves = @($plainAutosave | ForEach-Object {
+		$u = [regex]::Match($_, 'save_us=(\d+)')
+		$p = [regex]::Match($_, 'players=(\d+)')
+		if ($u.Success -and $p.Success) {
+			[pscustomobject]@{ us = [int]$u.Groups[1].Value; players = [int]$p.Groups[1].Value }
+		}
+	})
+	$twoPlayer = @($autosaves | Where-Object { $_.players -ge 2 })
+	$maxSaveUs = if ($autosaves.Count -gt 0) { [int](($autosaves | Measure-Object us -Maximum).Maximum) } else { -1 }
+	$maxTwoUs = if ($twoPlayer.Count -gt 0) { [int](($twoPlayer | Measure-Object us -Maximum).Maximum) } else { -1 }
+	# The measurement is wall clock, so the OS preempting the tick thread (the
+	# runner shares the machine with two Java clients and the proxy) shows up
+	# as a spike; the median is the honest typical cost, the max is reported.
+	$medianTwoUs = if ($twoPlayer.Count -gt 0) { @($twoPlayer | Sort-Object us)[[int]($twoPlayer.Count / 2)].us } else { -1 }
+	$queueFull = Select-String -LiteralPath $oursLog -Pattern 'player save queue is full' -Quiet -ErrorAction SilentlyContinue
+	$phaseLines = @(Select-String -LiteralPath $oursLog -Pattern 'tick phases|tick woke late' -ErrorAction SilentlyContinue)
+	# The tracing writer colours the field names (`late_ms\e[0m\e[2m=\e[0m80.1`),
+	# so the SGR sequences are stripped before matching. The escape byte itself
+	# must go too: `\[[0-9;]*m` alone leaves `\e` between the name and `=`, and
+	# every value parsed as 0 (S13 r4/r5).
+	$plainLines = @($phaseLines | ForEach-Object { $_.Line -replace '\x1b\[[0-9;]*m', '' })
+	$lateValues = @($plainLines | ForEach-Object {
+		$m = [regex]::Match($_, 'late_ms=([0-9.]+)')
+		if ($m.Success) { [double]$m.Groups[1].Value }
+	})
+	$phaseTotals = @($plainLines | ForEach-Object {
+		$m = [regex]::Match($_, 'phases_total_us=(\d+)')
+		if ($m.Success) { [int]$m.Groups[1].Value }
+	})
+	$maxLate = if ($lateValues.Count -gt 0) { ($lateValues | Measure-Object -Maximum).Maximum } else { 0.0 }
+	$maxPhase = if ($phaseTotals.Count -gt 0) { [int](($phaseTotals | Measure-Object -Maximum).Maximum) } else { 0 }
+	$script:s7Facts.Add(("S13 (5) autosave: {0} queued, {1} with two players, tick-side save_us median={2}, max={3}, max over all={4} (budget 5000 us); phase/late lines={5}, max late_ms={6:N3}, max phases_total_us={7} (context)" -f $autosaveLines.Count, $twoPlayer.Count, $medianTwoUs, $maxTwoUs, $maxSaveUs, $phaseLines.Count, $maxLate, $maxPhase))
+	Add-Check $Result 'S13 (5): the autosave only enqueues, the tick does no disk work' ($twoPlayer.Count -gt 0 -and $maxTwoUs -le 5000 -and -not $queueFull) `
+		("autosave lines={0}, with two players={1}, tick-side save_us median={2}, max={3}, max over all={4} (budget 5000 us), queue full={5}; phase/late lines={6}, max phases_total_us={7} (context)" -f $autosaveLines.Count, $twoPlayer.Count, $medianTwoUs, $maxTwoUs, $maxSaveUs, $queueFull, $phaseLines.Count, $maxPhase)
+
+	$null = Invoke-TestCmd $portA (New-SessionCmd 's13-off2' 'disconnect')
+	$null = Invoke-TestCmd $portB (New-SessionCmd 's13-offb' 'disconnect')
+	Start-Sleep -Seconds 3
+
+	# (2) corrupt file: the join falls back to the spawn with a warning.
+	[IO.File]::WriteAllBytes($playerFile, [byte[]](1..16))
+	$corruptAt = Get-Date
+	$launchA3 = Start-Client $nickA $portA $corruptAt
+	Start-Sleep -Seconds 2
+	$corrupt = (Invoke-TestCmd $portA (New-ObserveCmd 's13-corrupt-entry')).result
+	$spawnPose = [PSCustomObject]@{ x = $entry1.pos.x; y = $entry1.pos.y; z = $entry1.pos.z }
+	$toSpawn = Get-XzDistance $corrupt.pos $spawnPose
+	$toSaved = Get-XzDistance $corrupt.pos $savedPose
+	$warned = Select-String -LiteralPath $oursLog -Pattern 'could not read the player file' -Quiet -ErrorAction SilentlyContinue
+	Add-Check $Result 'S13 (2): a corrupt file joins at the spawn with a warning' ($toSpawn -le 1.0 -and $toSaved -gt 3.0 -and $warned) `
+		("entry=({0},{1},{2}) spawn=({3},{4},{5}) dxz_spawn={6:N2} dxz_saved={7:N2} warn={8}" -f `
+			$corrupt.pos.x, $corrupt.pos.y, $corrupt.pos.z, $entry1.pos.x, $entry1.pos.y, $entry1.pos.z, $toSpawn, $toSaved, $warned)
+	$script:s7Facts.Add(("S13 corrupt: entry=({0},{1},{2}) dxz_spawn={3:N2} dxz_saved={4:N2} warn={5}" -f $corrupt.pos.x, $corrupt.pos.y, $corrupt.pos.z, $toSpawn, $toSaved, $warned))
+	$null = Invoke-TestCmd $portA (New-SessionCmd 's13-off3' 'disconnect')
+	Start-Sleep -Seconds 3
+
+	# --- template and vanilla world untouched ------------------------------
+	$templateAfter = Get-TreeFingerprint $templateWorldDir
+	$vanillaAfter = Get-TreeFingerprint $vanillaWorld
+	$templateDiff = @(Compare-Object $templateBefore $templateAfter)
+	$vanillaDiff = @(Compare-Object $vanillaBefore $vanillaAfter)
+	Add-Check $Result 'S13: the world template is unchanged (SHA-256)' ($templateDiff.Count -eq 0) `
+		("files={0}, changed={1}" -f $templateAfter.Count, $templateDiff.Count)
+	Add-Check $Result 'S13: vanilla\world is unchanged (SHA-256)' ($vanillaDiff.Count -eq 0) `
+		("files={0}, changed={1}" -f $vanillaAfter.Count, $vanillaDiff.Count)
+	$script:s7Facts.Add(("S13 hashes: template files={0} changed={1}; vanilla world files={2} changed={3}" -f $templateAfter.Count, $templateDiff.Count, $vanillaAfter.Count, $vanillaDiff.Count))
+}
+
+# S13-stop (Шаг 19a): a graceful stop flushes the last snapshot.
+function Invoke-S13Stop {
+	param($Cfg, $Result)
+	$portA = [int]$Cfg.controlPortA
+	$nickA = [string]$Cfg.playerA
+	$poseTol = [double]$Cfg.poseTolerance
+	$saveDir = $OursSaveDir
+
+	$watermark = Get-Date
+	$launchA = Start-Client $nickA $portA $watermark
+	if (-not $launchA.uuid) { throw 'S13 stop: could not resolve Alice offline UUID' }
+	$playerFile = Get-PlayerDataPath $saveDir $launchA.uuid
+	$null = Invoke-TestCmd $portA (New-KeyCmd 's13s-walk-on' 'up' 'down')
+	Start-Sleep -Milliseconds 900
+	$null = Invoke-TestCmd $portA (New-KeyCmd 's13s-walk-off' 'up' 'up')
+	$null = Invoke-TestCmd $portA (New-LookCmd 's13s-look' 120 30)
+	Start-Sleep -Milliseconds 500
+	$last = (Invoke-TestCmd $portA (New-ObserveCmd 's13s-last')).result
+	Start-Sleep -Seconds 2
+
+	# The server stops on CTRL_CLOSE_EVENT: taskkill without /F posts the
+	# window close to its console, which is the signal the server waits for.
+	$stopAt = Get-Date
+	$taskkill = & taskkill /PID $script:oursPid 2>&1 | Out-String
+	$deadline = (Get-Date).AddSeconds(25)
+	while ((Get-Date) -lt $deadline -and (Get-Process -Id $script:oursPid -ErrorAction SilentlyContinue)) {
+		Start-Sleep -Milliseconds 300
+	}
+	$exited = -not (Get-Process -Id $script:oursPid -ErrorAction SilentlyContinue)
+	$flushed = Select-String -LiteralPath $oursLog -Pattern 'player saves flushed' -Quiet -ErrorAction SilentlyContinue
+	Add-Check $Result 'S13 (4): the server stopped gracefully on the close signal' ($exited -and $flushed) `
+		("exited={0} flushed line={1}; taskkill='{2}'" -f $exited, $flushed, $taskkill.Trim())
+	if (-not $exited) {
+		$script:s7Facts.Add('S13 stop: the close signal did not stop the server; no hard kill fallback was used for a flush check')
+		return
+	}
+	$written = Wait-FileNewer $playerFile $stopAt 5
+	$saved = if (Test-Path -LiteralPath $playerFile) { Get-PlayerNbtFacts $playerFile } else { $null }
+	$stopPose = [PSCustomObject]@{ x = $last.pos.x; y = $last.pos.y; z = $last.pos.z }
+	$savedPose = if ($saved -and $saved.pos) { [PSCustomObject]@{ x = $saved.pos[0]; y = $saved.pos[1]; z = $saved.pos[2] } } else { $null }
+	$error = if ($savedPose) { Get-XzDistance $savedPose $stopPose } else { [double]::PositiveInfinity }
+	Add-Check $Result 'S13 (4): the last snapshot survived the stop' ($written -and $saved -ne $null -and $error -le $poseTol) `
+		("file newer than the stop={0}; saved Pos=({1}) last observed=({2},{3},{4}); dxz={5:N3}" -f $written, $(if ($saved) { $saved.pos -join ',' } else { 'none' }), $last.pos.x, $last.pos.y, $last.pos.z, $error)
+	$script:s7Facts.Add(("S13 stop: file newer={0} saved=({1}) last=({2},{3},{4}) dxz={5:N3}" -f $written, $(if ($saved) { $saved.pos -join ',' } else { 'none' }), $last.pos.x, $last.pos.y, $last.pos.z, $error))
+	$script:oursPid = $null
+}
+
+# S13-gamemode (Шаг 19a): force_gamemode=false lets the file decide.
+function Invoke-S13Gamemode {
+	param($Cfg, $Result)
+	$portA = [int]$Cfg.controlPortA
+	$nickA = [string]$Cfg.playerA
+	$saveDir = $OursSaveDir
+	$configMode = Get-OursConfigMode
+
+	# The server reads the player file during login, so the file must disagree
+	# with the config (adventure 2 vs survival 0) *before* the client joins.
+	# The file name comes from the offline UUID (Bob's file is in the same
+	# directory after the s13 run, so "the only .dat" is not unique).
+	$playerFile = Join-Path (Join-Path $saveDir 'players\data') (Get-OfflinePlayerFileName $nickA)
+	if (-not (Test-Path -LiteralPath $playerFile)) {
+		Add-Check $Result 'S13 (1, force_gamemode=false): the saved file exists' $false $playerFile
+		return
+	}
+	Set-PlayerNbtInt $playerFile 'playerGameType' 2
+	$fileFacts = Get-PlayerNbtFacts $playerFile
+
+	$watermark = Get-Date
+	$launchA = Start-Client $nickA $portA $watermark
+	if (-not $launchA.uuid) { throw 'S13 gamemode: could not resolve Alice offline UUID' }
+	$aTrace = Get-FreshTrace $watermark
+	if (-not $aTrace) { Add-Check $Result 'S13 gamemode: trace captured' $false 'no fresh proxy trace'; return }
+	$gamemodeObs = (Invoke-TestCmd $portA (New-ObserveCmd 's13g-mode')).result
+	$modeName = [string]$gamemodeObs.gameMode
+	Add-Check $Result 'S13 (1, force_gamemode=false): the file mode wins' ($modeName -eq (ConvertTo-GameModeName ([int]$fileFacts.gameType)) -and $modeName -ne (ConvertTo-GameModeName $configMode)) `
+		("client gameMode={0}, file playerGameType={1}, configured={2}" -f $modeName, $fileFacts.gameType, (ConvertTo-GameModeName $configMode))
+	$script:s7Facts.Add(("S13 gamemode: client gameMode={0}, file mode={1}, configured={2}" -f $modeName, $fileFacts.gameType, (ConvertTo-GameModeName $configMode)))
+	$null = Invoke-TestCmd $portA (New-SessionCmd 's13g-off' 'disconnect')
+	Start-Sleep -Seconds 2
+}
+
 $scenarioDir = Join-Path $here 'scenarios'
 $allResults = @()
 try {
 	Prepare-RunWorld
+	if (-not $isVanilla -and (($Scenarios -contains 's13') -or ($Scenarios -contains 's13-stop') -or ($Scenarios -contains 's13-gamemode'))) {
+		# Шаг 19a: the player save root lives inside the run directory. The
+		# gamemode variant reuses the directory of the preceding s13 run, so
+		# its file (with the patched mode) is still there.
+		if (-not $OursSaveDir) {
+			if (($Scenarios -contains 's13-gamemode') -or ($Scenarios -contains 's13-stop')) {
+				throw '-OursSaveDir is required for this scenario (point it at the s13 run save root)'
+			}
+			$OursSaveDir = Join-Path $RunDir 'save'
+		}
+		$saveFull = [IO.Path]::GetFullPath($OursSaveDir)
+		foreach ($forbidden in @($templateWorldDir, (Join-Path $vanillaDir 'world'))) {
+			$forbiddenFull = [IO.Path]::GetFullPath($forbidden)
+			if ($saveFull.Equals($forbiddenFull, [StringComparison]::OrdinalIgnoreCase) -or
+				$saveFull.StartsWith($forbiddenFull + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+				throw "refusing save_dir inside $forbidden (template/world is read-only)"
+			}
+		}
+		if ($OursAutosaveTicks -lt 0) { $OursAutosaveTicks = 200 }
+		Write-Host ("player saves: {0} (autosave {1} ticks, force_gamemode '{2}')" -f $OursSaveDir, $OursAutosaveTicks, $OursForceGamemode)
+	}
 	if (-not $isVanilla -and $OursDevGeometry -and (($Scenarios -contains 's10') -or ($Scenarios -contains 's11') -or ($Scenarios -contains 's12') -or ($Scenarios -contains 's14'))) {
 		Write-DevGeometryFile $OursDevGeometry
 	}
 	Start-Stand
 	foreach ($id in $Scenarios) {
-		$file = Get-ChildItem $scenarioDir -Filter "$id-*.json" | Select-Object -First 1
+		# The scenario id in the file is authoritative: `s13-stop` must not be
+		# picked by a prefix filter for `s13`.
+		$file = Get-ChildItem $scenarioDir -Filter '*.json' |
+			Where-Object { ((Get-Content $_.FullName -Raw | ConvertFrom-Json).id) -eq $id } |
+			Select-Object -First 1
 		if (-not $file) { throw "no scenario file for '$id' in $scenarioDir" }
 		$cfg = Get-Content $file.FullName -Raw | ConvertFrom-Json
 		Write-Host ("=== {0}: {1} ===" -f $cfg.id, $cfg.title)
@@ -2766,6 +3188,9 @@ try {
 			's11' { Invoke-S11 $cfg $result }
 			's12' { Invoke-S12 $cfg $result }
 			's14' { Invoke-S14 $cfg $result }
+			's13' { Invoke-S13 $cfg $result }
+			's13-stop' { Invoke-S13Stop $cfg $result }
+			's13-gamemode' { Invoke-S13Gamemode $cfg $result }
 			default { throw "unknown scenario '$($cfg.id)'" }
 		}
 		Stop-ClientByName $cfg.playerA

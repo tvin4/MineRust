@@ -1,0 +1,13 @@
+{
+  "id": "s13-stop",
+  "title": "playerdata (step 19a): a graceful server stop flushes the last snapshot",
+  "playerA": "Alice",
+  "playerB": "Bob",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "walkMs": 900,
+  "lookDx": 120,
+  "lookDy": 30,
+  "poseTolerance": 0.75,
+  "rotationTolerance": 1.5
+}

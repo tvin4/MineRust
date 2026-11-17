@@ -162,9 +162,26 @@ $classpath.Add($ClientJar)
 # .dll payload of the jars is extracted; no code is read or shipped.
 if (-not (Test-Path $NativesRoot)) { New-Item -ItemType Directory -Path $NativesRoot | Out-Null }
 $nativesDir = Join-Path $NativesRoot $Nick
-if (Test-Path $nativesDir) { Remove-Item -Recurse -Force $nativesDir }
+# A previous client of the same nick may still be shutting down and hold the
+# jna*/lwjgl* DLLs open, which makes the delete fail. The DLLs belong to the
+# same game version and extraction below overwrites them, so a locked
+# directory is reused instead of aborting the run (S13 relaunch).
+if (Test-Path $nativesDir) {
+    for ($try = 1; $try -le 3; $try++) {
+        try {
+            Remove-Item -Recurse -Force $nativesDir -ErrorAction Stop
+            break
+        } catch {
+            if ($try -eq 3) {
+                Write-Warning "natives dir is locked by a running client, reusing it: $nativesDir"
+            } else {
+                Start-Sleep -Milliseconds 700
+            }
+        }
+    }
+}
 foreach ($sub in 'java', 'jna', 'lwjgl', 'netty') {
-    New-Item -ItemType Directory -Path (Join-Path $nativesDir $sub) | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $nativesDir $sub) -Force | Out-Null
 }
 $nativesJava = Join-Path $nativesDir 'java'
 Add-Type -AssemblyName System.IO.Compression.FileSystem

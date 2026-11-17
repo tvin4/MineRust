@@ -32,6 +32,27 @@ function Invoke-TestCmd {
 	}
 }
 
+# The vanilla playerdata file name of a nick (Шаг 19a). The UUID is the
+# offline one (MD5("OfflinePlayer:<name>") with the version-3 and RFC 4122
+# bits); the file name is those 16 bytes in order with dashes after the 4th,
+# 6th and 8th byte — the same rule `playerdata::file_name` uses, and the
+# reason it is *not* the string the launcher prints (that one is a .NET GUID,
+# whose first three groups are reversed). Scenarios that must patch the file
+# *before* the client joins need this without a launch.
+function Get-OfflinePlayerFileName {
+	param([string]$Name)
+	$md5 = [System.Security.Cryptography.MD5]::Create()
+	try {
+		$bytes = $md5.ComputeHash([Text.Encoding]::UTF8.GetBytes("OfflinePlayer:$Name"))
+	} finally {
+		$md5.Dispose()
+	}
+	$bytes[6] = [byte](($bytes[6] -band 0x0F) -bor 0x30)
+	$bytes[8] = [byte](($bytes[8] -band 0x3F) -bor 0x80)
+	$hex = -join ($bytes | ForEach-Object { $_.ToString('x2') })
+	return '{0}-{1}-{2}-{3}-{4}.dat' -f $hex.Substring(0, 8), $hex.Substring(8, 4), $hex.Substring(12, 4), $hex.Substring(16, 4), $hex.Substring(20, 12)
+}
+
 # Maps a player UUID to the 26.3 playerdata file name: the first three
 # UUID groups are byte-reversed in the file name (verified on Alice/Bob:
 # 08059210-d8d5-ed3e-... -> 10920508-d5d8-3eed-...). The file lives in
@@ -59,9 +80,29 @@ function Get-PlayerDataPath {
 function Read-Trace {
 	param([string]$Path)
 	$text = Get-Content $Path -Raw
-	$lines = $text -split "`n" | Where-Object { $_.Trim() }
+	$lines = @($text -split "`n" | Where-Object { $_.Trim() })
+	# The proxy appends while the scenario runs (S13 reads the trace of a
+	# client that is still connected), so the last line may be cut mid-JSON.
+	# Drop it: one packet less is fine, a truncated array throws and its
+	# message embeds the whole base64 payload (S13 r3: 40 MB of text).
+	while ($lines.Count -gt 0 -and -not $lines[-1].TrimEnd().EndsWith('}')) {
+		$lines = @($lines | Select-Object -First ($lines.Count - 1))
+	}
 	if ($lines.Count -eq 0) { return @() }
-	return @(('[' + ($lines -join ',') + ']') | ConvertFrom-Json)
+	# A cut can also land on a nested '}' of a half-written line, so the
+	# trailing-line drop is retried a few times before failing.
+	for ($attempt = 0; $attempt -lt 4; $attempt++) {
+		try {
+			return @(('[' + ($lines -join ',') + ']') | ConvertFrom-Json)
+		} catch {
+			$message = $_.Exception.Message
+			if ($attempt -eq 3 -or $lines.Count -eq 0) {
+				throw "trace '$Path' is not valid JSONL ($($lines.Count) lines): $($message.Substring(0, [Math]::Min(200, $message.Length)))"
+			}
+			$lines = @($lines | Select-Object -First ($lines.Count - 1))
+		}
+	}
+	return @()
 }
 
 # Counts serverbound rows whose name matches the pattern (regex).
@@ -373,4 +414,227 @@ function Get-TraceBlockRows {
 		$rows.Add([PSCustomObject]$out) | Out-Null
 	}
 	return $rows
+}
+
+# --- playerdata NBT (test side) --------------------------------------------
+# The player file is a gzipped named compound (the vanilla form). These
+# helpers read it structurally so the scenario can show the fields the step
+# promises (Pos, Rotation, Health, foodLevel, DataVersion, playerGameType)
+# without adding a binary dependency to the test runner.
+
+# Big-endian fixed-width value copied into a little-endian .NET buffer.
+function ConvertFrom-BigEndian {
+	param([byte[]]$Data, [int]$Offset, [int]$Length)
+	$tmp = New-Object byte[] $Length
+	for ($i = 0; $i -lt $Length; $i++) { $tmp[$i] = $Data[$Offset + $Length - 1 - $i] }
+	return , $tmp
+}
+
+# Reads one tag payload by NBT type; unknown types are a hard error (the file
+# must be fully understood or the check is not a check).
+function Read-NbtPayload {
+	param([byte[]]$Data, [int]$Type, [ref]$Pos, [int]$Depth = 0)
+	if ($Depth -gt 64) { throw 'NBT nesting deeper than 64' }
+	switch ($Type) {
+		1 { $v = [sbyte]$Data[$Pos.Value]; $Pos.Value += 1; return $v }
+		2 { $v = [BitConverter]::ToInt16((ConvertFrom-BigEndian $Data $Pos.Value 2), 0); $Pos.Value += 2; return $v }
+		3 { $v = [BitConverter]::ToInt32((ConvertFrom-BigEndian $Data $Pos.Value 4), 0); $Pos.Value += 4; return $v }
+		4 { $v = [BitConverter]::ToInt64((ConvertFrom-BigEndian $Data $Pos.Value 8), 0); $Pos.Value += 8; return $v }
+		5 { $v = [BitConverter]::ToSingle((ConvertFrom-BigEndian $Data $Pos.Value 4), 0); $Pos.Value += 4; return $v }
+		6 { $v = [BitConverter]::ToDouble((ConvertFrom-BigEndian $Data $Pos.Value 8), 0); $Pos.Value += 8; return $v }
+		7 {
+			$len = [BitConverter]::ToInt32((ConvertFrom-BigEndian $Data $Pos.Value 4), 0); $Pos.Value += 4
+			$v = New-Object byte[] $len
+			[Array]::Copy($Data, $Pos.Value, $v, 0, $len); $Pos.Value += $len
+			return , $v
+		}
+		8 {
+			$len = [BitConverter]::ToUInt16((ConvertFrom-BigEndian $Data $Pos.Value 2), 0); $Pos.Value += 2
+			$v = [Text.Encoding]::UTF8.GetString($Data, $Pos.Value, $len); $Pos.Value += $len
+			return $v
+		}
+		9 {
+			$elemType = [int]$Data[$Pos.Value]; $Pos.Value += 1
+			$count = [BitConverter]::ToInt32((ConvertFrom-BigEndian $Data $Pos.Value 4), 0); $Pos.Value += 4
+			$list = New-Object System.Collections.Generic.List[object]
+			for ($i = 0; $i -lt $count; $i++) {
+				if ($elemType -eq 10) { $list.Add((Read-NbtCompound $Data $Pos)) | Out-Null }
+				else { $list.Add((Read-NbtPayload $Data $elemType $Pos ($Depth + 1))) | Out-Null }
+			}
+			return , $list.ToArray()
+		}
+		10 { return , (Read-NbtCompound $Data $Pos $Depth) }
+		11 {
+			$count = [BitConverter]::ToInt32((ConvertFrom-BigEndian $Data $Pos.Value 4), 0); $Pos.Value += 4
+			$v = New-Object int[] $count
+			for ($i = 0; $i -lt $count; $i++) { $v[$i] = [BitConverter]::ToInt32((ConvertFrom-BigEndian $Data $Pos.Value 4), 0); $Pos.Value += 4 }
+			return , $v
+		}
+		12 {
+			$count = [BitConverter]::ToInt32((ConvertFrom-BigEndian $Data $Pos.Value 4), 0); $Pos.Value += 4
+			$v = New-Object long[] $count
+			for ($i = 0; $i -lt $count; $i++) { $v[$i] = [BitConverter]::ToInt64((ConvertFrom-BigEndian $Data $Pos.Value 8), 0); $Pos.Value += 8 }
+			return , $v
+		}
+		default { throw "unsupported NBT tag type $Type at byte $($Pos.Value)" }
+	}
+}
+
+# Reads a compound body (the root is a named compound too). Returns a
+# hashtable of name -> value; $Offsets receives the absolute payload offset of
+# every scalar tag so a check can patch one value in place.
+function Read-NbtCompound {
+	param([byte[]]$Data, [ref]$Pos, [int]$Depth = 0, [hashtable]$Offsets = $null)
+	if ($Depth -gt 64) { throw 'NBT nesting deeper than 64' }
+	$result = @{}
+	while ($true) {
+		$type = [int]$Data[$Pos.Value]; $Pos.Value += 1
+		if ($type -eq 0) { break }
+		$nameLen = [BitConverter]::ToUInt16((ConvertFrom-BigEndian $Data $Pos.Value 2), 0); $Pos.Value += 2
+		$name = [Text.Encoding]::UTF8.GetString($Data, $Pos.Value, $nameLen); $Pos.Value += $nameLen
+		$valuePos = $Pos.Value
+		$value = Read-NbtPayload -Data $Data -Type $type -Pos $Pos -Depth ($Depth + 1)
+		$result[$name] = $value
+		if ($null -ne $Offsets -and $type -ne 9 -and $type -ne 10) { $Offsets[$name] = $valuePos }
+	}
+	return $result
+}
+
+# Decompresses one gzipped NBT document into its bytes.
+function Read-GzipBytes {
+	param([string]$Path)
+	$fs = [IO.File]::OpenRead($Path)
+	try {
+		$gz = New-Object IO.Compression.GzipStream($fs, [IO.Compression.CompressionMode]::Decompress)
+		$ms = New-Object IO.MemoryStream
+		$gz.CopyTo($ms)
+		$bytes = $ms.ToArray()
+		$gz.Close()
+		return , $bytes
+	} finally { $fs.Close() }
+}
+
+# Writes bytes as one gzip member (replacing the file).
+function Write-GzipBytes {
+	param([byte[]]$Bytes, [string]$Path)
+	$fs = [IO.File]::Create($Path)
+	try {
+		$gz = New-Object IO.Compression.GzipStream($fs, [IO.Compression.CompressionMode]::Compress)
+		$gz.Write($Bytes, 0, $Bytes.Length)
+		$gz.Close()
+	} finally { $fs.Close() }
+}
+
+# Parses one playerdata file into { root, offsets }.
+function Read-PlayerNbt {
+	param([string]$Path)
+	$data = Read-GzipBytes $Path
+	$pos = 0
+	$type = [int]$data[$pos]; $pos += 1
+	if ($type -ne 10) { throw "playerdata root is not a compound (type $type)" }
+	$nameLen = [BitConverter]::ToUInt16((ConvertFrom-BigEndian $data $pos 2), 0); $pos += 2
+	$name = [Text.Encoding]::UTF8.GetString($data, $pos, $nameLen); $pos += $nameLen
+	$offsets = @{}
+	$root = Read-NbtCompound -Data $data -Pos ([ref]$pos) -Offsets $offsets
+	return [PSCustomObject]@{ root = $root; offsets = $offsets; bytes = $data }
+}
+
+# The fields the S13 check prints. Missing tags are reported, never invented.
+function Get-PlayerNbtFacts {
+	param([string]$Path)
+	$doc = Read-PlayerNbt $Path
+	$r = $doc.root
+	$pos = $null
+	if ($r.ContainsKey('Pos') -and @($r['Pos']).Count -ge 3) { $pos = @($r['Pos'])[0..2] }
+	$rot = $null
+	if ($r.ContainsKey('Rotation') -and @($r['Rotation']).Count -ge 2) { $rot = @($r['Rotation'])[0..1] }
+	return [PSCustomObject]@{
+		pos            = $pos
+		rotation       = $rot
+		health         = $r['Health']
+		foodLevel      = $r['foodLevel']
+		saturation     = $r['foodSaturationLevel']
+		gameType       = $r['playerGameType']
+		dimension      = $r['Dimension']
+		dataVersion    = $r['DataVersion']
+		onGround       = $r['OnGround']
+		doc            = $doc
+	}
+}
+
+# Sets one int tag in place and rewrites the gzip member. Used to prove the
+# configured game mode wins over the file when force_gamemode is on.
+function Set-PlayerNbtInt {
+	param([string]$Path, [string]$Tag, [int]$Value)
+	$doc = Read-PlayerNbt $Path
+	if (-not $doc.offsets.ContainsKey($Tag)) { throw "tag '$Tag' not found in $Path" }
+	$offset = [int]$doc.offsets[$Tag]
+	$bytes = $doc.bytes
+	$big = [BitConverter]::GetBytes($Value)
+	[Array]::Reverse($big)
+	[Array]::Copy($big, 0, $bytes, $offset, 4)
+	Write-GzipBytes $bytes $Path
+}
+
+# Minimal structural fingerprint of a directory tree (relative path, length,
+# SHA-256) so two moments can be compared without keeping the tree in memory.
+function Get-TreeFingerprint {
+	param([string]$Root)
+	if (-not (Test-Path -LiteralPath $Root)) { return @() }
+	$rootFull = (Resolve-Path -LiteralPath $Root).Path
+	return @(Get-ChildItem -LiteralPath $rootFull -File -Recurse -Force | ForEach-Object {
+		$rel = $_.FullName.Substring($rootFull.Length).TrimStart('\')
+		'{0}|{1}|{2}' -f $rel, $_.Length, (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+	} | Sort-Object)
+}
+
+# --- playerdata trace reads ------------------------------------------------
+
+# Decodes a clientbound player_position payload: VarInt teleport id, three
+# f64, three f64 velocity, two f32 angles, i32 flags.
+function Get-TracePlayerPosition {
+	param($Rows)
+	foreach ($row in $Rows) {
+		if ($row.dir -ne 'clientbound' -or $row.name -ne 'minecraft:player_position') { continue }
+		$p = ConvertFrom-TraceB64 $row.b64
+		$id = ConvertFrom-TraceVarInt $p 0
+		if ($p.Length -lt ($id.next + 59)) { continue }
+		$off = $id.next
+		$x = [BitConverter]::ToDouble((ConvertFrom-BigEndian $p $off 8), 0)
+		$y = [BitConverter]::ToDouble((ConvertFrom-BigEndian $p ($off + 8) 8), 0)
+		$z = [BitConverter]::ToDouble((ConvertFrom-BigEndian $p ($off + 16) 8), 0)
+		$yaw = [BitConverter]::ToSingle((ConvertFrom-BigEndian $p ($off + 48) 4), 0)
+		$pitch = [BitConverter]::ToSingle((ConvertFrom-BigEndian $p ($off + 52) 4), 0)
+		return [PSCustomObject]@{ seq = [int]$row.seq; t = [double]$row.read_ms; x = $x; y = $y; z = $z; yaw = $yaw; pitch = $pitch }
+	}
+	return $null
+}
+
+# Game mode announced by Login (play): read from the test client's observe
+# (the packet's offset depends on the dimension name strings, so no byte
+# offset is assumed here).
+
+# Position of A's add_entity in B's trace: VarInt entity id, 16-byte UUID,
+# VarInt type, then three f64.
+function Get-TraceAddEntityPos {
+	param($Rows, [byte[]]$UuidBytes)
+	foreach ($row in $Rows) {
+		if ($row.dir -ne 'clientbound' -or $row.name -ne 'minecraft:add_entity') { continue }
+		$p = ConvertFrom-TraceB64 $row.b64
+		$id = ConvertFrom-TraceVarInt $p 0
+		if ($p.Length -lt ($id.next + 16 + 1 + 24)) { continue }
+		$match = $true
+		for ($i = 0; $i -lt 16; $i++) { if ($p[$id.next + $i] -ne $UuidBytes[$i]) { $match = $false; break } }
+		if (-not $match) { continue }
+		$type = ConvertFrom-TraceVarInt $p ($id.next + 16)
+		$off = $type.next
+		return [PSCustomObject]@{
+			seq = [int]$row.seq
+			t = [double]$row.read_ms
+			x = [BitConverter]::ToDouble((ConvertFrom-BigEndian $p $off 8), 0)
+			y = [BitConverter]::ToDouble((ConvertFrom-BigEndian $p ($off + 8) 8), 0)
+			z = [BitConverter]::ToDouble((ConvertFrom-BigEndian $p ($off + 16) 8), 0)
+		}
+	}
+	return $null
 }
