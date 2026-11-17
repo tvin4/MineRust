@@ -111,6 +111,22 @@ impl PlayerPos {
         }
         self.flags = update.flags;
     }
+
+    /// Overlays only the angles of a rotation-carrying packet (Шаг 19a).
+    ///
+    /// The rotation slot may hold an older packet than the movement slot (a
+    /// `move_player_rot` followed by `move_player_pos` in the same tick), so
+    /// its position and flags must not overwrite the newer movement; the
+    /// angles are exactly what the newer packet does not carry.
+    fn apply_rotation(&mut self, update: &MoveUpdate) {
+        if let Some(yaw) = update.yaw {
+            self.yaw = yaw;
+            self.head_yaw = yaw;
+        }
+        if let Some(pitch) = update.pitch {
+            self.pitch = pitch;
+        }
+    }
 }
 
 /// A survival dig the server is timing (Шаг 16a.3).
@@ -396,6 +412,12 @@ impl Player {
         self.position.apply(update);
     }
 
+    /// Applies only the angles of a decoded rotation-carrying packet (Шаг
+    /// 19a); see [`PlayerPos::apply_rotation`].
+    pub fn apply_rotation(&mut self, update: &MoveUpdate) {
+        self.position.apply_rotation(update);
+    }
+
     /// Whether the player is sneaking (M4.5 step 8).
     pub fn sneak(&self) -> bool {
         self.sneak
@@ -532,6 +554,12 @@ impl Player {
     /// Takes the newest movement packet, leaving the slot empty.
     pub fn take_move(&self) -> Option<MoveState> {
         self.connection.last_move.take()
+    }
+
+    /// Takes the newest packet that carried yaw/pitch, leaving the entry empty
+    /// (Шаг 19a). See [`MoveSlot::take_rotation`].
+    pub fn take_rotation(&self) -> Option<MoveState> {
+        self.connection.last_move.take_rotation()
     }
 
     /// Takes the newest `player_input` flags byte, leaving the entry empty
@@ -885,13 +913,39 @@ impl Region {
                 player.apply_punches(punches);
             }
             player.advance_swing();
-            let Some(state) = player.take_move() else {
+            let rotation = player.take_rotation();
+            let movement = player.take_move();
+            if rotation.is_none() && movement.is_none() {
                 continue;
-            };
+            }
             if !player.teleport_confirmed() {
                 // Movement is untrusted until the entry teleport is acked.
                 continue;
             }
+            // The angles are applied first (Шаг 19a). When the movement packet
+            // itself carries them it is the same packet and applying it twice
+            // would only duplicate the work; when it is position-only, the
+            // rotation slot holds the `move_player_rot` the client sent in the
+            // same tick, which the movement slot would otherwise have dropped.
+            if let Some(state) = rotation {
+                if !movement
+                    .as_ref()
+                    .is_some_and(|newest| newest.kind.carries_rotation())
+                {
+                    match state.decode() {
+                        Ok(update) => player.apply_rotation(&update),
+                        Err(err) => warn!(
+                            player = id,
+                            kind = ?state.kind,
+                            %err,
+                            "dropping an undecodable rotation packet"
+                        ),
+                    }
+                }
+            }
+            let Some(state) = movement else {
+                continue;
+            };
             match state.decode() {
                 Ok(update) => {
                     player.apply_move(&update);

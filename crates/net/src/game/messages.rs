@@ -257,6 +257,19 @@ pub enum MoveKind {
     StatusOnly,
 }
 
+impl MoveKind {
+    /// Whether the packet carries yaw and pitch (Шаг 19a).
+    ///
+    /// The tick keeps such a packet in a second slot so a rotation-only packet
+    /// is not lost when a position-only packet arrives before the tick: the
+    /// vanilla client sends `move_player_rot` and `move_player_pos` as
+    /// separate packets in one tick, and "newest wins" on a single slot threw
+    /// the angles away (the saved `Rotation` was 0,0).
+    pub fn carries_rotation(self) -> bool {
+        matches!(self, Self::PosRot | Self::Rot)
+    }
+}
+
 /// The newest movement packet of one player: its kind and raw payload.
 ///
 /// M4.1 only stored the newest packet; M4.2 decodes it in the tick and
@@ -283,6 +296,10 @@ pub struct MoveState {
 struct SlotValue {
     /// The newest movement packet, if any.
     movement: Option<MoveState>,
+    /// The newest packet that carried yaw/pitch (Шаг 19a), if any. A
+    /// rotation-only packet here is not overwritten by a later position-only
+    /// one, so the tick can apply both in their arrival order.
+    rotation: Option<MoveState>,
     /// The newest `player_input` flags byte, if any.
     input: Option<u8>,
     /// The newest `player_command` sprint toggle: `Some(true)` after an action
@@ -308,8 +325,15 @@ pub struct MoveSlot(Mutex<SlotValue>);
 
 impl MoveSlot {
     /// Stores the newest movement packet, dropping whatever was unread.
+    ///
+    /// A packet with angles is also kept in the rotation slot (Шаг 19a): the
+    /// movement slot stays "newest of any kind", while the rotation slot keeps
+    /// the newest angles until the tick drains it.
     pub fn store(&self, state: MoveState) {
         let mut slot = self.lock();
+        if state.kind.carries_rotation() {
+            slot.rotation = Some(state.clone());
+        }
         slot.movement = Some(state);
     }
 
@@ -335,6 +359,13 @@ impl MoveSlot {
     /// Takes the newest movement packet, leaving the slot empty.
     pub fn take(&self) -> Option<MoveState> {
         self.lock().movement.take()
+    }
+
+    /// Takes the newest packet that carried angles, leaving the entry empty
+    /// (Шаг 19a). It may be the same packet [`Self::take`] returns (a
+    /// `pos_rot`); the tick applies it first, then the movement packet.
+    pub fn take_rotation(&self) -> Option<MoveState> {
+        self.lock().rotation.take()
     }
 
     /// Takes the newest input flags byte, leaving the entry empty.

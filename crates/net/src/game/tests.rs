@@ -93,6 +93,39 @@ fn the_move_slot_keeps_only_the_newest_packet() {
     assert!(slot.take().is_none(), "taking drains the slot");
 }
 
+#[test]
+fn the_rotation_entry_keeps_the_angles_of_an_older_packet() {
+    let slot = MoveSlot::default();
+    assert!(slot.take_rotation().is_none(), "an untouched slot is empty");
+    slot.store(MoveState {
+        kind: MoveKind::Rot,
+        payload: vec![4, 5, 6],
+    });
+    slot.store(MoveState {
+        kind: MoveKind::Pos,
+        payload: vec![1, 2, 3],
+    });
+    let angles = slot.take_rotation().expect("the angles are kept");
+    assert_eq!(angles.kind, MoveKind::Rot);
+    let newest = slot.take().expect("the newest packet");
+    assert_eq!(
+        newest.kind,
+        MoveKind::Pos,
+        "movement still keeps the newest"
+    );
+    assert!(slot.take_rotation().is_none(), "taking drains the entry");
+
+    // A position-only packet never fills the rotation entry.
+    slot.store(MoveState {
+        kind: MoveKind::StatusOnly,
+        payload: vec![0],
+    });
+    assert!(
+        slot.take_rotation().is_none(),
+        "status-only carries no angles"
+    );
+}
+
 /// Payload of `move_player_pos`: three big-endian doubles and the flags byte.
 fn pos_payload(x: f64, y: f64, z: f64, flags: u8) -> Vec<u8> {
     let mut out = Vec::with_capacity(25);
@@ -189,6 +222,66 @@ fn a_rotation_packet_keeps_the_position() {
     assert_eq!(after.pitch, -45.0);
     assert_eq!(after.flags, 0x02);
     assert!(!after.on_ground(), "bit 0 is clear, so not on the ground");
+}
+
+#[test]
+fn a_rotation_survives_a_later_position_packet_in_the_same_tick() {
+    let mut region = Region::new(SINGLE_REGION);
+    let (join, _receiver, _kick, slot) = join_fixture_with(1, OUTBOUND_CAPACITY);
+    region.insert(join);
+    region.get_mut(1).expect("the player").confirm_teleport();
+
+    // The vanilla client sends `move_player_rot` and `move_player_pos` as
+    // separate packets; the second must not drop the angles of the first
+    // (Шаг 19a: the saved Rotation used to be 0,0).
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&27.0f32.to_be_bytes());
+    payload.extend_from_slice(&9.0f32.to_be_bytes());
+    payload.push(0x01);
+    slot.store(MoveState {
+        kind: MoveKind::Rot,
+        payload,
+    });
+    slot.store(pos_move(96.5, 5.0, 144.5));
+
+    let outcome = region.tick(0, Instant::now(), RegionGrid::single());
+    assert_eq!(outcome.moves.len(), 1, "the position packet is applied");
+    let applied = outcome.moves[0].position;
+    assert_eq!(
+        (applied.x, applied.y, applied.z),
+        (96.5, 5.0, 144.5),
+        "the newer position is the one that lands"
+    );
+    assert_eq!(applied.yaw, 27.0, "the rotation-only packet is not lost");
+    assert_eq!(applied.pitch, 9.0);
+    assert_eq!(applied.head_yaw, 27.0, "the head follows the body yaw");
+
+    let position = region.get(1).expect("still there").position();
+    assert_eq!(position, applied, "the player keeps both parts");
+}
+
+#[test]
+fn a_rotation_only_tick_still_updates_the_angles() {
+    let mut region = Region::new(SINGLE_REGION);
+    let (join, _receiver, _kick, slot) = join_fixture_with(1, OUTBOUND_CAPACITY);
+    region.insert(join);
+    region.get_mut(1).expect("the player").confirm_teleport();
+
+    // A `Rot` packet is also the newest movement packet, so this already
+    // worked; the test pins that the second slot did not change it.
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&120.0f32.to_be_bytes());
+    payload.extend_from_slice(&(-10.0f32).to_be_bytes());
+    payload.push(0x01);
+    slot.store(MoveState {
+        kind: MoveKind::Rot,
+        payload,
+    });
+
+    let outcome = region.tick(0, Instant::now(), RegionGrid::single());
+    assert_eq!(outcome.moves.len(), 1);
+    assert_eq!(outcome.moves[0].position.yaw, 120.0);
+    assert_eq!(outcome.moves[0].position.pitch, -10.0);
 }
 
 #[test]
