@@ -21,9 +21,33 @@
    ```
 
    `spawn_override` — целые `x,y,z`; клиент центрирует `x` и `z` (`+0.5`),
-   поэтому `106,41,-31` в игре — это `(106.5, 41, -30.5)`. Поле
-   `collision_report` должно быть задано (иначе ползание выключено, в логе
-   `WARN no collision_report ... is disabled`).
+   поэтому `106,41,-31` в игре — это `(106.5, 41, -30.5)`. Оба отчёта должны
+   быть заданы, иначе часть проверок выключена:
+
+   ```toml
+   # без него нет позы ползания (в логе `WARN no collision_report ...`)
+   collision_report = 'E:\MineRust-data\reports\collision.json'
+   # без него у наблюдателя НЕТ трещин (в логе `WARN no hardness_report ...`)
+   hardness_report = 'E:\MineRust-data\reports\hardness.json'
+   ```
+
+   Как получить файлы (оба — команды тест-клиента, нужен запущенный клиент
+   в мире и на земле; файлы пишутся вне репозитория):
+
+   ```text
+   {"cmd":"shapes","args":{"path":"E:/MineRust-data/reports/collision.json"}}
+   {"cmd":"hardness","args":{"path":"E:/MineRust-data/reports/hardness.json"}}
+   ```
+
+   Команды отправляются в контрольный сокет клиента (Alice 25571), например
+   `Invoke-TestCmd 25571 '{"cmd":"hardness","args":{"path":"..."}}'` из
+   `tools/testclient/scenario-lib.ps1`. Ожидаемые размеры: `collision.json` —
+   35723 состояния, 30144 непустых; `hardness.json` — 35723 состояния,
+   116 несокрушимых.
+
+   **Трещин нет в creative.** Таймер и `block_destruction` работают только в
+   survival: в creative клиент ломает блок мгновенно, сервер шлёт только
+   `block_update`, стадий нет (Шаг 14c/16a).
 
 2. Перезапусти сервер (`tools\run-server.bat`) и зайди двумя клиентами
    (`tools\run-two-clients.bat`, Alice 25571 / Bob 25572).

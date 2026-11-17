@@ -140,7 +140,11 @@ fn load_packet_ids(config: &ServerConfig) -> Result<Arc<data::PacketIds>, RunErr
 /// command from the user's own game copy (see `tools/testclient/README.md`).
 fn load_collisions(config: &ServerConfig) -> Result<CollisionShapes, RunError> {
     let Some(path) = config.collision_report.as_deref() else {
-        tracing::warn!("no collision_report: the forced crouch/crawl (Шаг 15 п.5) is disabled");
+        tracing::warn!(
+            "no collision_report: the forced crouch/crawl pose (Шаг 15 п.5) is off; \
+             set collision_report=<path>, generate the file with the test client's \
+             `shapes` command"
+        );
         return Ok(CollisionShapes::default());
     };
     let collisions = CollisionShapes::load(path)?;
@@ -163,7 +167,9 @@ fn load_collisions(config: &ServerConfig) -> Result<CollisionShapes, RunError> {
 fn load_hardness(config: &ServerConfig) -> Result<Option<Arc<BlockHardness>>, RunError> {
     let Some(path) = config.hardness_report.as_deref() else {
         tracing::warn!(
-            "no hardness_report: the mining timer keeps trusting the client (Шаг 16a is off)"
+            "no hardness_report: observer crack stages (Шаг 16a) are off; \
+             set hardness_report=<path>, generate the file with the test client's \
+             `hardness` command"
         );
         return Ok(None);
     };
@@ -648,6 +654,15 @@ mod tests {
             warning.contains("crouch/crawl"),
             "the warning names the disabled rule: {warning}"
         );
+        assert!(
+            warning.contains("collision_report=<path>") && warning.contains("`shapes`"),
+            "the single warning carries the hint (setting and generator command): {warning}"
+        );
+        assert_eq!(
+            warning.matches("no collision_report").count(),
+            1,
+            "the hint is logged once, not per chunk or per tick: {warning}"
+        );
 
         // The whole startup path takes the missing report: a real (minimal) save
         // still builds its world and loader pool, with the warning on the way.
@@ -680,8 +695,17 @@ mod tests {
             "the warning names the missing setting: {warning}"
         );
         assert!(
-            warning.contains("trusting the client"),
+            warning.contains("crack stages"),
             "the warning names what stays off: {warning}"
+        );
+        assert!(
+            warning.contains("hardness_report=<path>") && warning.contains("`hardness`"),
+            "the single warning carries the hint (setting and generator command): {warning}"
+        );
+        assert_eq!(
+            warning.matches("no hardness_report").count(),
+            1,
+            "the hint is logged once, not per dig: {warning}"
         );
 
         // A configured report is read and parsed: the wrong path fails startup.

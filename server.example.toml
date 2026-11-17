@@ -63,18 +63,25 @@ client_jar = "path/to/client.jar"
 # blocks_report = "path/to/generated/reports/blocks.json"
 
 # Optional: reports/collision.json generated from your game copy by the test
-# client's `shapes` command. It maps every non-empty block state id to the
-# lowest Y of its collision boxes inside its cell, which is what lets the
-# server decide whether a player still fits standing under the block above it
-# (forced crouch/crawl). Without it that rule stays off and the pose follows
-# the sneak/swim bits alone.
+# client's `shapes` command (see tools/testclient/README.md; it needs a running
+# client and writes the file next to it). It maps every non-empty block state
+# id to the lowest Y of its collision boxes inside its cell, which is what lets
+# the server decide whether a player still fits standing under the block above
+# it. WITHOUT IT THERE IS NO FORCED CROUCH/CRAWL POSE: the pose follows the
+# sneak/swim bits alone and other players see a crawling player standing. The
+# server logs one warning at startup instead of failing.
+#   shapes -> reports/collision.json  (35723 states, 30144 non-empty)
 # collision_report = "path/to/generated/reports/collision.json"
 
 # Optional: reports/hardness.json generated from your game copy by the test
-# client's `hardness` command. It maps every block state id to its hardness
-# (destroy speed) and the bare-hand dig speed, which the server-side mining
-# timer needs to estimate how long a dig lasts. Without it the server keeps
-# trusting the client about when a block is broken.
+# client's `hardness` command (same README/table; it needs a running client on
+# the ground and writes the file next to it). It maps every block state id to
+# its hardness (destroy speed) and the bare-hand dig speed, which the
+# server-side mining timer needs for the `block_destruction` crack stages.
+# WITHOUT IT OBSERVERS SEE NO CRACKS: the timer is off and the server keeps
+# trusting the client about when a block is broken (the block itself still
+# breaks). The server logs one warning at startup instead of failing.
+#   hardness -> reports/hardness.json  (35723 states, 116 unbreakable)
 # hardness_report = "path/to/generated/reports/hardness.json"
 
 # REQUIRED at startup: a saved world directory (M3): the folder that
