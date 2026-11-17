@@ -344,6 +344,86 @@ fn a_tick_that_falls_behind_resets_its_deadline() {
     assert!(overdue_by(deadline, deadline + Duration::from_millis(10), &config).is_none());
 }
 
+/// A join of one connection under an explicit name.
+fn named_join(id: PlayerId, name: &str) -> (PlayerJoin, mpsc::Receiver<ServerMessage>) {
+    let (outbound, receiver) = mpsc::channel(OUTBOUND_CAPACITY);
+    let join = PlayerJoin {
+        id,
+        name: name.to_owned(),
+        view_distance: 10,
+        spawn: Position::default(),
+        game_mode: 0,
+        pose: None,
+        health: 20.0,
+        food: 20,
+        saturation: 5.0,
+        connection: PlayerConnection {
+            outbound,
+            kick: Arc::new(KickFlag::default()),
+            last_move: Arc::new(MoveSlot::default()),
+        },
+    };
+    (join, receiver)
+}
+
+#[test]
+fn a_second_login_with_the_same_name_kicks_the_first() {
+    let mut scheduler = Scheduler::new(vec![Region::new(SINGLE_REGION)]);
+    let mut replay: Replay<Vec<u8>> = Replay::new(None);
+    let (first, mut first_rx) = named_join(1, "Dup");
+    let (second, mut second_rx) = named_join(2, "Dup");
+    apply(
+        &mut scheduler,
+        &mut replay,
+        1,
+        ToGame::Join(Box::new(first)),
+        &GameConfig::default(),
+    );
+    apply(
+        &mut scheduler,
+        &mut replay,
+        1,
+        ToGame::Join(Box::new(second)),
+        &GameConfig::default(),
+    );
+
+    // The older connection is told why it ends and its queue closes right
+    // after (the player was removed).
+    match first_rx.try_recv() {
+        Ok(ServerMessage::Disconnect { reason }) => {
+            assert_eq!(reason, KickReason::DuplicateLogin)
+        }
+        other => panic!("expected the duplicate-login disconnect, got {other:?}"),
+    }
+    assert!(
+        matches!(
+            first_rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Disconnected)
+        ),
+        "the older queue closes after the disconnect"
+    );
+
+    // Only the new session stays online, and it was not kicked.
+    assert_eq!(scheduler.player_count(), 1);
+    assert!(scheduler.player(2).is_some(), "the new session stays");
+    assert!(scheduler.player(1).is_none(), "the old session is gone");
+    assert!(
+        second_rx.try_recv().is_err(),
+        "the new connection gets no disconnect"
+    );
+
+    // A different name is a different account: it kicks nobody.
+    let (third, _third_rx) = named_join(3, "Other");
+    apply(
+        &mut scheduler,
+        &mut replay,
+        1,
+        ToGame::Join(Box::new(third)),
+        &GameConfig::default(),
+    );
+    assert_eq!(scheduler.player_count(), 2);
+}
+
 /// Applies a fixed scenario through the real per-tick code path and returns
 /// the replay journal it wrote.
 fn run_scenario(messages: Vec<ToGame>, tick: u64) -> String {

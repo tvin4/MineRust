@@ -187,6 +187,14 @@ pub enum ServerMessage {
         /// Crack stage byte (`0xFF` resets).
         stage: u8,
     },
+    /// The game thread ends this connection with a reason the client shows
+    /// (Шаг 20a): the duplicate-login kick. Sent right before the player is
+    /// removed, so the queue closes after it; the connection writes the
+    /// play-state `disconnect` and returns.
+    Disconnect {
+        /// Why the connection ends.
+        reason: KickReason,
+    },
 }
 
 /// Why the game thread closes a connection.
@@ -194,6 +202,10 @@ pub enum ServerMessage {
 pub enum KickReason {
     /// The connection's outbound queue stayed full: the client is slow.
     SendQueueOverflow,
+    /// Another connection logged in with the same account (Шаг 20a); the
+    /// vanilla server drops the older one ("You logged in from another
+    /// location", S15 trace).
+    DuplicateLogin,
 }
 
 impl KickReason {
@@ -201,6 +213,7 @@ impl KickReason {
     pub fn message(self) -> &'static str {
         match self {
             Self::SendQueueOverflow => "send queue overflow",
+            Self::DuplicateLogin => "duplicate login",
         }
     }
 
@@ -208,6 +221,7 @@ impl KickReason {
     fn code(self) -> u8 {
         match self {
             Self::SendQueueOverflow => 1,
+            Self::DuplicateLogin => 2,
         }
     }
 
@@ -215,6 +229,7 @@ impl KickReason {
     fn from_code(code: u8) -> Option<Self> {
         match code {
             1 => Some(Self::SendQueueOverflow),
+            2 => Some(Self::DuplicateLogin),
             _ => None,
         }
     }

@@ -11,8 +11,11 @@
 
 use crate::codec::{CodecError, PacketReader, PacketWriter, Position, Uuid, MAX_STRING_CHARS};
 use crate::frame::encode_frame;
+use crate::nbt::NbtTag;
 use crate::packet_id::{PacketKey, ProtocolState};
 use crate::packets::login::{ProfileProperty, MAX_PROPERTY_NAME_CHARS, MAX_SIGNATURE_CHARS};
+
+use std::collections::BTreeMap;
 
 /// Maximum locale length in UTF-16 code units (protocol String (16)), same
 /// as in the configuration state.
@@ -202,6 +205,44 @@ impl LoginPlay {
             online_mode,
             enforces_secure_chat,
         })
+    }
+
+    /// Encodes the packet as a complete frame.
+    pub fn to_frame(&self) -> Result<Vec<u8>, CodecError> {
+        encode_frame(Self::ID, &self.encode_payload()?)
+    }
+}
+
+/// Clientbound Disconnect (play): the server ends the session and the client
+/// shows the reason. The reason is a text component in the network NBT form
+/// (a nameless root compound), not a JSON string.
+///
+/// SOURCE: the S15 vanilla trace (`2026-11-17_s15-vanilla-r2`): the duplicate
+/// login kicks the old connection with
+/// `0a 08 0009 "translate" 0026 "multiplayer.disconnect.duplicate_login" 00`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisconnectPlay {
+    /// Translation key of the reason, no arguments.
+    pub reason: String,
+}
+
+impl DisconnectPlay {
+    /// Packet id of Disconnect (play state, clientbound).
+    pub const ID: u32 = 0x20;
+
+    /// Key that resolves the Disconnect id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::clientbound(ProtocolState::Play, "minecraft:disconnect", Self::ID);
+
+    /// The reason vanilla sends when the same account logs in again (S15).
+    pub const DUPLICATE_LOGIN: &'static str = "multiplayer.disconnect.duplicate_login";
+
+    /// Encodes the payload (packet id excluded): `{"translate": reason}` as a
+    /// nameless-root NBT compound.
+    pub fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
+        let mut map = BTreeMap::new();
+        map.insert("translate".to_owned(), NbtTag::String(self.reason.clone()));
+        Ok(NbtTag::Compound(map).to_network_bytes()?)
     }
 
     /// Encodes the packet as a complete frame.
@@ -1845,6 +1886,34 @@ mod tests {
                 BlockChangedAck::decode_payload,
             );
         }
+    }
+
+    #[test]
+    fn disconnect_play_matches_the_s15_duplicate_login_bytes() {
+        let packet = DisconnectPlay {
+            reason: DisconnectPlay::DUPLICATE_LOGIN.to_owned(),
+        };
+        let encoded = packet.encode_payload().expect("encodable");
+        // The recorded vanilla payload of `2026-11-17_s15-vanilla-r2`.
+        let recorded = concat!(
+            "0a0800097472616e736c61746500266d756c7469706c617965722e646973636f6e6e656374",
+            "2e6475706c69636174655f6c6f67696e00"
+        );
+        let expected: Vec<u8> = (0..recorded.len() / 2)
+            .map(|i| u8::from_str_radix(&recorded[i * 2..i * 2 + 2], 16).expect("hex"))
+            .collect();
+        assert_eq!(encoded, expected);
+
+        // The same bytes decoded as the network NBT form name the key.
+        let (tag, consumed) = NbtTag::decode_network(&encoded).expect("network NBT");
+        assert_eq!(consumed, encoded.len());
+        let NbtTag::Compound(map) = tag else {
+            panic!("a compound root");
+        };
+        assert_eq!(
+            map.get("translate"),
+            Some(&NbtTag::String(DisconnectPlay::DUPLICATE_LOGIN.to_owned()))
+        );
     }
 
     #[test]

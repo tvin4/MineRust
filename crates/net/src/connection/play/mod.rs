@@ -18,10 +18,10 @@ use chunk_pace::ChunkPace;
 use data::{GameData, PacketIds};
 use protocol::{
     decode_frame, BlockChangedAck, BlockDestruction, BlockUpdate, ChunkBatchReceived,
-    ClientInformation, ConfirmTeleportation, KeepAlive, LevelEvent, PacketReader, PlayerAction,
-    PlayerCommand, PlayerInput, Position, ProtocolState, Punch, StatusInfo, MAX_STRING_CHARS,
-    MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT, MOVE_PLAYER_STATUS_ONLY,
-    PLAY_PLUGIN_MESSAGE,
+    ClientInformation, ConfirmTeleportation, DisconnectPlay, KeepAlive, LevelEvent, PacketReader,
+    PlayerAction, PlayerCommand, PlayerInput, Position, ProtocolState, Punch, StatusInfo,
+    MAX_STRING_CHARS, MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT,
+    MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
 };
 use std::sync::Arc;
 
@@ -33,8 +33,8 @@ use tracing::{debug, info, trace, warn};
 use crate::error::ConnectionError;
 use crate::frame::{read_tracked, write_tracked};
 use crate::game::{
-    chunk_of_position, BlockAction, GameHandle, KickFlag, MoveKind, MoveSlot, MoveState,
-    MoveUpdate, PlayerConnection, PlayerId, PlayerJoin, PlayerPos, PlayerdataRuntime,
+    chunk_of_position, BlockAction, GameHandle, KickFlag, KickReason, MoveKind, MoveSlot,
+    MoveState, MoveUpdate, PlayerConnection, PlayerId, PlayerJoin, PlayerPos, PlayerdataRuntime,
     ServerMessage, ToGame, OUTBOUND_CAPACITY,
 };
 use crate::loader::{LoadError, Loader};
@@ -598,6 +598,23 @@ where
                         )
                         .await?;
                     }
+                    // The game thread ends this session with a reason the client shows
+                    // (Шаг 20a): write the play-state `disconnect` and stop
+                    // reading. The queue closes right after (the player is
+                    // removed), so this arm is also the last message.
+                    Some(ServerMessage::Disconnect { reason }) => {
+                        if let Some(packet) = disconnect_packet(reason) {
+                            write_tracked(
+                                &mut writer,
+                                ProtocolState::Play,
+                                ids.id(DisconnectPlay::KEY),
+                                &packet.encode_payload()?,
+                            )
+                            .await?;
+                            debug!(reason = reason.message(), "disconnect sent");
+                        }
+                        return Ok(());
+                    }
                     // The game thread dropped this player (quit); the
                     // connection closes. The kick reason is read in M4.1's
                     // kick policy (see the game module).
@@ -766,6 +783,21 @@ where
                 }
             }
         }
+    }
+}
+
+/// The play-state disconnect packet for a kick reason, when the client is
+/// meant to see it (Шаг 20a).
+///
+/// `SendQueueOverflow` is not shown: the queue that would carry the packet is
+/// the full one. The duplicate login carries the vanilla translation key of
+/// the S15 trace.
+fn disconnect_packet(reason: KickReason) -> Option<DisconnectPlay> {
+    match reason {
+        KickReason::DuplicateLogin => Some(DisconnectPlay {
+            reason: DisconnectPlay::DUPLICATE_LOGIN.to_owned(),
+        }),
+        KickReason::SendQueueOverflow => None,
     }
 }
 

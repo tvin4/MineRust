@@ -674,6 +674,43 @@ fn apply<W: std::io::Write>(
     match message {
         ToGame::Join(join) => {
             let id = join.id;
+            // Шаг 20a: one account, one session. The vanilla server drops the
+            // older connection when the same profile logs in again: the S15
+            // trace carries a play-state `disconnect` with
+            // `multiplayer.disconnect.duplicate_login`, sent before the new
+            // player appears. The offline UUID derives from the name, so the
+            // comparison is the account, not the connection.
+            let account = protocol::offline_uuid(&join.name);
+            let stale: Vec<PlayerId> = scheduler
+                .players()
+                .filter(|player| player.uuid() == account)
+                .map(|player| player.id())
+                .collect();
+            for old in stale {
+                if old == id {
+                    continue;
+                }
+                info!(
+                    player = old,
+                    name = %join.name,
+                    "duplicate login: closing the older connection"
+                );
+                let _ = scheduler.deliver(
+                    old,
+                    ServerMessage::Disconnect {
+                        reason: KickReason::DuplicateLogin,
+                    },
+                );
+                // The kicked session still writes its state, like a quit; the
+                // new connection has already read the file before this Join.
+                if let Some(runtime) = config.playerdata.as_deref() {
+                    save_player(scheduler, runtime, old);
+                }
+                if let Some(dig) = dig::take(scheduler, old) {
+                    dig::reset(scheduler, old, dig.position);
+                }
+                scheduler.remove_player(old);
+            }
             let payload = serde_json::json!({
                 "name": &join.name,
                 "view_distance": join.view_distance,
