@@ -1,7 +1,38 @@
 # HANDOFF (state for the next session)
 
-**Шаг 17 закрыт (17.0, 17a, 17b, 17c, 17d); следующий — 16a.5 (звук и
-частицы).** 17.11.2026. `main` в синхроне с `origin/main` после коммита 16a.4.
+**Шаг 18 закрыт (мгновенное ломание и водные блоки; сценарий S14); следующий —
+Шаг 18 playerdata (18.0/18a/18b), план в `docs/PLAYERDATA.md`.** 17.11.2026.
+
+**Шаг 18 (закрыто, 17.11.2026).** Подшаг перед playerdata, метод — чёрный ящик.
+Сценарий `tools/testclient/scenarios/s14-instantbreak.json` (две стойки z −34/−30,
+девять одноблочных ячеек по x, база y200).
+- **Диагностика ours** `2026-11-17_s14-ours` и ванильные трейсы
+  `2026-11-17_s14-vanilla`; правила — `docs/BLOCK-BREAKING.md` §1.12/§4.3.4.
+- **Правила из трейса:** (1) блок `hardness = 0` ломается на **start** (клиент
+  шлёт только `player_action 0x00`; ack на start есть и он после `block_update`);
+  (2) замена — **вода** (`state 89`) для `waterlogged` и водных растений, иначе
+  воздух; `2001` несёт `data` = id сломанного состояния; (3) каскады:
+  `tall_seagrass` — обе половины, `kelp`/`kelp_plant` — весь столбец выше;
+  (4) аудитория `2001`: прицельный блок — всем, кроме копающего; каскадная
+  часть — всем, включая копающего.
+- **Код:** новый `crates/net/src/game/break_block.rs` (`break_blocks`,
+  `replacement` через `BlockStates::water_surface`, `cascade`, `announce`);
+  `crates/net/src/game/block_action.rs` — `start` ломает мгновенный блок
+  (`is_instant`), `deliver`/`AIR_STATE` → `pub(super)`. Тесты
+  `block_action_tests` (199 в `net`) и байтовые S14 в `crates/protocol`
+  (`s14_instant_break_packets_roundtrip_the_trace`, 139 в `protocol`).
+- **Live ours** `2026-11-17_s14-ours-r2`/`-r3` — **0 failed checks**; наборы
+  `2001`, замена, каскады и аудитория совпали с ванилью.
+- **Долг (Шаг 18):** `section_blocks_update` не реализован (ванильный батч
+  замены при 2+ изменённых блоках); каскады только у `tall_seagrass`/`kelp`;
+  shape-update `kelp_plant`→`kelp` на дне столбца не моделируем; `level_event`
+  2019/2020 не шлём. **playerdata не начат.**
+
+**Открытый вопрос из Шага 17:** правило ванильного приёма `finish` не
+установлено (`docs/BLOCK-BREAKING.md` §1.11, план §6 п.9) — ваниль проверяет
+finish, но не долей прогресса (граница между T = 2250 и 3000); наш допуск
+`T − 3` тика оставлен. **16a.5** (звук/частицы `level_event` 2019/2020)
+отложен, данных достаточно в §1.9/§4.4.
 
 **Шаг 17 (закрыто):**
 - **17.0** — `server.example.toml` описывает оба отчёта, `crates/server/src/lib.rs`
