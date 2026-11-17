@@ -16,9 +16,10 @@
 //! SOURCE: two-bot vanilla trace of 26.3 (byte layout observed), not wiki.
 
 use protocol::{
-    AddEntity, AttributeEntry, CodecError, EntityPositionSync, MoveEntityPos, MoveEntityPosRot,
-    MoveEntityRot, MoveHeader, PacketKey, PacketWriter, PlayerInfoEntry, PlayerInfoRemove,
-    PlayerInfoUpdate, RemoveEntities, RotateHead, SetEntityData, SwingAnimation, UpdateAttributes,
+    AddEntity, AttributeEntry, AttributeModifier, CodecError, EntityPositionSync, MoveEntityPos,
+    MoveEntityPosRot, MoveEntityRot, MoveHeader, PacketKey, PacketWriter, PlayerInfoEntry,
+    PlayerInfoRemove, PlayerInfoUpdate, RemoveEntities, RotateHead, SetEntityData, SwingAnimation,
+    UpdateAttributes,
 };
 
 use crate::game::{
@@ -87,9 +88,43 @@ fn spawn_metadata(sneaking: bool, swimming: bool, forced: Forced, game_mode: i32
 /// The three attributes the recorded join sends (`update_attributes`).
 ///
 /// The wire order differs between vanilla runs (C1: 26, 13, 8; C2: 8, 26, 13),
-/// so an exact ordered parity comparison is unstable; this encoder uses C2 order.
-// SOURCE: two-bot vanilla trace 26.3 (C1/C2), values 4.5, 0.1, 3.0.
-fn standing_attributes(entity_id: PlayerId) -> UpdateAttributes {
+/// so an exact ordered parity comparison is unstable; the survival path uses
+/// the C2 order. Creative follows the C6 trace order and carries its two reach
+/// modifiers (`creative_mode_entity_range +2.0`, `creative_mode_block_range
+/// +0.5`), which vanilla adds in creative only.
+// SOURCE: two-bot vanilla trace 26.3 (C1/C2 survival values 4.5, 0.1, 3.0;
+// C6 creative payload 123 bytes with the two resource-location modifiers).
+fn spawn_attributes(entity_id: PlayerId, game_mode: i32) -> UpdateAttributes {
+    if game_mode == 1 {
+        return UpdateAttributes {
+            entity_id,
+            attributes: vec![
+                AttributeEntry {
+                    key: 13,
+                    base: 3.0,
+                    modifiers: vec![AttributeModifier {
+                        id: "minecraft:creative_mode_entity_range".to_owned(),
+                        amount: 2.0,
+                        operation: 0,
+                    }],
+                },
+                AttributeEntry {
+                    key: 8,
+                    base: 4.5,
+                    modifiers: vec![AttributeModifier {
+                        id: "minecraft:creative_mode_block_range".to_owned(),
+                        amount: 0.5,
+                        operation: 0,
+                    }],
+                },
+                AttributeEntry {
+                    key: 26,
+                    base: f64::from(0.1_f32),
+                    modifiers: Vec::new(),
+                },
+            ],
+        };
+    }
     UpdateAttributes {
         entity_id,
         attributes: vec![
@@ -184,7 +219,7 @@ pub fn push_spawn(
 
     out.push((
         UpdateAttributes::KEY,
-        standing_attributes(entity.id).encode_payload()?,
+        spawn_attributes(entity.id, entity.game_mode).encode_payload()?,
     ));
     Ok(())
 }
@@ -501,6 +536,50 @@ mod tests {
              40 57 53 4c 42 0f a3 0c 40 5f 80 00 00 00 00 00 c0 35 c2 4f f3 bb e7 8f \
              00 40 45 45 00",
             "add_entity payload must match the vanilla S1b trace"
+        );
+    }
+
+    /// A creative spawn carries the C6 attribute payload with both reach
+    /// modifiers as resource-location strings.
+    // SOURCE: two-bot vanilla trace 26.3 (C6, eid 77, seq 527, 123 bytes).
+    #[test]
+    fn creative_spawn_carries_the_traced_reach_modifiers() {
+        let spawn = EntitySpawn {
+            id: 77,
+            name: "TraceBotB".to_owned(),
+            uuid: [0x33; 16],
+            position: PlayerPos {
+                x: 96.5,
+                y: 145.0,
+                z: -31.5,
+                yaw: 0.0,
+                pitch: 0.0,
+                head_yaw: 0.0,
+                flags: 0,
+            },
+            game_mode: 1,
+            sneaking: false,
+            swimming: false,
+            forced: Forced::None,
+        };
+        let mut out = Vec::new();
+        push_spawn(&spawn, &mut out).expect("encodable");
+        let attributes = out
+            .iter()
+            .find(|(key, _)| *key == UpdateAttributes::KEY)
+            .expect("attributes are part of the spawn");
+        assert_eq!(
+            attributes.1,
+            parse_hex(
+                "4d 03 0d 40 08 00 00 00 00 00 00 01 24 6d 69 6e \
+                 65 63 72 61 66 74 3a 63 72 65 61 74 69 76 65 5f \
+                 6d 6f 64 65 5f 65 6e 74 69 74 79 5f 72 61 6e 67 \
+                 65 40 00 00 00 00 00 00 00 00 08 40 12 00 00 00 \
+                 00 00 00 01 23 6d 69 6e 65 63 72 61 66 74 3a 63 \
+                 72 65 61 74 69 76 65 5f 6d 6f 64 65 5f 62 6c 6f \
+                 63 6b 5f 72 61 6e 67 65 3f e0 00 00 00 00 00 00 \
+                 00 1a 3f b9 99 99 a0 00 00 00 00"
+            )
         );
     }
 

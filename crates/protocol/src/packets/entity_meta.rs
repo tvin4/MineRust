@@ -10,7 +10,7 @@
 
 use super::packet_impl::play_packet;
 use super::read_count;
-use crate::codec::{CodecError, PacketReader, PacketWriter, Uuid};
+use crate::codec::{CodecError, PacketReader, PacketWriter};
 
 /// Set Entity Data: an entity's metadata entries.
 ///
@@ -59,13 +59,17 @@ impl SetEntityData {
 play_packet!(SetEntityData, 0x65, "minecraft:set_entity_data");
 
 /// One attribute modifier of [`UpdateAttributes`].
-#[derive(Debug, Clone, Copy, PartialEq)]
+///
+/// SOURCE: two-bot vanilla trace 26.3 (C6): the record is a resource-location
+/// string (`VarInt` length + UTF-8), an `f64` amount and a `u8` operation, not
+/// the UUID layout of older versions.
+#[derive(Debug, Clone, PartialEq)]
 pub struct AttributeModifier {
-    /// Modifier UUID.
-    pub id: Uuid,
+    /// Resource-location identifier, e.g. `minecraft:creative_mode_block_range`.
+    pub id: String,
     /// Modifier amount.
     pub amount: f64,
-    /// Operation id.
+    /// Operation id (`0` = add in the C6 trace).
     pub operation: u8,
 }
 
@@ -111,7 +115,7 @@ impl UpdateAttributes {
             writer.write_f64(attribute.base);
             writer.write_varint(attribute.modifiers.len() as i32);
             for modifier in &attribute.modifiers {
-                writer.write_uuid(modifier.id);
+                writer.write_string(&modifier.id, 32767)?;
                 writer.write_f64(modifier.amount);
                 writer.write_u8(modifier.operation);
             }
@@ -131,7 +135,7 @@ impl UpdateAttributes {
             let mut modifiers = Vec::with_capacity(modifier_count.min(16));
             for _ in 0..modifier_count {
                 modifiers.push(AttributeModifier {
-                    id: reader.read_uuid()?,
+                    id: reader.read_string(32767)?,
                     amount: reader.read_f64()?,
                     operation: reader.read_u8()?,
                 });
@@ -306,14 +310,54 @@ mod tests {
     }
 
     #[test]
+    fn update_attributes_reproduces_the_creative_modifiers() {
+        // The full vanilla C6 payload: three attributes, two of them with the
+        // creative reach modifiers as resource-location strings.
+        // SOURCE: two-bot vanilla trace 26.3 (C6, eid 77, 26.3).
+        check(
+            UpdateAttributes {
+                entity_id: 77,
+                attributes: vec![
+                    AttributeEntry {
+                        key: 13,
+                        base: 3.0,
+                        modifiers: vec![AttributeModifier {
+                            id: "minecraft:creative_mode_entity_range".to_owned(),
+                            amount: 2.0,
+                            operation: 0,
+                        }],
+                    },
+                    AttributeEntry {
+                        key: 8,
+                        base: 4.5,
+                        modifiers: vec![AttributeModifier {
+                            id: "minecraft:creative_mode_block_range".to_owned(),
+                            amount: 0.5,
+                            operation: 0,
+                        }],
+                    },
+                    AttributeEntry {
+                        key: 26,
+                        base: f64::from(0.1_f32),
+                        modifiers: Vec::new(),
+                    },
+                ],
+            },
+            "4d030d400800000000000001246d696e6563726166743a63726561746976655f6d6f64655f656e746974795f72616e676540000000000000000008401200000000000001236d696e6563726166743a63726561746976655f6d6f64655f626c6f636b5f72616e67653fe0000000000000001a3fb99999a000000000",
+            UpdateAttributes::encode_payload,
+            UpdateAttributes::decode_payload,
+        );
+    }
+
+    #[test]
     fn update_attributes_records_match_after_reordering() {
         let modifier_a = AttributeModifier {
-            id: [1; 16],
+            id: "minecraft:test_a".to_owned(),
             amount: 0.25,
             operation: 0,
         };
         let modifier_b = AttributeModifier {
-            id: [2; 16],
+            id: "minecraft:test_b".to_owned(),
             amount: -0.5,
             operation: 1,
         };
@@ -323,7 +367,7 @@ mod tests {
                 AttributeEntry {
                     key: 8,
                     base: 4.5,
-                    modifiers: vec![modifier_a, modifier_b],
+                    modifiers: vec![modifier_a.clone(), modifier_b.clone()],
                 },
                 AttributeEntry {
                     key: 26,

@@ -134,8 +134,8 @@ where
     }
 }
 
-/// Canonical sort key of one modifier: UUID, amount bits, operation.
-type ModifierOrderKey = ([u8; 16], u64, u8);
+/// Canonical sort key of one modifier: identifier, amount bits, operation.
+type ModifierOrderKey = (String, u64, u8);
 
 /// Canonical sort key of one attribute record (see [`attribute_order_key`]).
 type AttributeOrderKey = (i32, u64, Vec<ModifierOrderKey>);
@@ -150,9 +150,13 @@ fn attribute_order_key(attribute: &AttributeEntry) -> AttributeOrderKey {
     (attribute.key, attribute.base.to_bits(), modifiers)
 }
 
-/// Canonical sort key of one modifier: UUID, amount bits, operation.
+/// Canonical sort key of one modifier: identifier, amount bits, operation.
 fn modifier_order_key(modifier: &AttributeModifier) -> ModifierOrderKey {
-    (modifier.id, modifier.amount.to_bits(), modifier.operation)
+    (
+        modifier.id.clone(),
+        modifier.amount.to_bits(),
+        modifier.operation,
+    )
 }
 
 /// Normalises the values the owner allows to differ: the entity id and the
