@@ -515,7 +515,20 @@ fn game_loop(
         // every position, so the saved pose is the one this tick settled on.
         if autosave_every > 0 && tick.is_multiple_of(autosave_every) {
             if let Some(runtime) = config.playerdata.as_deref() {
+                // The tick only builds the snapshots and enqueues them; the
+                // dedicated writer thread does the disk I/O. The duration is
+                // logged once per autosave (Шаг 19a, live check 5) so the
+                // scenario runner can show that enqueueing never approaches a
+                // tick budget; `players` proves the snapshot covered the
+                // connected players.
+                let started = Instant::now();
                 save_all(&scheduler, runtime);
+                info!(
+                    tick,
+                    save_us = phase_us(started.elapsed()),
+                    players = scheduler.players().count(),
+                    "autosave queued"
+                );
             }
         }
         for kick in &outcome.kicks {
