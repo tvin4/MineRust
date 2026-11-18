@@ -1,5 +1,53 @@
 # HANDOFF (state for the next session)
 
+**Текущий этап: Шаг 22 (18.11.2026), код 22a/22b готов; живой S16 —
+блокер приёмки.** Не переходить к следующему milestone до решения владельца
+по S16. Полная запись — `docs/PROGRESS.md` «Шаг 22».
+
+- **22a.1:** spawn `entity_position_sync` после metadata #2 и перед
+  attributes, только `game_mode != 3`; C5/C6 закрыты (`c9a95e2`).
+- **22a.2:** `Player::previous_yaw`, head yaw предыдущего серверного тика;
+  44/50, таблица 20 примеров в `MECHANICS.md` (`4e7d128`).
+- **22a.3:** `AttributeModifier` = String + f64 + u8; creative range modifiers
+  +2.0/+0.5 в порядке C6, побайтный 123-B тест (`5a3dff1`).
+- **22a.4:** periodic sync не реализован: trigger не установлен. Таблица 15
+  строк (12 periodic + C5/C6 spawn + C1 negative control) в `MECHANICS.md`.
+  Тест (в) №2: 240 diff, C1/C5/C6 green, C2 138/C4 102 red из-за periodic
+  sync и индексного сдвига; внешний отчёт
+  `E:\MineRust-data\traces\entity-stream-parity.md`.
+- **Kelp:** очередь потери опоры, один блок за tick (`13669cb`), тест на три
+  состояния + аудиторию A/B.
+- **22b:** новый `worldsave`, versioned per-chunk diff + CRC; `world.json`
+  SHA-256/DataVersion; mismatch отказывает до bind, override применяет с
+  warn; atomic file + directory fsync; only blocks.
+- **Конкурентность:** `DirtyChunk` generations + `in_flight`, durable
+  `LoadedChunk`, max 256/pass, bounded writer 32; periodic submit не ждёт.
+  После game join полный `shutdown_batch` идёт `Flush` с disk-result/5s,
+  затем bounded writer shutdown. Accept-loop error тоже проходит cleanup;
+  flush/shutdown error даёт non-zero exit. Join-timeout game thread запрещает
+  рacy snapshot. Final player snapshots staged и queue'ятся только после
+  успешного world flush.
+  Неизменённый loaded diff не переписывается; правка после ack не теряет
+  ранее сохранённые клетки.
+- **Startup:** diff apply в `TemplateWorld::build_batch` до warm/bind;
+  malformed format/CRC → warn/template, I/O → startup error. `dev_geometry`
+  не сохраняется. Общий `save_dir`, playerdata marker v2, v1 мигрирует.
+- **Замеры release:** synthetic snapshot 1/16/64/256 cells =
+  0.1/0.2/0.3/0.6 µs, write ≈3.0–3.35 ms; real v3 snapshot 0.1 µs,
+  atomic write 3.37 ms, second client enters play 120.52 ms. Commands/tests —
+  `WORLD-SAVE.md` §12; `worldsave_measure` passed in 9.51 s.
+- **Не выполнено:** живой S16 (обычные + водные блоки, restart, A/B,
+  template + `vanilla\world` SHA). Причина: GUI scenario runner не умеет
+  restart посреди run; ручной launcher требует владельца/двух GUI.
+  Process-kill writer-тест выполнен отдельно: child после успешного autosave
+  убит без shutdown, новый process прочитал CRC diff (release, 2 passed), но
+  не выдавать его за полный GUI-server kill.
+- **Вне 22b:** block entities, light, items/drops, Anvil export. **Не
+  установлено:** periodic sync C2/C4. Старый V4 duplicate-login race остаётся
+  отдельным долгом.
+- **Коммит кода 22b:** `d7a9014`. Документация — отдельный следующий commit;
+  его hash и push проверить в конце. Graph обновлён (`graphify update .`).
+
 **Шаг 21.0 (перепроверка S15, 17.11.2026): обычный повторный вход
 выбрасывает старого, отказа новому с отдельным текстом нет.** V1 (`Dup`,
 старый в игре) — старый выброшен play-`disconnect` с

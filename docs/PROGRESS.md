@@ -3,7 +3,7 @@
 Полный план: `ARCHITECTURE.md` (раздел 8 — этапы M0–M10).
 Правила для агента: `AGENTS.md`.
 
-**Текущий этап: M4.5, Шаг 21.0 — перепроверка S15 (дубликат имени).** Ваниль проверена в четырёх условиях: V1 (старый уже в игре) выбрасывает старого play-`disconnect` с `multiplayer.disconnect.duplicate_login` (три прогона), V2 (`Alice`/`alice`) — регистр даёт разные offline UUID, оба остаются, V3 (`online-mode=true`) не проверялось (нет учётных записей), V4 (два соединения подряд) — позднее соединение отклонено тем же ключом ещё до play-логина. Наш сервер совпал в V1 и V2 (живые прогоны, 0 failed); в V4 расхождение — оба успевают войти в play, старый закрывается без пакета `disconnect`. Код сервера не менялся. Ниже — шаг 20: решения владельца по playerdata, разбор parity, план сохранения мира. Шаг 20a: повторный вход с тем же ником выкидывает старое соединение play-`disconnect` с `multiplayer.disconnect.duplicate_login` (байты сняты с ванильного S15, живой S15 на нашем сервере `2026-11-17_s15-ours-r1` — 0 failed); `save_dir` получает маркер `minerust-save.json` (version 1), `fsync` каталога на Unix; автосейв 6000 оставлен, online-режим отложен. Шаг 20b: разбор C2/C4/C5/C6 — реальные расхождения это отсутствующий `entity_position_sync` (14 пакетов), отставание head yaw в C4 на полшага, состав/темп движения и формат модификатора креатива (строка resource-location, а не UUID); правку сервера не делали. Шаг 20c: план сохранения мира — `docs/WORLD-SAVE.md`, кода нет. Открытые решения — C5/C6 (минимальная правка sync) и формат C6 ждут владельца; §8 `docs/WORLD-SAVE.md` — 7 вопросов по сохранению мира. Ниже — историческая запись M4.5: закрыты 13a–13c (ломание блока), 14b (автоочистка `world.stale`), 14d/14e (плавание), Шаг 15 п.1–п.5 (sprint от `player_command`, `dev_geometry`, сетка G1..G7 — 98.7 %, ползание S11 94/94), шаги 16–19 (трещины, мгновенное ломание, playerdata); реестр — `docs/MECHANICS.md`, планы — `docs/BLOCK-BREAKING.md`, `docs/SWIMMING.md`, `docs/PLAYERDATA.md`, `docs/WORLD-SAVE.md`. Исторические результаты M0–M3 описаны ниже.
+**Текущий этап: M4.5, Шаг 22 — parity 22a и сохранение мира 22b.** 22a.1–22a.3 реализованы (spawn `entity_position_sync`, head yaw −1 серверный тик, строковые creative-модификаторы); 22a.4 исследован, периодический trigger C2/C4 не установлен и не придуман. Ламинария ломается снизу вверх по одному блоку за тик. 22b реализован: versioned `.mrchunk`-дифф на чанк, `world.json` с SHA-256/DataVersion, dirty generations/in-flight, отдельный атомарный writer, загрузка до bind, автосейв 6000/лимит 256, финальный подтверждённый flush, общий `save_dir` и marker v2. Release-v3: snapshot 0.1 мкс, write 3.37 мс, вход второго клиента 120.52 мс; отдельный process-kill после подтверждённого autosave сохранил CRC-diff. Кодовые/интеграционные тесты зелёные; живой S16 с GUI и SHA шаблона/`vanilla\world` не выполнен (раннер не умеет restart посреди сценария) — это текущий блокер приёмки. Подробности: раздел «Шаг 22» ниже, `docs/MECHANICS.md`, `docs/WORLD-SAVE.md` §§11–12, `docs/PLAYERDATA.md` §15.
 
 Историческая запись M3/Шаг 3.3: коммиты `504de49..192a806` закрыли owner 6-point checklist (live-vs-vanilla отчёт, chunk-diff матрица, причина block entities (7,−2) в `docs/DECISIONS.md`, flake guard и SOURCES/PROGRESS); live проверка 08.11.2026 подтвердила M1/M2/3.3 настоящим клиентом 26.3. Следующий этап M4 был затем принят и выполнен; движок света оставался вне scope этого исторического шага.
 
@@ -3123,3 +3123,122 @@ V4 (`2026-11-17_s15-v4-ours-r1`) — расхождение: оба соедин
 **Долги / решения владельца.** V4: отклонять соединение до play-входа, пока
 другое с тем же UUID в configuration, или не удалять старого, пока
 `disconnect` не отправлен. Код сервера в 21.0 не менялся.
+
+## Шаг 22: entity parity, постепенная ламинария и сохранение мира (18.11.2026)
+
+### 22a.1 — начальный `entity_position_sync`
+
+- По C5/C6 sync о новом видимом игроке — разовый tracker-correct: после
+  второго `set_entity_data`, до первого `update_attributes`; поля
+  `teleport_id=1`, `flags=1`, `rotation=2`, поза/углы игрока, `tail=true`.
+- Реализован в `crates/net/src/entity_packets.rs` только для
+  `game_mode != 3`: C1/C2/C4 — spectator, у них начального sync нет.
+- Побайтный тест payload + тест порядка. Коммит `c9a95e2`.
+
+### 22a.2 — head yaw предыдущего серверного тика
+
+- C4: 44/50 однозначных пар; таблица 20 примеров —
+  `docs/MECHANICS.md` 22a.2. `head == body` лишь 1/50, предыдущий отправленный
+  пакет body тоже не правило (1/49).
+- `Player::previous_yaw`, чтение при формировании pose, обновление после
+  entity pass. Коммит `4e7d128`.
+
+### 22a.3 — creative `AttributeModifier`
+
+- Wire shape исправлен: identifier-строка + `f64` + `u8`, не UUID.
+- C6 order: entity range 3.0 + `creative_mode_entity_range` 2.0; block range
+  4.5 + `creative_mode_block_range` 0.5; movement speed 0.1 без modifier.
+- Побайтный 123-byte тест. Коммит `5a3dff1`.
+
+### 22a.4 — периодический sync только исследован
+
+- 15-строчная таблица в `docs/MECHANICS.md`: 8 periodic C2 + 4 periodic C4
+  + spawn C5/C6 + отрицательный контроль C1. C2 gaps: 330/90/1149/114/
+  5502/105/2664 мс; C4 — 4 sync при Δposition=0; tail чередуется 1/0.
+- Ни вход, `player_loaded`, первое движение, смена чанка/окна, cadence
+  `move_entity_*`, ни serverbound-класс не дают одного trigger. Реализации
+  нет: правило **не установлено**, гипотеза не выдана за механику.
+- Тест (в), прогон №2: 240 diff — C1/C5/C6 зелёные, C2 138 и C4 102
+  красные; periodic sync сдвигает индексное сравнение и порождает большую
+  часть вторичных type/payload diff. Отчёт вне repo:
+  `E:\MineRust-data\traces\entity-stream-parity.md`.
+
+### Ламинария
+
+- `break_block.rs`: блок над сломанным kelp ставится в очередь на следующий
+  tick и после своего ломания ставит следующий; один блок на tick, снизу
+  вверх, не мгновенный столбец.
+- Регрессионный тест проверяет три последовательных состояния и аудиторию
+  `level_event 2001`/`block_update`. Коммит `13669cb`.
+
+### 22b — диффы мира (формат C, код `d7a9014`)
+
+- Новый крейт `worldsave`: `.mrchunk` (`MRSV`, version 1, i32 chunk x/z,
+  u32 count, `(u32 cell, VarInt state)`, CRC-32 IEEE). `u32`, а не плановый
+  `u16`: 24×4096 = 98 304 клетки не помещаются в 16 бит.
+- `world.json`: template path, SHA-256 `level.dat`, DataVersion, generator.
+  Mismatch без override — ошибка до bind; `save_ignore_world_mismatch=true`
+  логирует warn и применяет диффы.
+- `Store`: атомарный `.tmp` → file `sync_all` → rename → directory `fsync`
+  (Unix; Windows no-op); удаление пустого diff тоже sync'ит каталог. Битый
+  format/CRC и unknown state/chunk пропускаются с warn; I/O каталога/файла
+  останавливает warm-up до bind.
+- `ChunkStore`: полный diff против template baseline, поколения, `in_flight`
+  без повторной очереди первых 256, `LoadedChunk` для уже durable состояния.
+  Загруженный diff не считается грязным; ack обновляет durable snapshot;
+  новая правка после ack сохраняет старые клетки того же файла.
+- Writer: bounded 32 batches, periodic `try_send`, 256 chunks/pass; ошибки
+  дают отрицательный ack и retry. После game-thread join сервер посылает
+  полный `shutdown_batch` командой `Flush`, ждёт disk-result ≤5s, затем
+  bounded shutdown; cleanup выполняется и при accept-loop error. Disk error
+  больше не логируется как успешный flush и даёт non-zero exit. Если game
+  thread не joined за deadline, финальный snapshot не снимается (нет гонки).
+- Финальные online-player snapshots staged в отдельном shutdown-only Mutex и
+  попадают в playerdata-writer только после успешного world `Flush`; при
+  world error они не могут обогнать мир. Полная финальная player queue тоже
+  завершает сервер с ошибкой.
+- Загрузка — в `TemplateWorld::build_batch` до `warm_world`/bind; payload
+  клонируется только для чанков с diff. `ReadyChunks::from_arcs` сохраняет
+  остальные Arc.
+- Общий `save_dir`: playerdata marker v2, v1 → v2 атомарно без потери
+  `data_version`; настройки `world_autosave_ticks=6000` и
+  `save_ignore_world_mismatch=false`; dev geometry после применения сбрасывает
+  только новую dirty-карту и не попадает в save.
+- Только блоки. Block entities, light, items/drops, Anvil export — вне 22b.
+  Формат/конкурентность/ограничения: `docs/WORLD-SAVE.md` §§11–12 и
+  `docs/DECISIONS.md` «Шаг 22b».
+
+### Проверка и замеры
+
+- Unit/integration: format/CRC/meta/store/writer/final flush; generations,
+  in-flight, retry, повторная правка после ack, dev geometry reset; template →
+  edit → writer → reopen → cell survives → return to template deletes file.
+- Release synthetic (`measure_22b`): snapshot 1/16/64/256 cells =
+  0.1/0.2/0.3/0.6 мкс; atomic write = 3.35/3.32/3.32/3.02 мс; apply =
+  320.4/1141.0/3855.3/14303.4 мкс.
+- Release real v3 (`worldsave_measure`): one-dirty-chunk snapshot median
+  **0.1 мкс** (500), atomic write **3.37 мс** (30), second socket client
+  enters play after warm-up in **120.52 мс**. Test passed in 9.51 s.
+- Gate перед коммитами (строго последовательно): `cargo fmt --all` — exit 0;
+  `cargo clippy --workspace --all-targets -- -D warnings` — exit 0;
+  `cargo test --workspace` — exit 0 (net 230 passed/4 ignored, server 51,
+  playerdata 18, protocol 144, world 42, parity 35 + интеграционные,
+  worldsave 21 + roundtrip; ignored measurements/kill компилируются).
+
+### Блокеры / что не установлено
+
+- **S16 живым GUI-клиентом не выполнялся.** Текущий scenario runner не умеет
+  stop/restart одного ours-сервера в середине сценария; ручной launcher требует
+  владельца и двух GUI-клиентов. Поэтому не подтверждены живьём: A ломает
+  обычные и водные блоки → restart → A/B видят отсутствие; SHA шаблона и
+  `vanilla\world` не меняются.
+- Отдельный process-`kill` после подтверждённого автосейва **выполнен**:
+  release-тест `kill_after_autosave` принудительно завершил child без shutdown,
+  новый процесс прочитал checksummed diff (2 passed). Это настоящий writer и
+  process kill, но не полный GUI-server + clients стенд.
+- Periodic `entity_position_sync` C2/C4 — trigger не установлен.
+- V4 race duplicate login из Шага 21.0 остаётся отдельным долгом, не scope 22.
+
+**Следующий шаг:** владелец запускает/разрешает ручной S16 либо нужно отдельно
+расширить GUI-харнесс restart-фазой; после этого закрыть
+приёмку Шага 22. Не переходить к block entities/light/items/Anvil до решения.

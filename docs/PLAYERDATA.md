@@ -395,15 +395,18 @@ play-`disconnect` с теми же байтами, что ваниль, и за�
 - Проверяется только запрет на шаблон и `vanilla\world`. «Чужой» непустой
   каталог не детектируется как чужой мир, но теперь это видно: при
   создании в пустом каталоге сервер пишет маркер `minerust-save.json`
-  (`format: "minerust-save"`, `version: 1`, `data_version` мира). Непустой
+  (`format: "minerust-save"`, `version: 2`, `data_version` мира). Version 2
+  означает общий каталог playerdata + worldsave (Шаг 22b); старый маркер v1
+  при открытии атомарно переписывается в v2 с тем же `data_version`. Непустой
   каталог без маркера используется, но сервер пишет `warn` и **не**
   присваивает его; битый маркер или чужая версия — тоже `warn` и работа
   продолжается. Тесты `open_writes_the_marker_into_an_empty_save_root`,
   `open_tolerates_a_non_empty_root_without_a_marker`,
   `open_tolerates_a_damaged_or_future_marker`.
 - Рекомендация: одна папка на мир, зафиксированная в `server.toml`;
-  перенос — вручную скопировать `players/data` (и маркер) при
-  остановленном сервере. Автоматической миграции нет.
+  перенос — вручную скопировать **весь** `save_dir` (`players/`, `chunks/`,
+  `minerust-save.json`, `world.json`) при остановленном сервере.
+  Автоматической миграции между каталогами нет.
 
 ### 13.4 Формат UUID (offline vs online)
 
@@ -535,3 +538,30 @@ TCP-подключений отличался от порядка запуска
 второго клиента больше не определяется чужим disconnect), `Read-Trace`
 терпит недописанную строку живого 40-МБ трейса, `Test-TraceHasDisconnect`
 для дешёвой проверки.
+
+## 15. Общий `save_dir` и маркер v2 (Шаг 22b, 18.11.2026)
+
+С Шага 22b каталог принадлежит не только playerdata:
+
+```text
+save_dir/
+  minerust-save.json       # format minerust-save, version 2
+  players/data/<uuid>.dat
+  world.json               # SHA-256 level.dat + DataVersion шаблона
+  chunks/<x>.<z>.mrchunk   # диффы блоков по чанкам
+```
+
+- `MARKER_VERSION = 2`, `MIGRATED_VERSION = 1` в
+  `crates/playerdata/src/store.rs`. Формат полей маркера не изменился;
+  поменялось значение каталога: теперь это один мир вместе с игроками.
+- При v1 сервер сохраняет `format` и `data_version`, пишет тот же документ с
+  `version: 2` через атомарный `write_plain_atomically` и логирует миграцию.
+  Тест: `open_migrates_a_version_one_marker_without_losing_its_fields`.
+- Будущая/неизвестная версия и повреждённый маркер сохраняют старое поведение:
+  `warn`, каталог не перезаписывается, playerdata продолжает работать.
+- Порядок остановки: игровой поток сохраняет финальные online-player snapshots
+  только в shutdown-буфер; после его join сервер делает подтверждённый world
+  `Flush` и лишь затем ставит эти snapshots в playerdata-writer. При ошибке
+  мира они не обгоняют его; world-writer дренируется раньше playerdata-writer.
+  Подробности формата и конкурентности —
+  `docs/WORLD-SAVE.md` §§11–12 и `docs/DECISIONS.md` «Шаг 22b».
