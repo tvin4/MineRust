@@ -149,6 +149,16 @@ impl BlockStates {
         self.names.get(&state_id).map(String::as_str)
     }
 
+    /// The property values of one state id, as the report lists them.
+    ///
+    /// Шаг 24b: placement has to know whether a block carries `axis`, `type`,
+    /// `half`, `shape` or `waterlogged` before it can build the placed state
+    /// from the face and the cursor. An empty map is a block without
+    /// properties; `None` is an id the report does not list.
+    pub fn properties(&self, state_id: i32) -> Option<&Properties> {
+        self.properties.get(&state_id)
+    }
+
     /// Whether a state id is one of the three air blocks.
     ///
     /// Air is what a section header counts as "not solid" and what a break

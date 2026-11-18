@@ -47,10 +47,12 @@ pub use login::{
 pub use movement::{MoveEntityPos, MoveEntityPosRot, MoveEntityRot, MoveHeader, RotateHead};
 pub use play::{
     hashed_seed, BlockChangedAck, BlockDestruction, BlockUpdate, ConfirmTeleportation,
-    DeathLocation, DisconnectPlay, ForgetLevelChunk, GameEvent, KeepAlive, LevelEvent, LoginPlay,
-    PlayerAction, PlayerCommand, PlayerInfoEntry, PlayerInfoUpdate, PlayerInput, Punch,
-    SetCenterChunk, SetDefaultSpawnPosition, SetHealth, SynchronizePlayerPosition, MOVE_PLAYER_POS,
-    MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT, MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
+    ContainerSetContent, ContainerSetSlot, DeathLocation, DisconnectPlay, ForgetLevelChunk,
+    GameEvent, ItemStack, KeepAlive, LevelEvent, LoginPlay, PickItemFromBlock, PlayerAction,
+    PlayerCommand, PlayerInfoEntry, PlayerInfoUpdate, PlayerInput, Punch, SetCarriedItem,
+    SetCenterChunk, SetCreativeModeSlot, SetDefaultSpawnPosition, SetHealth, SetHeldSlot,
+    SynchronizePlayerPosition, UseItemOn, MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT,
+    MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
 };
 pub use status::{PingRequest, PongResponse, StatusRequest, StatusResponse};
 
@@ -114,6 +116,10 @@ pub fn used_packet_keys() -> &'static [PacketKey] {
         BlockDestruction::KEY,
         LevelEvent::KEY,
         SetHealth::KEY,
+        // play, clientbound inventory (Шаг 24a)
+        ContainerSetContent::KEY,
+        ContainerSetSlot::KEY,
+        SetHeldSlot::KEY,
         // play, clientbound entity stream (M4.5)
         AddEntity::KEY,
         RemoveEntities::KEY,
@@ -140,6 +146,11 @@ pub fn used_packet_keys() -> &'static [PacketKey] {
         PlayerInput::KEY,
         PlayerAction::KEY,
         Punch::KEY,
+        // play, serverbound inventory and placement (Шаг 24a/24b)
+        SetCreativeModeSlot::KEY,
+        SetCarriedItem::KEY,
+        PickItemFromBlock::KEY,
+        UseItemOn::KEY,
     ]
 }
 

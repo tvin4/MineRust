@@ -28,6 +28,8 @@ mod tags;
 pub mod fixtures;
 
 #[cfg(test)]
+mod registry_ids_tests;
+#[cfg(test)]
 mod tests;
 
 pub use blocks::{BlockStates, Properties};

@@ -41,6 +41,12 @@ struct RegistryReport {
 pub struct RegistryIds {
     /// Registry id → entry identifier → numeric protocol id.
     registries: BTreeMap<String, BTreeMap<String, i32>>,
+    /// Registry id → numeric protocol id → entry identifier.
+    ///
+    /// Шаг 24a/24d: the creative inventory holds protocol item ids, while the
+    /// player file stores item identifiers. The reverse index turns one into
+    /// the other without scanning the (larger) forward map per lookup.
+    names: BTreeMap<String, BTreeMap<i32, String>>,
 }
 
 impl RegistryIds {
@@ -65,6 +71,17 @@ impl RegistryIds {
     /// report describes both.
     pub fn entry_id(&self, registry_id: &str, entry: &str) -> Option<i32> {
         self.get(registry_id)?.get(entry).copied()
+    }
+
+    /// Entry identifier of one numeric id of one static registry
+    /// (`minecraft:item` → `1` → `minecraft:stone`), if the report
+    /// describes both.
+    ///
+    /// Шаг 24d: the player file names items, the wire names ids, so both
+    /// directions must be available. The first entry of an id wins, matching
+    /// [`Self::entry_id`] for a report without duplicate ids.
+    pub fn entry_name(&self, registry_id: &str, id: i32) -> Option<&str> {
+        self.names.get(registry_id)?.get(&id).map(String::as_str)
     }
 
     /// Entry ids of one registry (`minecraft:block`), if the report
@@ -102,14 +119,24 @@ fn registries_from_json_named(text: &str, path: String) -> Result<RegistryIds, D
     }
     Ok(RegistryIds {
         registries: file
-            .into_iter()
+            .iter()
             .map(|(registry, report)| {
                 let entries = report
                     .entries
-                    .into_iter()
-                    .map(|(entry, id)| (entry, id.protocol_id))
+                    .iter()
+                    .map(|(entry, id)| (entry.clone(), id.protocol_id))
                     .collect();
-                (registry, entries)
+                (registry.clone(), entries)
+            })
+            .collect(),
+        names: file
+            .iter()
+            .map(|(registry, report)| {
+                let mut by_id = BTreeMap::new();
+                for (entry, id) in &report.entries {
+                    by_id.entry(id.protocol_id).or_insert_with(|| entry.clone());
+                }
+                (registry.clone(), by_id)
             })
             .collect(),
     })

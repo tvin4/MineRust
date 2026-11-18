@@ -1301,6 +1301,404 @@ impl PlayerAction {
     }
 }
 
+/// One item stack of the 1.21.5+ wire format (Шаг 24a).
+///
+/// SOURCE: our vanilla S24a trace (`docs/BLOCK-PLACING.md` §2/§5): a stack is
+/// `count VarInt` (`0` = empty, and then nothing follows), and for a non-empty
+/// stack `item id VarInt` + `added components VarInt` + the components + `removed
+/// components VarInt`. Every stack this client sent or received in the traces
+/// carried `0` added and `0` removed components (stone in slot 36 was
+/// `40 01 00 00`), so the component payloads are kept **verbatim**: the codec
+/// does not know the component schemas and must not re-encode bytes the sender
+/// chose. For the same reason a stack is only decoded to the end of the payload
+/// (the `set_creative_mode_slot` field it follows is the packet's last field).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ItemStack {
+    /// Stack size; `0` is an empty stack.
+    pub count: i32,
+    /// Item protocol id (`minecraft:item`); `0` when the stack is empty.
+    pub item: i32,
+    /// Raw bytes after the item id: the added-component list and the removed
+    /// component list, as the sender wrote them (`00 00` for no components).
+    pub components: Vec<u8>,
+}
+
+impl ItemStack {
+    /// The empty stack.
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    /// Whether the stack is empty.
+    pub fn is_empty(&self) -> bool {
+        self.count <= 0
+    }
+
+    /// A stack of `count` of `item` with no components.
+    pub fn new(item: i32, count: i32) -> Self {
+        Self {
+            count,
+            item,
+            components: vec![0, 0],
+        }
+    }
+
+    /// Appends the stack to `writer`.
+    pub fn encode(&self, writer: &mut PacketWriter) {
+        if self.is_empty() {
+            writer.write_varint(0);
+            return;
+        }
+        writer.write_varint(self.count);
+        writer.write_varint(self.item);
+        // An empty tail means "no components": the two zero counts the wire
+        // needs are written here rather than guessed by every caller.
+        if self.components.is_empty() {
+            writer.write_varint(0);
+            writer.write_varint(0);
+        } else {
+            writer.write_bytes(&self.components);
+        }
+    }
+
+    /// Decodes a stack from `reader`, taking every remaining byte as the
+    /// component tail (see the struct docs for why).
+    pub fn decode_tail(reader: &mut PacketReader<'_>, limit: usize) -> Result<Self, CodecError> {
+        let count = reader.read_varint()?;
+        if count <= 0 {
+            return Ok(Self::empty());
+        }
+        let item = reader.read_varint()?;
+        let remaining = reader.remaining();
+        if remaining > limit {
+            return Err(CodecError::Unsupported {
+                context: "item stack components larger than the sanity cap",
+            });
+        }
+        let components = reader.read_bytes(remaining)?.to_vec();
+        Ok(Self {
+            count,
+            item,
+            components,
+        })
+    }
+}
+
+/// Maximum component tail of one stack: the `set_creative_mode_slot` payload is
+/// small in every trace (6..7 bytes), so a sanity cap keeps a hostile client
+/// from parking arbitrary bytes in the inventory.
+const MAX_ITEM_COMPONENTS: usize = 1024;
+
+/// Serverbound Set Creative Mode Slot (play id 57): a creative-mode client
+/// sets one player-inventory slot.
+///
+/// SOURCE: the S24a vanilla trace (`docs/BLOCK-PLACING.md` §2): `slot i16`
+/// big-endian + one [`ItemStack`]; there is no container id on the wire, so the
+/// slot is a player-inventory menu slot (36..44 hotbar). The trace carries no
+/// clientbound answer to this packet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetCreativeModeSlot {
+    /// Player-inventory menu slot (`0..45`).
+    pub slot: i16,
+    /// Item written into the slot (possibly empty).
+    pub item: ItemStack,
+}
+
+impl SetCreativeModeSlot {
+    /// Packet id of Set Creative Mode Slot (play state, serverbound).
+    pub const ID: u32 = 57;
+
+    /// Key that resolves the Set Creative Mode Slot id at runtime.
+    pub const KEY: PacketKey = PacketKey::serverbound(
+        ProtocolState::Play,
+        "minecraft:set_creative_mode_slot",
+        Self::ID,
+    );
+
+    /// Encodes the payload (packet id excluded).
+    pub fn encode_payload(&self) -> Vec<u8> {
+        let mut writer = PacketWriter::new();
+        writer.write_u16(self.slot as u16);
+        self.item.encode(&mut writer);
+        writer.into_bytes()
+    }
+
+    /// Decodes the payload; the packet id must already be consumed.
+    pub fn decode_payload(reader: &mut PacketReader<'_>) -> Result<Self, CodecError> {
+        let slot = reader.read_u16()? as i16;
+        let item = ItemStack::decode_tail(reader, MAX_ITEM_COMPONENTS)?;
+        Ok(Self { slot, item })
+    }
+}
+
+/// Serverbound Set Carried Item (play id 54): the selected hotbar slot.
+///
+/// SOURCE: the S24a vanilla trace (§2/§4): `slot i16` big-endian, and no
+/// clientbound answer — the wheel and the keys 1..9 both send only this packet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SetCarriedItem {
+    /// Selected hotbar slot, `0..8`.
+    pub slot: i16,
+}
+
+impl SetCarriedItem {
+    /// Packet id of Set Carried Item (play state, serverbound).
+    pub const ID: u32 = 54;
+
+    /// Key that resolves the Set Carried Item id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::serverbound(ProtocolState::Play, "minecraft:set_carried_item", Self::ID);
+
+    /// Encodes the payload (packet id excluded).
+    pub fn encode_payload(&self) -> Vec<u8> {
+        let mut writer = PacketWriter::new();
+        writer.write_u16(self.slot as u16);
+        writer.into_bytes()
+    }
+
+    /// Decodes the payload; the packet id must already be consumed.
+    pub fn decode_payload(reader: &mut PacketReader<'_>) -> Result<Self, CodecError> {
+        Ok(Self {
+            slot: reader.read_u16()? as i16,
+        })
+    }
+}
+
+/// Serverbound Pick Item From Block (play id 36): creative "pick block".
+///
+/// SOURCE: the S17 vanilla trace (`docs/BLOCK-PLACING.md` §2): `position` (8 B
+/// packed) + `include_data` bool (`00` in every observation). The server answers
+/// with `set_held_slot` and, when the item was not already in the hotbar,
+/// `container_set_slot` (§5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PickItemFromBlock {
+    /// Clicked block.
+    pub position: Position,
+    /// `true` when the client asks for the block's data (state-dependent pick).
+    pub include_data: bool,
+}
+
+impl PickItemFromBlock {
+    /// Packet id of Pick Item From Block (play state, serverbound).
+    pub const ID: u32 = 36;
+
+    /// Key that resolves the Pick Item From Block id at runtime.
+    pub const KEY: PacketKey = PacketKey::serverbound(
+        ProtocolState::Play,
+        "minecraft:pick_item_from_block",
+        Self::ID,
+    );
+
+    /// Encodes the payload (packet id excluded).
+    pub fn encode_payload(&self) -> Vec<u8> {
+        let mut writer = PacketWriter::new();
+        writer.write_position(self.position);
+        writer.write_bool(self.include_data);
+        writer.into_bytes()
+    }
+
+    /// Decodes the payload; the packet id must already be consumed.
+    pub fn decode_payload(reader: &mut PacketReader<'_>) -> Result<Self, CodecError> {
+        Ok(Self {
+            position: reader.read_position()?,
+            include_data: reader.read_bool()?,
+        })
+    }
+}
+
+/// Serverbound Use Item On (play id 66): the "right click a block" packet that
+/// places a block (Шаг 24b).
+///
+/// SOURCE: the S17 and S24b vanilla traces (`docs/BLOCK-PLACING.md` §2): `hand
+/// VarInt`, `position` (8 B packed), `face VarInt`, cursor `f32 ×3`, `inside`
+/// bool, `world_border` bool, `sequence VarInt`. The face values observed:
+/// `1` = up, `2` = north, `5` = east (the S17 log axis table fills the rest:
+/// `0` = down, `3` = south, `4` = west).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UseItemOn {
+    /// Hand: `0` main, `1` off hand (only `0` observed).
+    pub hand: i32,
+    /// Clicked block.
+    pub position: Position,
+    /// Clicked face (`0..5`, see the struct docs).
+    pub face: i32,
+    /// Hit point inside the block, `0.0..1.0` per axis.
+    pub cursor_x: f32,
+    /// Hit point inside the block, `0.0..1.0` per axis.
+    pub cursor_y: f32,
+    /// Hit point inside the block, `0.0..1.0` per axis.
+    pub cursor_z: f32,
+    /// Whether the player's own bounding box intersects the clicked block.
+    pub inside_block: bool,
+    /// Whether the interaction crosses the world border.
+    pub world_border: bool,
+    /// The client's own counter, echoed back in `block_changed_ack`.
+    pub sequence: i32,
+}
+
+impl UseItemOn {
+    /// Packet id of Use Item On (play state, serverbound).
+    pub const ID: u32 = 66;
+
+    /// Key that resolves the Use Item On id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::serverbound(ProtocolState::Play, "minecraft:use_item_on", Self::ID);
+
+    /// Face values of [`UseItemOn::face`].
+    pub const FACE_DOWN: i32 = 0;
+    /// See [`UseItemOn::FACE_DOWN`].
+    pub const FACE_UP: i32 = 1;
+    /// See [`UseItemOn::FACE_DOWN`].
+    pub const FACE_NORTH: i32 = 2;
+    /// See [`UseItemOn::FACE_DOWN`].
+    pub const FACE_SOUTH: i32 = 3;
+    /// See [`UseItemOn::FACE_DOWN`].
+    pub const FACE_WEST: i32 = 4;
+    /// See [`UseItemOn::FACE_DOWN`].
+    pub const FACE_EAST: i32 = 5;
+
+    /// Encodes the payload (packet id excluded).
+    pub fn encode_payload(&self) -> Vec<u8> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.hand);
+        writer.write_position(self.position);
+        writer.write_varint(self.face);
+        writer.write_f32(self.cursor_x);
+        writer.write_f32(self.cursor_y);
+        writer.write_f32(self.cursor_z);
+        writer.write_bool(self.inside_block);
+        writer.write_bool(self.world_border);
+        writer.write_varint(self.sequence);
+        writer.into_bytes()
+    }
+
+    /// Decodes the payload; the packet id must already be consumed.
+    pub fn decode_payload(reader: &mut PacketReader<'_>) -> Result<Self, CodecError> {
+        Ok(Self {
+            hand: reader.read_varint()?,
+            position: reader.read_position()?,
+            face: reader.read_varint()?,
+            cursor_x: reader.read_f32()?,
+            cursor_y: reader.read_f32()?,
+            cursor_z: reader.read_f32()?,
+            inside_block: reader.read_bool()?,
+            world_border: reader.read_bool()?,
+            sequence: reader.read_varint()?,
+        })
+    }
+}
+
+/// Clientbound Container Set Content (play id 18): the whole content of a
+/// window, sent for the player inventory at join (Шаг 24a).
+///
+/// SOURCE: the S24a vanilla trace (§5): `window id VarInt 0`, `state id VarInt
+/// 1`, `count VarInt 46`, 46 item stacks, the carried stack — 50 bytes for an
+/// empty inventory (`00 01 2e` + 46 × `00` + `00`). The window id is zero in
+/// every trace, so a VarInt and a byte encode identically; the public protocol
+/// document lists it as a VarInt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContainerSetContent {
+    /// Window id (`0` = the player inventory).
+    pub window: i32,
+    /// Window state id the client must echo in clicks.
+    pub state_id: i32,
+    /// Every slot of the window, in menu order.
+    pub items: Vec<ItemStack>,
+    /// The stack held on the cursor.
+    pub carried: ItemStack,
+}
+
+impl ContainerSetContent {
+    /// Packet id of Container Set Content (play state, clientbound).
+    pub const ID: u32 = 18;
+
+    /// Key that resolves the Container Set Content id at runtime.
+    pub const KEY: PacketKey = PacketKey::clientbound(
+        ProtocolState::Play,
+        "minecraft:container_set_content",
+        Self::ID,
+    );
+
+    /// Encodes the payload (packet id excluded).
+    pub fn encode_payload(&self) -> Vec<u8> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.window);
+        writer.write_varint(self.state_id);
+        writer.write_varint(self.items.len() as i32);
+        for item in &self.items {
+            item.encode(&mut writer);
+        }
+        self.carried.encode(&mut writer);
+        writer.into_bytes()
+    }
+}
+
+/// Clientbound Container Set Slot (play id 20): one window slot changed
+/// (Шаг 24a — the answer to `pick_item_from_block`).
+///
+/// SOURCE: the S17 vanilla trace (§5): `window byte 0`, `state id VarInt`,
+/// `slot i16` big-endian, item stack. Stone into hotbar slot 36 was
+/// `00 02 0024 01 01 00 00`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContainerSetSlot {
+    /// Window id (`0` = the player inventory).
+    pub window: u8,
+    /// Window state id after the change.
+    pub state_id: i32,
+    /// Player-inventory menu slot (`36..44` = hotbar).
+    pub slot: i16,
+    /// New stack of the slot.
+    pub item: ItemStack,
+}
+
+impl ContainerSetSlot {
+    /// Packet id of Container Set Slot (play state, clientbound).
+    pub const ID: u32 = 20;
+
+    /// Key that resolves the Container Set Slot id at runtime.
+    pub const KEY: PacketKey = PacketKey::clientbound(
+        ProtocolState::Play,
+        "minecraft:container_set_slot",
+        Self::ID,
+    );
+
+    /// Encodes the payload (packet id excluded).
+    pub fn encode_payload(&self) -> Vec<u8> {
+        let mut writer = PacketWriter::new();
+        writer.write_u8(self.window);
+        writer.write_varint(self.state_id);
+        writer.write_u16(self.slot as u16);
+        self.item.encode(&mut writer);
+        writer.into_bytes()
+    }
+}
+
+/// Clientbound Set Held Slot (play id 107): the selected hotbar slot.
+///
+/// SOURCE: the S24a/S17 vanilla traces (§4/§5): a single VarInt (`00` .. `08`).
+/// Vanilla sends it at join and after every creative pick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SetHeldSlot {
+    /// Selected hotbar slot, `0..8`.
+    pub slot: i32,
+}
+
+impl SetHeldSlot {
+    /// Packet id of Set Held Slot (play state, clientbound).
+    pub const ID: u32 = 107;
+
+    /// Key that resolves the Set Held Slot id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::clientbound(ProtocolState::Play, "minecraft:set_held_slot", Self::ID);
+
+    /// Encodes the payload (packet id excluded).
+    pub fn encode_payload(&self) -> Vec<u8> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.slot);
+        writer.into_bytes()
+    }
+}
+
 /// Reads a non-negative length prefix used by the array fields above.
 fn read_count(reader: &mut PacketReader<'_>) -> Result<usize, CodecError> {
     let count = reader.read_varint()?;
@@ -1936,5 +2334,206 @@ mod tests {
         let decoded = SynchronizePlayerPosition::decode_payload(&mut reader).expect("decodable");
         assert_eq!(decoded, packet);
         reader.ensure_empty().expect("no trailing bytes");
+    }
+
+    /// The S24a vanilla `set_creative_mode_slot` payloads
+    /// (`E:\MineRust-data\traces\s24a_decode.txt`): slot, count, item id, no
+    /// components. Decoding the recorded bytes and encoding them back must give
+    /// the same bytes.
+    #[test]
+    fn s24a_creative_slots_roundtrip_the_trace() {
+        for (raw, slot, item, count) in [
+            ("002440010000", 36, 1, 64),
+            ("0025403f0000", 37, 63, 64),
+            ("002640a3010000", 38, 163, 64),
+            ("002740d5020000", 39, 341, 64),
+            ("00284083040000", 40, 515, 64),
+            ("002940e7010000", 41, 231, 64),
+        ] {
+            let raw = hex(raw);
+            let mut reader = PacketReader::new(&raw);
+            let packet =
+                SetCreativeModeSlot::decode_payload(&mut reader).expect("decodable trace payload");
+            reader.ensure_empty().expect("the stack ends the payload");
+            assert_eq!(packet.slot, slot);
+            assert_eq!(packet.item.item, item);
+            assert_eq!(packet.item.count, count);
+            assert!(!packet.item.is_empty());
+            assert_eq!(
+                packet.encode_payload(),
+                raw,
+                "re-encoding keeps the component bytes verbatim"
+            );
+        }
+    }
+
+    /// An empty creative slot is `count 0` and nothing else: the codec must not
+    /// invent an item id for it.
+    #[test]
+    fn an_empty_creative_slot_is_the_count_only() {
+        let raw = hex("000000");
+        let mut reader = PacketReader::new(&raw);
+        let packet = SetCreativeModeSlot::decode_payload(&mut reader).expect("decodable");
+        assert_eq!(packet.slot, 0);
+        assert!(packet.item.is_empty());
+        assert_eq!(packet.encode_payload(), raw);
+    }
+
+    /// The S24a `set_carried_item` payloads: a big-endian short, nothing else.
+    #[test]
+    fn s24a_carried_item_roundtrips_the_trace() {
+        for (raw, slot) in [("0001", 1), ("0008", 8), ("0000", 0)] {
+            let raw = hex(raw);
+            let mut reader = PacketReader::new(&raw);
+            let packet = SetCarriedItem::decode_payload(&mut reader).expect("decodable");
+            reader.ensure_empty().expect("no trailing bytes");
+            assert_eq!(packet.slot, slot);
+            assert_eq!(packet.encode_payload(), raw);
+        }
+    }
+
+    /// The S17 `pick_item_from_block` payload: packed position + `include_data`.
+    #[test]
+    fn s17_pick_item_from_block_roundtrips_the_trace() {
+        let raw = hex("0000143ffffd80c800");
+        let mut reader = PacketReader::new(&raw);
+        let packet = PickItemFromBlock::decode_payload(&mut reader).expect("decodable");
+        reader.ensure_empty().expect("no trailing bytes");
+        assert_eq!(
+            packet.position,
+            Position {
+                x: 80,
+                y: 200,
+                z: -40
+            }
+        );
+        assert!(!packet.include_data);
+        assert_eq!(packet.encode_payload(), raw);
+    }
+
+    /// The S17 and S24b `use_item_on` payloads, byte for byte: hand 0, the
+    /// packed position, the face, the three cursor floats, the two flags and
+    /// the sequence.
+    #[test]
+    fn use_item_on_roundtrips_the_traces() {
+        for (raw, x, y, z, face, sequence) in [
+            (
+                "000000143ffffec0ca023f0000003eed009100000000000001",
+                80,
+                202,
+                -20,
+                2,
+                1,
+            ),
+            (
+                "00000015bffffec0ca023f0000003eed009100000000000002",
+                86,
+                202,
+                -20,
+                2,
+                2,
+            ),
+            (
+                "000000143ffffd80ca053f8000003f1eb8523f000000000001",
+                80,
+                202,
+                -40,
+                5,
+                1,
+            ),
+            (
+                "0000002d3ffffd70c8013f0000003f8000003f000000000005",
+                180,
+                200,
+                -41,
+                1,
+                5,
+            ),
+            (
+                "0000002abffffd80c9013f0000003f8000003efe75b2000006",
+                170,
+                201,
+                -40,
+                1,
+                6,
+            ),
+            (
+                "00000039bffffd80c9013f0000003f8000003efe75b2000007",
+                230,
+                201,
+                -40,
+                1,
+                7,
+            ),
+        ] {
+            let raw_bytes = hex(raw);
+            let mut reader = PacketReader::new(&raw_bytes);
+            let packet = UseItemOn::decode_payload(&mut reader).expect("decodable trace payload");
+            reader.ensure_empty().expect("no trailing bytes");
+            assert_eq!(packet.hand, 0);
+            assert_eq!(packet.position, Position { x, y, z });
+            assert_eq!(packet.face, face);
+            assert!(!packet.inside_block);
+            assert!(!packet.world_border);
+            assert_eq!(packet.sequence, sequence);
+            assert_eq!(packet.encode_payload(), raw_bytes);
+        }
+    }
+
+    /// The S24a join `container_set_content`: window 0, state 1, 46 empty slots,
+    /// an empty cursor — 50 bytes.
+    #[test]
+    fn s24a_container_set_content_matches_the_trace() {
+        let raw = hex("00012e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+        let packet = ContainerSetContent {
+            window: 0,
+            state_id: 1,
+            items: vec![ItemStack::empty(); 46],
+            carried: ItemStack::empty(),
+        };
+        assert_eq!(packet.encode_payload(), raw);
+        assert_eq!(raw.len(), 50);
+    }
+
+    /// The S17 creative-pick answers: `set_held_slot` and `container_set_slot`.
+    #[test]
+    fn s17_pick_answers_match_the_trace() {
+        for (raw, slot) in [("00", 0), ("04", 4), ("08", 8)] {
+            assert_eq!(SetHeldSlot { slot }.encode_payload(), hex(raw));
+        }
+        for (raw, state, slot, item) in [
+            ("0002002401010000", 2, 36, 1),
+            ("0003002501370000", 3, 37, 55),
+            ("0005002701e7010000", 5, 39, 231),
+        ] {
+            let packet = ContainerSetSlot {
+                window: 0,
+                state_id: state,
+                slot,
+                item: ItemStack::new(item, 1),
+            };
+            assert_eq!(packet.encode_payload(), hex(raw));
+        }
+    }
+
+    /// A stack with components keeps them verbatim on the way back out: the
+    /// codec neither parses nor rewrites component bytes.
+    #[test]
+    fn a_stack_keeps_its_component_bytes() {
+        let mut writer = PacketWriter::new();
+        ItemStack::new(1, 1).encode(&mut writer);
+        let mut bytes = writer.into_bytes();
+        assert_eq!(bytes, vec![1, 1, 0, 0]);
+        // Give the stack a component tail: one added component, one removed.
+        bytes.pop();
+        bytes.pop();
+        bytes.extend_from_slice(&[1, 0x2a, 0x05, 7]);
+        let mut reader = PacketReader::new(&bytes);
+        let stack = ItemStack::decode_tail(&mut reader, MAX_ITEM_COMPONENTS).expect("decodable");
+        reader.ensure_empty().expect("consumed");
+        assert_eq!(stack.components, vec![1, 0x2a, 0x05, 7]);
+        let mut writer = PacketWriter::new();
+        stack.encode(&mut writer);
+        assert_eq!(writer.into_bytes(), bytes);
     }
 }
