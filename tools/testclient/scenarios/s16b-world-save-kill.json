@@ -1,0 +1,25 @@
+{
+  "id": "s16b",
+  "title": "world save: autosave, hard kill, restart",
+  "playerA": "CrashA",
+  "playerB": "CrashB",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "settleMs": 500,
+  "beforeAutosave": {
+    "name": "durable-stone",
+    "x": 96,
+    "y": 132,
+    "z": -32,
+    "before": "minecraft:stone",
+    "after": "minecraft:air"
+  },
+  "afterAutosave": {
+    "name": "possibly-lost-dirt",
+    "x": 99,
+    "y": 135,
+    "z": -32,
+    "before": "minecraft:dirt",
+    "after": "minecraft:air"
+  }
+}

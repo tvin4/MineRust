@@ -195,8 +195,9 @@ Fabric loader + fabric-api берутся с официального maven.fabr
   `requiresCorrectToolForDrops()` (`toolRequired`, Шаг 17a). Источник
   серверного таймера копания (Шаг 16a/17a, `hardness_report`). Обе команды
   читают только публичный API игры и пишут файл вне репозитория.
-- `digpacket {k, start?}` — **только диагностика Шага 17b, сценариями не
-  используется.** Шлёт `player_action` **start** (`0`) по блоку под прицелом и
+- `digpacket {k, start?, x?, y?, z?}` — диагностический путь Шага 17b;
+  S16 дополнительно использует явную координату, потому что проверяет
+  сохранение, а не raycast. Шлёт `player_action` **start** (`0`) по блоку под прицелом или по `(x,y,z)` и
   через `k` клиентских тиков **finish** (`3`) для той же позиции и грани; пакет
   `ServerboundPlayerActionPacket` собирается и отправляется сам
   (`ClientPacketListener.send`), номера последовательности выдаёт команда.
@@ -267,6 +268,63 @@ mcproxy, итог `summary.json` в каталоге `E:\MineRust-data\autotests
 У нашего сервера нет RCON и playerdata, поэтому `save-all flush` и `gamemode`
 в этом режиме пропускаются с явной записью пробела в отчёт, а join-gate идёт по
 self-`observe` (`inGame`), а не по логу ванили.
+
+### S16: автоматическая проверка сохранения мира (Шаг 23b)
+
+Готовые строки локального `server.toml` владельца:
+
+```toml
+save_dir = 'E:\MineRust-data\worlds\s16-manual'
+world_autosave_ticks = 40
+save_ignore_world_mismatch = false
+```
+
+`save_dir` обязан быть отдельным каталогом: не template v3 и не
+`vanilla\world`. `40` тиков — тестовые 2 секунды; для обычного сервера default
+остаётся `6000`.
+
+Автопрогон release (runner всё равно генерирует отдельный config внутри
+`RunDir` и повторно использует его при restart):
+
+```powershell
+$run = 'E:\MineRust-data\autotests\2026-11-18_s16-ours'
+& .\tools\testclient\run-scenario.ps1 `
+  -Scenarios @('s16a','s16b') -Target ours -Release `
+  -RunDir $run -OursSaveDir (Join-Path $run 'save') `
+  -OursWorldAutosaveTicks 40 -OursSaveIgnoreWorldMismatch false
+```
+
+- **S16a:** dirt, short grass, seagrass и kelp ломаются; runner посылает
+  нашему серверу console-команду `stop` в stdin (как ванильная консоль), требует
+  завершившийся процесс (`exitCode=0`) и строки
+  `final world save flushed` → `world-save writer stopped` →
+  `player saves flushed`, перезапускает тот же config, затем A и поздний B
+  читают клетки командой `block {x,y,z}`.
+- **S16b:** первая правка ждёт больше `world_autosave_ticks` и CRC-valid
+  `.mrchunk`; вторая делается после autosave. Runner жёстко завершает точный
+  PID (`Stop-Process -Force`), перезапускает сервер и требует сохранения первой
+  правки; вторая может сохраниться или откатиться. Все `.mrchunk` проверяются по
+  CRC, `.tmp` не допускаются.
+- Обе фазы сравнивают SHA-256 всех файлов template v3 и `vanilla\world` до и
+  после. `mcproxy` между поколениями сервера не перезапускается; GUI-клиенты
+  перезапускаются через quickPlay.
+
+### S17: постановка блоков в творческом режиме (Шаг 23d, только трейс ванили)
+
+`scenarios/s17-creative-place.json` (`s17`) запускается **только** с
+`-Target vanilla`: 14 кейсов творческой постановки (pick → hotbar →
+`use_item_on`), фикстура собирается командами `setblock`/`fill`. Раннер
+пишет `s17-samples.json` (кейсы + wire-строки + инвентарь из
+`players/data/*.dat`) и требует, чтобы клиенты отключились **до** чтения
+трейсов (иначе поток entity-пакетов не даёт чтению сойтись). Наш сервер этот
+сценарий не запускает (`throw`, пока нет `use_item_on`); данные и план —
+`docs/BLOCK-PLACING.md`.
+
+```powershell
+$run = 'E:\MineRust-data\autotests\2026-11-18_s17-vanilla'
+& .\tools\testclient\run-scenario.ps1 -Scenarios s17 -Target vanilla -Release `
+  -RunDir $run
+```
 
 Прогон **2026-11-14_1735** (чистый): S2 **6/6 PASS**, остальное — честные пробелы
 возможностей нашего сервера (не баги стенда). S4 **3/3 PASS** остался за ванилью

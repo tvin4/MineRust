@@ -1,0 +1,15 @@
+{
+  "id": "s16a",
+  "title": "world save: graceful stop, restart, late observer",
+  "playerA": "SaveA",
+  "playerB": "SaveB",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "settleMs": 700,
+  "targets": [
+    { "name": "ordinary-dirt", "x": 98, "y": 135, "z": -32, "before": "minecraft:dirt", "after": "minecraft:air" },
+    { "name": "short-grass", "x": 99, "y": 136, "z": -29, "before": "minecraft:short_grass", "after": "minecraft:air" },
+    { "name": "seagrass", "x": 91, "y": 62, "z": -7, "before": "minecraft:seagrass", "after": "minecraft:water" },
+    { "name": "kelp", "x": 90, "y": 60, "z": -7, "before": "minecraft:kelp", "after": "minecraft:water" }
+  ]
+}

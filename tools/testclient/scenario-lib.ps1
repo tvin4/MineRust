@@ -114,6 +114,26 @@ function Read-Trace {
 	return @()
 }
 
+# Streams a large proxy trace line by line and returns only the rows whose
+# packet name is in `$Names` (exact match). Unlike Read-Trace it never builds a
+# whole-file JSON array, so 100+ MB traces (two clients streaming entity
+# packets) cannot exhaust memory or stall post-processing. A torn trailing line
+# is skipped.
+function Read-TraceMatches {
+	param([string]$Path, [string[]]$Names)
+	$lookup = @{}
+	foreach ($n in $Names) { $lookup[[string]$n] = $true }
+	$out = New-Object System.Collections.ArrayList
+	foreach ($line in [IO.File]::ReadLines($Path)) {
+		$want = $false
+		foreach ($n in $Names) { if ($line.Contains(('"' + $n + '"'))) { $want = $true; break } }
+		if (-not $want) { continue }
+		try { $row = $line | ConvertFrom-Json } catch { continue }
+		if ($lookup.ContainsKey([string]$row.name)) { $out.Add($row) | Out-Null }
+	}
+	return $out
+}
+
 # Cheap live check: does the trace already contain a disconnect row? Used
 # while a client is still connected; a full JSON parse of a growing 40 MB
 # trace every second is both slow and racy.
@@ -328,6 +348,16 @@ function New-ObserveCmd {
 		return '{"id":"' + $Id + '","cmd":"observe","args":{"player":"' + $Player + '"}}'
 	}
 	return '{"id":"' + $Id + '","cmd":"observe"}'
+}
+
+function New-BlockCmd {
+	param([string]$Id, [int]$X, [int]$Y, [int]$Z)
+	return '{"id":"' + $Id + '","cmd":"block","args":{"x":' + $X + ',"y":' + $Y + ',"z":' + $Z + '}}'
+}
+
+function New-DigPacketCmd {
+	param([string]$Id, [int]$X, [int]$Y, [int]$Z, [int]$Ticks = 1)
+	return '{"id":"' + $Id + '","cmd":"digpacket","args":{"x":' + $X + ',"y":' + $Y + ',"z":' + $Z + ',"k":' + $Ticks + '}}'
 }
 
 function New-KeyCmd {

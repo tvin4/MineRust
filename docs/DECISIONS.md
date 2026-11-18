@@ -1314,3 +1314,27 @@ payload оставлен побайтно равным V4:
 Живые ours: `2026-11-18_s15-v4-ours-step23-r2`, V4 — 6/6 PASS;
 `2026-11-18_s15-v1-ours-step23-r1` и
 `2026-11-18_s15-v2-ours-step23-r1` — 0 failed.
+
+## Шаг 23b: graceful stop через console `stop` в stdin (18.11.2026)
+
+**Решение.** Раннер останавливает наш сервер gracefully, записывая ванильную
+console-команду `stop` в stdin процесса (как ваниль и
+`parity::VanillaServer::stop`), а не через `taskkill`/`Stop-Process`.
+`shutdown_signal` в `crates/net/src/connection.rs` получил третий источник:
+detached `std::thread` читает stdin и на первой строке `stop` (без учёта
+регистра, с trim) посылает сигнал в тот же `tokio::sync::mpsc`, что Ctrl+C и
+Windows control events. Любая другая строка, конец ввода или ошибка чтения
+сигнала не дают.
+
+**Почему.** Процесс, запущенный `System.Diagnostics.Process` без
+console-окна, не получает WM_CLOSE, поэтому `taskkill` без `/F` не завершал его
+(`Stop-Process` без `-Force` — то же). Жёсткое завершение остаётся доступным
+(`Stop-Process -Force`) и используется в S16b; для S16a нужен именно чистый
+flush.
+
+**Границы.** Новых блокировок в горячем пути тика нет (только канал и
+detached-поток); поток может зависнуть на блокирующем чтении stdin — это
+безопасно, потому что процесс всё равно завершается по сигналу, а поток
+разблокируется при закрытии stdin. Проверка: unit-тесты `console_tests`
+(регистр/trim/`stopwatch`/EOF) и живые S16a/S16b
+(`docs/WORLD-SAVE.md` §12, `tools/testclient/README.md` §«S16»).

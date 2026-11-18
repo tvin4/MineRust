@@ -27,9 +27,10 @@ import net.minecraft.world.phys.BlockHitResult;
  * local-completion path, which happens no earlier than the full dig time; that
  * is exactly the value under test, so the finish has to be built from packets.
  *
- * <p>It is **not** a scenario input path — scenarios keep using {@code key}
- * (the KeyMapping path) and this command is never referenced by
- * `run-scenario.ps1`.
+ * <p>Normal mechanics scenarios keep using {@code key} (the KeyMapping
+ * path). S16 persistence may pass explicit {@code x,y,z}: it tests
+ * save/restart, not ray casting, and still sends the client's public packet
+ * type.
  *
  * <p>Args: {@code k} — client ticks between start and finish (default 3; at
  * least 1). The result reports the block, the face, the sequence numbers and
@@ -57,7 +58,9 @@ final class DigPacketCommand {
 
 	private CompletableFuture<JsonElement> dig(JsonObject args) {
 		LocalPlayerCheck.requireInGame(minecraft);
-		if (!(minecraft.hitResult instanceof BlockHitResult hit)) {
+		BlockHitResult hit = minecraft.hitResult instanceof BlockHitResult blockHit ? blockHit : null;
+		boolean explicit = args.has("x") && args.has("y") && args.has("z");
+		if (!explicit && hit == null) {
 			throw new IllegalStateException(
 					"digpacket: no block under the crosshair (hit=" + minecraft.hitResult + ")");
 		}
@@ -73,8 +76,10 @@ final class DigPacketCommand {
 		if (connection == null) {
 			throw new IllegalStateException("digpacket: not connected");
 		}
-		BlockPos pos = hit.getBlockPos().immutable();
-		Direction face = hit.getDirection();
+		BlockPos pos = explicit
+				? new BlockPos(args.get("x").getAsInt(), args.get("y").getAsInt(), args.get("z").getAsInt())
+				: hit.getBlockPos().immutable();
+		Direction face = explicit ? Direction.UP : hit.getDirection();
 		int startSequence = this.sequence++;
 		int finishSequence = this.sequence++;
 		if (withStart) {

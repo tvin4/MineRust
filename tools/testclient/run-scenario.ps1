@@ -54,6 +54,11 @@ param(
 	# period is in ticks (-1 leaves the config value).
 	[string]$OursSaveDir = '',
 	[int]$OursAutosaveTicks = -1,
+	# Шаг 23b: world autosave is independent from playerdata. A small value is
+	# used by S16b so the runner can prove a durable diff before a hard kill.
+	[int]$OursWorldAutosaveTicks = -1,
+	[ValidateSet('', 'true', 'false')]
+	[string]$OursSaveIgnoreWorldMismatch = '',
 	# РЁР°Рі 19a: force_gamemode for the generated config ('' leaves it).
 	[ValidateSet('', 'true', 'false')]
 	[string]$OursForceGamemode = '',
@@ -120,7 +125,120 @@ $script:vanillaProcess = $null
 # Stand PIDs, cleaned in finally.
 $script:vanillaPid = $null
 $script:oursPid = $null
+$script:oursProcess = $null
+$script:oursConfig = $null
+$script:oursGeneration = 0
+$script:oursEvents = @()
 $script:mcproxyPid = $null
+
+# Starts one generation of our server from the config written by Start-Stand.
+# mcproxy deliberately stays alive across generations: every upstream failure
+# ends only that proxied connection, not its listener.
+function Start-OursServer {
+	if (-not $script:oursConfig -or -not (Test-Path -LiteralPath $script:oursConfig)) {
+		throw 'ours config is not ready'
+	}
+	if ($script:oursProcess -and -not $script:oursProcess.HasExited) {
+		throw "ours server generation $($script:oursGeneration) is already running"
+	}
+	$script:oursGeneration++
+	$generation = $script:oursGeneration
+	$oursLog = Join-Path $RunDir ("ours-stdout-{0:d2}.log" -f $generation)
+	$oursErr = Join-Path $RunDir ("ours-stderr-{0:d2}.log" -f $generation)
+	$script:oursLog = $oursLog
+	# System.Diagnostics.Process, not Start-Process -PassThru: with redirected
+	# output the latter never exposes ExitCode after the process exits
+	# (measured 18.11.2026 with an isolated `cmd /c exit 7` probe), and S16
+	# needs the real shutdown exit code. The async pumps mirror the vanilla
+	# branch because the runner tails these logs while the server runs.
+	$startInfo = New-Object System.Diagnostics.ProcessStartInfo
+	$startInfo.FileName = $serverExe
+	$startInfo.Arguments = "--config `"$($script:oursConfig)`""
+	$startInfo.WorkingDirectory = Split-Path -Parent $repoServerToml
+	$startInfo.UseShellExecute = $false
+	$startInfo.RedirectStandardInput = $true
+	$startInfo.RedirectStandardOutput = $true
+	$startInfo.RedirectStandardError = $true
+	$process = New-Object System.Diagnostics.Process
+	$process.StartInfo = $startInfo
+	if (-not $process.Start()) { throw "could not start ours generation $generation" }
+	$script:oursProcess = $process
+	$script:oursPid = $process.Id
+	$script:oursEvents += Register-ObjectEvent -InputObject $process -EventName OutputDataReceived -MessageData $oursLog -Action {
+		if ($EventArgs.Data) { Add-Content -LiteralPath $Event.MessageData -Value $EventArgs.Data }
+	}
+	$script:oursEvents += Register-ObjectEvent -InputObject $process -EventName ErrorDataReceived -MessageData $oursErr -Action {
+		if ($EventArgs.Data) { Add-Content -LiteralPath $Event.MessageData -Value $EventArgs.Data }
+	}
+	$process.BeginOutputReadLine()
+	$process.BeginErrorReadLine()
+	$deadline = (Get-Date).AddSeconds(120)
+	while ((Get-Date) -lt $deadline) {
+		if ($process.HasExited) {
+			throw "ours generation $generation exited during startup (code $($process.ExitCode)); see $oursLog / $oursErr"
+		}
+		if (Get-NetTCPConnection -LocalPort 25566 -State Listen -ErrorAction SilentlyContinue) {
+			Write-Host ("ours generation {0} ready (pid {1}, log {2})" -f $generation, $script:oursPid, $oursLog)
+			return $oursLog
+		}
+		Start-Sleep -Milliseconds 300
+	}
+	throw "ours generation $generation did not open 25566"
+}
+
+# Stops only our upstream server. Graceful mode writes the vanilla console
+# `stop` command to the server's stdin (it flushes and exits 0); hard mode
+# terminates the exact process. Returns the stopped generation and its log.
+function Stop-OursServer {
+	param(
+		[ValidateSet('graceful', 'hard')][string]$Mode,
+		[int]$TimeoutSec = 30
+	)
+	if (-not $script:oursProcess -or $script:oursProcess.HasExited) {
+		return [PSCustomObject]@{ mode = $Mode; generation = $script:oursGeneration; log = $script:oursLog; exited = $true; exitCode = $null }
+	}
+	$process = $script:oursProcess
+	$serverPid = $process.Id
+	$generation = $script:oursGeneration
+	$log = $script:oursLog
+	if ($Mode -eq 'graceful') {
+		# Vanilla parity: our server accepts the console `stop` command on
+		# stdin and flushes on shutdown. `taskkill` (WM_CLOSE) cannot be used
+		# here: the System.Diagnostics.Process launcher gives the child no
+		# console window, so the window-close signal can never be delivered.
+		$process.StandardInput.WriteLine('stop')
+		$process.StandardInput.Flush()
+	} else {
+		Stop-Process -Id $serverPid -Force -ErrorAction Stop
+	}
+	if (-not $process.WaitForExit($TimeoutSec * 1000)) {
+		throw "ours generation $generation did not stop in ${TimeoutSec}s ($Mode)"
+	}
+	# The parameterless overload waits for the async output pumps to drain, so
+	# the generation log is complete before its flush lines are read.
+	$process.WaitForExit()
+	$exitCode = $process.ExitCode
+	foreach ($job in $script:oursEvents) {
+		Unregister-Event -SourceIdentifier $job.Name -ErrorAction SilentlyContinue
+		Remove-Job -Id $job.Id -Force -ErrorAction SilentlyContinue
+	}
+	$script:oursEvents = @()
+	$portDeadline = (Get-Date).AddSeconds(10)
+	while ((Get-Date) -lt $portDeadline -and
+		(Get-NetTCPConnection -LocalPort 25566 -State Listen -ErrorAction SilentlyContinue)) {
+		Start-Sleep -Milliseconds 200
+	}
+	if (Get-NetTCPConnection -LocalPort 25566 -State Listen -ErrorAction SilentlyContinue) {
+		throw "ours generation $generation stopped but port 25566 is still listening"
+	}
+	$script:oursProcess = $null
+	$script:oursPid = $null
+	return [PSCustomObject]@{ mode = $Mode; generation = $generation; log = $log; exited = $true; exitCode = $exitCode }
+}
+
+function Restart-OursServer {
+	return Start-OursServer
+}
 
 function Get-WorldSnapshot {
 	param([string]$WorldDir)
@@ -270,6 +388,7 @@ function Start-Stand {
 		# the workspace server.toml with only the listen address changed:
 		# real values (client jar, protocol version) never enter the repo.
 		$oursConfig = Join-Path $RunDir 'server-ours.toml'
+		$script:oursConfig = $oursConfig
 		$config = (Get-Content $repoServerToml -Raw) -replace 'listen\s*=\s*"[^"]*"', 'listen = "127.0.0.1:25566"'
 		$config = $config -replace "world_dir\s*=\s*'[^']*'", "world_dir = '$($script:activeWorldDir)'"
 		if ($OursGameMode -ge 0) {
@@ -334,6 +453,20 @@ function Start-Stand {
 				$config = $config.TrimEnd() + "`r`nautosave_interval_ticks = $OursAutosaveTicks`r`n"
 			}
 		}
+		if ($OursWorldAutosaveTicks -ge 0) {
+			if ($config -match '(?m)^world_autosave_ticks\s*=') {
+				$config = $config -replace '(?m)^world_autosave_ticks\s*=.*$', "world_autosave_ticks = $OursWorldAutosaveTicks"
+			} else {
+				$config = $config.TrimEnd() + "`r`nworld_autosave_ticks = $OursWorldAutosaveTicks`r`n"
+			}
+		}
+		if ($OursSaveIgnoreWorldMismatch) {
+			if ($config -match '(?m)^save_ignore_world_mismatch\s*=') {
+				$config = $config -replace '(?m)^save_ignore_world_mismatch\s*=.*$', "save_ignore_world_mismatch = $OursSaveIgnoreWorldMismatch"
+			} else {
+				$config = $config.TrimEnd() + "`r`nsave_ignore_world_mismatch = $OursSaveIgnoreWorldMismatch`r`n"
+			}
+		}
 		if ($OursForceGamemode) {
 			if ($config -match '(?m)^force_gamemode\s*=') {
 				$config = $config -replace '(?m)^force_gamemode\s*=.*$', "force_gamemode = $OursForceGamemode"
@@ -342,11 +475,7 @@ function Start-Stand {
 			}
 		}
 		$config | Set-Content $oursConfig -Encoding utf8
-		Start-Process -FilePath $serverExe -ArgumentList '--config', $oursConfig `
-			-WorkingDirectory (Split-Path -Parent $repoServerToml) `
-			-RedirectStandardOutput $oursLog `
-			-RedirectStandardError (Join-Path $RunDir 'ours-stderr.log') -PassThru |
-			ForEach-Object { $script:oursPid = $_.Id }
+		$null = Start-OursServer
 	}
 	for ($i = 0; $i -lt 120; $i++) {
 		if (Get-NetTCPConnection -LocalPort 25566 -State Listen -ErrorAction SilentlyContinue) { break }
@@ -383,7 +512,10 @@ function Stop-Stand {
 	if ($script:mcproxyPid) { Stop-Process -Id $script:mcproxyPid -Force -ErrorAction SilentlyContinue }
 	if ($script:vanillaOutputEvent) { Unregister-Event -SourceIdentifier $script:vanillaOutputEvent.Name -ErrorAction SilentlyContinue }
 	if ($script:vanillaErrorEvent) { Unregister-Event -SourceIdentifier $script:vanillaErrorEvent.Name -ErrorAction SilentlyContinue }
-	if ($script:oursPid) { Stop-Process -Id $script:oursPid -Force -ErrorAction SilentlyContinue }
+	if ($script:oursProcess -and -not $script:oursProcess.HasExited) {
+		try { $null = Stop-OursServer -Mode hard -TimeoutSec 15 }
+		catch { Stop-Process -Id $script:oursProcess.Id -Force -ErrorAction SilentlyContinue }
+	}
 }
 
 function Invoke-VanillaConsole {
@@ -3181,6 +3313,413 @@ function Invoke-S13Gamemode {
 	Start-Sleep -Seconds 2
 }
 
+# --- S16 (Шаг 23b): world-save restart and crash automation ---------------
+
+function Get-S16BlockId {
+	param([int]$Port, $Target, [string]$Id)
+	$response = Invoke-TestCmd $Port (New-BlockCmd $Id ([int]$Target.x) ([int]$Target.y) ([int]$Target.z)) 4000
+	if (-not $response.ok -or $response.result.inGame -ne $true) {
+		throw "S16 block query failed for $($Target.name)"
+	}
+	return [string]$response.result.block.id
+}
+
+function Wait-S16BlockId {
+	param([int]$Port, $Target, [string]$Expected, [int]$Seconds = 10)
+	$deadline = (Get-Date).AddSeconds($Seconds)
+	$last = 'unread'
+	while ((Get-Date) -lt $deadline) {
+		try { $last = Get-S16BlockId $Port $Target ("s16-{0}-poll" -f $Target.name) } catch { }
+		if ($last -eq $Expected) {
+			return [PSCustomObject]@{ matched = $true; value = $last }
+		}
+		Start-Sleep -Milliseconds 150
+	}
+	return [PSCustomObject]@{ matched = $false; value = $last }
+}
+
+function Invoke-S16BreakTarget {
+	param([int]$Port, $Target, $Result, [string]$Phase)
+	$before = Get-S16BlockId $Port $Target ("$Phase-$($Target.name)-before")
+	Add-Check $Result ("S16 {0}: {1} starts as {2}" -f $Phase, $Target.name, $Target.before) `
+		($before -eq [string]$Target.before) ("block={0} at ({1},{2},{3})" -f $before, $Target.x, $Target.y, $Target.z)
+	$reply = Invoke-TestCmd $Port (New-DigPacketCmd "$Phase-$($Target.name)-break" ([int]$Target.x) ([int]$Target.y) ([int]$Target.z) 1) 4000
+	$after = Wait-S16BlockId $Port $Target ([string]$Target.after) 10
+	Add-Check $Result ("S16 {0}: A breaks {1}" -f $Phase, $Target.name) `
+		($reply.ok -and $after.matched) ("after={0}, expected={1}" -f $after.value, $Target.after)
+	$script:s7Facts.Add(("S16 {0} break {1}: ({2},{3},{4}) {5}->{6}" -f `
+			$Phase, $Target.name, $Target.x, $Target.y, $Target.z, $before, $after.value))
+}
+
+function Get-S16ChunkPath {
+	param([string]$SaveDir, $Target)
+	$cx = [int][Math]::Floor(([double]$Target.x) / 16.0)
+	$cz = [int][Math]::Floor(([double]$Target.z) / 16.0)
+	return Join-Path (Join-Path $SaveDir 'chunks') ("{0}.{1}.mrchunk" -f $cx, $cz)
+}
+
+function Test-S16MrChunk {
+	param([string]$Path)
+	if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+		return [PSCustomObject]@{ valid = $false; detail = 'missing' }
+	}
+	[byte[]]$bytes = [IO.File]::ReadAllBytes($Path)
+	if ($bytes.Length -lt 21) {
+		return [PSCustomObject]@{ valid = $false; detail = "short:$($bytes.Length)" }
+	}
+	$magic = [Text.Encoding]::ASCII.GetString($bytes, 0, 4)
+	if ($magic -ne 'MRSV' -or $bytes[4] -ne 1) {
+		return [PSCustomObject]@{ valid = $false; detail = "header:$magic/v$($bytes[4])" }
+	}
+	[uint64]$crc = 4294967295
+	for ($i = 0; $i -lt ($bytes.Length - 4); $i++) {
+		$crc = ($crc -bxor [uint64]$bytes[$i]) -band 0xffffffff
+		for ($bit = 0; $bit -lt 8; $bit++) {
+			if (($crc -band 1) -ne 0) {
+				$crc = (($crc -shr 1) -bxor [uint64]3988292384) -band 4294967295
+			} else {
+				$crc = ($crc -shr 1) -band 4294967295
+			}
+		}
+	}
+	[uint32]$actual = [uint32](($crc -bxor 4294967295) -band 4294967295)
+	[uint32]$stored = [BitConverter]::ToUInt32($bytes, $bytes.Length - 4)
+	return [PSCustomObject]@{
+		valid = ($actual -eq $stored)
+		detail = ("bytes={0} crc={1:x8} stored={2:x8}" -f $bytes.Length, $actual, $stored)
+	}
+}
+
+function Get-S16SaveAudit {
+	param([string]$SaveDir)
+	$chunkDir = Join-Path $SaveDir 'chunks'
+	$files = if (Test-Path -LiteralPath $chunkDir) { @(Get-ChildItem -LiteralPath $chunkDir -File -Filter '*.mrchunk') } else { @() }
+	$tmp = if (Test-Path -LiteralPath $chunkDir) { @(Get-ChildItem -LiteralPath $chunkDir -File -Filter '*.tmp') } else { @() }
+	$bad = @()
+	foreach ($file in $files) {
+		$check = Test-S16MrChunk $file.FullName
+		if (-not $check.valid) { $bad += ("{0}: {1}" -f $file.Name, $check.detail) }
+	}
+	return [PSCustomObject]@{ files = $files.Count; temporary = $tmp.Count; bad = $bad }
+}
+
+function Wait-S16DurableChunk {
+	param([string]$Path, [datetime]$Since, [int]$Seconds = 20)
+	$deadline = (Get-Date).AddSeconds($Seconds)
+	while ((Get-Date) -lt $deadline) {
+		if (Test-Path -LiteralPath $Path) {
+			$item = Get-Item -LiteralPath $Path
+			$check = Test-S16MrChunk $Path
+			if ($item.LastWriteTime -gt $Since -and $check.valid) { return $check }
+		}
+		Start-Sleep -Milliseconds 200
+	}
+	return [PSCustomObject]@{ valid = $false; detail = 'no newer durable diff before timeout' }
+}
+
+function Add-S16ProtectionChecks {
+	param($Result, $TemplateBefore, $VanillaBefore, [string]$Phase)
+	$templateAfter = Get-TreeFingerprint $templateWorldDir
+	$vanillaWorld = Join-Path $vanillaDir 'world'
+	$vanillaAfter = Get-TreeFingerprint $vanillaWorld
+	$templateDiff = @(Compare-Object $TemplateBefore $templateAfter)
+	$vanillaDiff = @(Compare-Object $VanillaBefore $vanillaAfter)
+	Add-Check $Result "S16 $Phase`: template v3 SHA-256 is unchanged" ($templateDiff.Count -eq 0) `
+		("files={0} changed={1}" -f $templateAfter.Count, $templateDiff.Count)
+	Add-Check $Result "S16 $Phase`: vanilla\world SHA-256 is unchanged" ($vanillaDiff.Count -eq 0) `
+		("files={0} changed={1}" -f $vanillaAfter.Count, $vanillaDiff.Count)
+}
+
+function Start-S16Pair {
+	param($Cfg)
+	$null = Start-Client ([string]$Cfg.playerA) ([int]$Cfg.controlPortA) (Get-Date)
+	$null = Start-Client ([string]$Cfg.playerB) ([int]$Cfg.controlPortB) (Get-Date)
+	$null = Wait-ObserverChunksStable ([int]$Cfg.controlPortB) 30
+}
+
+function Stop-S16Clients {
+	param($Cfg)
+	Stop-ClientByName ([string]$Cfg.playerA)
+	Stop-ClientByName ([string]$Cfg.playerB)
+	Start-Sleep -Seconds 2
+}
+
+function Add-S16RestartBlockChecks {
+	param($Cfg, $Result, $Targets, [string]$Phase)
+	foreach ($target in @($Targets)) {
+		$a = Get-S16BlockId ([int]$Cfg.controlPortA) $target ("$Phase-a-$($target.name)")
+		$b = Get-S16BlockId ([int]$Cfg.controlPortB) $target ("$Phase-b-$($target.name)")
+		$pass = ($a -eq [string]$target.after -and $b -eq [string]$target.after)
+		Add-Check $Result ("S16 {0}: A and late B see {1} persisted" -f $Phase, $target.name) $pass `
+			("A={0} B={1} expected={2}" -f $a, $b, $target.after)
+	}
+}
+
+function Invoke-S16a {
+	param($Cfg, $Result)
+	if ($isVanilla) { throw 'S16a targets our world-save implementation' }
+	$templateBefore = Get-TreeFingerprint $templateWorldDir
+	$vanillaBefore = Get-TreeFingerprint (Join-Path $vanillaDir 'world')
+	$configHash = (Get-FileHash -LiteralPath $script:oursConfig -Algorithm SHA256).Hash
+	$null = Start-Client ([string]$Cfg.playerA) ([int]$Cfg.controlPortA) (Get-Date)
+	$null = Wait-ObserverChunksStable ([int]$Cfg.controlPortA) 30
+	$mode = (Invoke-TestCmd ([int]$Cfg.controlPortA) (New-ObserveCmd 's16a-mode')).result.gameMode
+	Add-Check $Result 'S16a: A is in creative' ($mode -eq 'creative') "mode=$mode"
+	foreach ($target in @($Cfg.targets)) {
+		Invoke-S16BreakTarget ([int]$Cfg.controlPortA) $target $Result 'a'
+	}
+
+	$stopped = Stop-OursServer -Mode graceful -TimeoutSec 30
+	$log = [string]$stopped.log
+	$worldFlushed = Select-String -LiteralPath $log -Pattern 'final world save flushed' -Quiet -ErrorAction SilentlyContinue
+	$writerStopped = Select-String -LiteralPath $log -Pattern 'world-save writer stopped' -Quiet -ErrorAction SilentlyContinue
+	$playersFlushed = Select-String -LiteralPath $log -Pattern 'player saves flushed' -Quiet -ErrorAction SilentlyContinue
+	Add-Check $Result 'S16a: graceful stop exits 0 and flushes world before shutdown' `
+		($stopped.exited -and $stopped.exitCode -eq 0 -and $worldFlushed -and $writerStopped -and $playersFlushed) `
+		("exited={0} exitCode={1} world={2} writer={3} players={4} log={5}" -f `
+			$stopped.exited, $stopped.exitCode, $worldFlushed, $writerStopped, $playersFlushed, $log)
+	Stop-S16Clients $Cfg
+	$null = Restart-OursServer
+	$configHashAfter = (Get-FileHash -LiteralPath $script:oursConfig -Algorithm SHA256).Hash
+	Add-Check $Result 'S16a: restart reuses the exact same config/save_dir' ($configHash -eq $configHashAfter) `
+		("config sha before={0} after={1} save_dir={2}" -f $configHash, $configHashAfter, $OursSaveDir)
+	Start-S16Pair $Cfg
+	Add-S16RestartBlockChecks $Cfg $Result $Cfg.targets 'a'
+	$audit = Get-S16SaveAudit $OursSaveDir
+	Add-Check $Result 'S16a: every diff has a valid CRC and no .tmp remains' `
+		($audit.files -gt 0 -and $audit.bad.Count -eq 0 -and $audit.temporary -eq 0) `
+		("files={0} bad={1} tmp={2}" -f $audit.files, ($audit.bad -join '; '), $audit.temporary)
+	Add-S16ProtectionChecks $Result $templateBefore $vanillaBefore 'a'
+	try { $null = Invoke-TestCmd ([int]$Cfg.controlPortA) (New-SessionCmd 's16a-off-a' 'disconnect') } catch { }
+	try { $null = Invoke-TestCmd ([int]$Cfg.controlPortB) (New-SessionCmd 's16a-off-b' 'disconnect') } catch { }
+}
+
+function Invoke-S16b {
+	param($Cfg, $Result)
+	if ($isVanilla) { throw 'S16b targets our world-save implementation' }
+	$templateBefore = Get-TreeFingerprint $templateWorldDir
+	$vanillaBefore = Get-TreeFingerprint (Join-Path $vanillaDir 'world')
+	$configHash = (Get-FileHash -LiteralPath $script:oursConfig -Algorithm SHA256).Hash
+	$null = Start-Client ([string]$Cfg.playerA) ([int]$Cfg.controlPortA) (Get-Date)
+	$null = Wait-ObserverChunksStable ([int]$Cfg.controlPortA) 30
+	$mode = (Invoke-TestCmd ([int]$Cfg.controlPortA) (New-ObserveCmd 's16b-mode')).result.gameMode
+	Add-Check $Result 'S16b: A is in creative' ($mode -eq 'creative') "mode=$mode"
+
+	$durableTarget = $Cfg.beforeAutosave
+	$breakAt = Get-Date
+	Invoke-S16BreakTarget ([int]$Cfg.controlPortA) $durableTarget $Result 'b-durable'
+	# Explicitly wait longer than one configured world-autosave period, then
+	# demand a newer checksummed file; `world autosave queued` alone is not a
+	# durability signal.
+	Start-Sleep -Milliseconds (($OursWorldAutosaveTicks * 50) + 500)
+	$chunkPath = Get-S16ChunkPath $OursSaveDir $durableTarget
+	$durable = Wait-S16DurableChunk $chunkPath $breakAt 20
+	Add-Check $Result 'S16b: the pre-kill edit reached an atomic CRC-valid autosave' $durable.valid `
+		("path={0} {1}" -f $chunkPath, $durable.detail)
+
+	$lateTarget = $Cfg.afterAutosave
+	Invoke-S16BreakTarget ([int]$Cfg.controlPortA) $lateTarget $Result 'b-late'
+	$stopped = Stop-OursServer -Mode hard -TimeoutSec 15
+	$hardLog = [string]$stopped.log
+	$gracefulMarker = Select-String -LiteralPath $hardLog -Pattern 'final world save flushed' -Quiet -ErrorAction SilentlyContinue
+	Add-Check $Result 'S16b: server was hard-killed without shutdown flush' (-not $gracefulMarker) `
+		("exit={0} final-flush-line={1} log={2}" -f $stopped.exitCode, $gracefulMarker, $hardLog)
+	Stop-S16Clients $Cfg
+	$auditAfterKill = Get-S16SaveAudit $OursSaveDir
+	Add-Check $Result 'S16b: hard kill left no corrupt or temporary diff files' `
+		($auditAfterKill.files -gt 0 -and $auditAfterKill.bad.Count -eq 0 -and $auditAfterKill.temporary -eq 0) `
+		("files={0} bad={1} tmp={2}" -f $auditAfterKill.files, ($auditAfterKill.bad -join '; '), $auditAfterKill.temporary)
+
+	$null = Restart-OursServer
+	$configHashAfter = (Get-FileHash -LiteralPath $script:oursConfig -Algorithm SHA256).Hash
+	Add-Check $Result 'S16b: crash restart reuses the exact same config/save_dir' ($configHash -eq $configHashAfter) `
+		("config sha before={0} after={1}" -f $configHash, $configHashAfter)
+	Start-S16Pair $Cfg
+	Add-S16RestartBlockChecks $Cfg $Result @($durableTarget) 'b-durable'
+	$aLate = Get-S16BlockId ([int]$Cfg.controlPortA) $lateTarget 's16b-late-a'
+	$bLate = Get-S16BlockId ([int]$Cfg.controlPortB) $lateTarget 's16b-late-b'
+	$allowed = @([string]$lateTarget.before, [string]$lateTarget.after)
+	Add-Check $Result 'S16b: the post-autosave edit is either saved or rolled back consistently' `
+		($aLate -eq $bLate -and $allowed -contains $aLate) `
+		("A={0} B={1} allowed={2}" -f $aLate, $bLate, ($allowed -join ','))
+	$auditAfterRestart = Get-S16SaveAudit $OursSaveDir
+	$damagedWarning = Select-String -LiteralPath $script:oursLog -Pattern 'damaged chunk diff|checksum' -Quiet -ErrorAction SilentlyContinue
+	Add-Check $Result 'S16b: restart reads every diff without CRC/format warnings' `
+		($auditAfterRestart.bad.Count -eq 0 -and $auditAfterRestart.temporary -eq 0 -and -not $damagedWarning) `
+		("bad={0} tmp={1} warning={2}" -f ($auditAfterRestart.bad -join '; '), $auditAfterRestart.temporary, $damagedWarning)
+	Add-S16ProtectionChecks $Result $templateBefore $vanillaBefore 'b'
+	try { $null = Invoke-TestCmd ([int]$Cfg.controlPortA) (New-SessionCmd 's16b-off-a' 'disconnect') } catch { }
+	try { $null = Invoke-TestCmd ([int]$Cfg.controlPortB) (New-SessionCmd 's16b-off-b' 'disconnect') } catch { }
+}
+
+# --- S17 (Шаг 23d): vanilla placement/inventory trace only -----------------
+
+function Invoke-S17 {
+	param($Cfg, $Result)
+	if (-not $isVanilla) { throw 'S17 is a vanilla trace/plan scenario; server implementation is forbidden in Step 23d' }
+	$portA = [int]$Cfg.controlPortA
+	$portB = [int]$Cfg.controlPortB
+	$nickA = [string]$Cfg.playerA
+	$nickB = [string]$Cfg.playerB
+	$settle = [int]$Cfg.settleMs
+	$inv = [Globalization.CultureInfo]::InvariantCulture
+	$watermark = Get-Date
+	$launchA = Start-Client $nickA $portA $watermark
+	$null = Start-Client $nickB $portB (Get-Date)
+	$null = Wait-ObserverChunksStable $portB 30
+	Invoke-VanillaConsole ("gamemode creative {0}" -f $nickA) | Out-Null
+	Invoke-VanillaConsole ("gamemode creative {0}" -f $nickB) | Out-Null
+	Invoke-VanillaConsole 'gamerule doMobSpawning false' | Out-Null
+	$fl = @($Cfg.forceload)
+	if ($fl.Count -eq 4) {
+		Invoke-VanillaConsole ("forceload add {0} {1} {2} {3}" -f $fl[0], $fl[1], $fl[2], $fl[3]) | Out-Null
+	}
+	Start-Sleep -Seconds 2
+
+	$caseFacts = New-Object System.Collections.ArrayList
+	foreach ($case in @($Cfg.cases)) {
+		$name = [string]$case.name
+		$source = @($case.source)
+		$support = @($case.support)
+		$dest = @($case.dest)
+		$stand = @($case.stand)
+		$initialId = ([string]$case.initial -split '\[')[0]
+
+		# Every case owns unique coordinates, so its wire rows can be attributed
+		# without comparing independent A/B clocks.
+		Invoke-VanillaConsole ("setblock {0} {1} {2} {3}" -f $source[0], $source[1], $source[2], $case.sourceBlock) | Out-Null
+		Invoke-VanillaConsole ("setblock {0} {1} {2} minecraft:stone" -f $support[0], $support[1], $support[2]) | Out-Null
+		Invoke-VanillaConsole ("setblock {0} {1} {2} {3}" -f $dest[0], $dest[1], $dest[2], $case.initial) | Out-Null
+		Invoke-VanillaConsole ("setblock {0} {1} {2} minecraft:stone" -f $dest[0], ([int]$dest[1] - 1), $dest[2]) | Out-Null
+		if ($case.surface) {
+			Invoke-VanillaConsole ("setblock {0} {1} {2} {3}" -f $dest[0], ([int]$dest[1] - 1), $dest[2], ([string]$case.surface)) | Out-Null
+			Invoke-VanillaConsole ("setblock {0} {1} {2} {3}" -f $dest[0], $dest[1], $dest[2], $case.initial) | Out-Null
+		}
+		Invoke-VanillaConsole ("fill {0} 200 {1} {2} 200 {3} minecraft:stone" -f `
+			([int][Math]::Floor([double]$stand[0]) - 1), ([int][Math]::Floor([double]$stand[2]) - 1), `
+			([int][Math]::Floor([double]$stand[0]) + 1), ([int][Math]::Floor([double]$stand[2]) + 1)) | Out-Null
+		Start-Sleep -Milliseconds 400
+
+		# Creative pick-block is the real key path; its trace must prove whether
+		# the client emitted set_creative_mode_slot.
+		$pickTp = [string]::Format($inv, "tp {0} {1} {2} {3} 0 90", $nickA, `
+			([double]$source[0] + 0.5), ([double]$source[1] + 1.0), ([double]$source[2] + 0.5))
+		Invoke-VanillaConsole $pickTp | Out-Null
+		Start-Sleep -Milliseconds 350
+		$pickAim = (Invoke-TestCmd $portA (New-ObserveCmd "s17-$name-pick-aim")).result
+		$pickAimed = ($pickAim.hitType -eq 'BLOCK' -and $null -ne $pickAim.hitBlock -and `
+			[int]$pickAim.hitBlock.x -eq [int]$source[0] -and [int]$pickAim.hitBlock.y -eq [int]$source[1] -and `
+			[int]$pickAim.hitBlock.z -eq [int]$source[2])
+		Add-Check $Result "S17 $name`: pick crosshair reaches the source" $pickAimed `
+			("hit={0} ({1},{2},{3})" -f $pickAim.hitType, $pickAim.hitBlock.x, $pickAim.hitBlock.y, $pickAim.hitBlock.z)
+		if ($pickAimed) { $null = Invoke-TestCmd $portA (New-KeyCmd "s17-$name-pick" 'pick' 'tap') }
+		Start-Sleep -Milliseconds 400
+		$held = (Invoke-TestCmd $portA (New-ObserveCmd "s17-$name-held")).result
+		Add-Check $Result "S17 $name`: creative pick selects the expected item" `
+			([string]$held.heldItem -eq [string]$case.item) `
+			("slot={0} held={1} count={2}" -f $held.selectedSlot, $held.heldItem, $held.heldCount)
+
+		if ($case.occupyWithB -eq $true) {
+			$bTp = [string]::Format($inv, "tp {0} {1} {2} {3} 0 0", $nickB, `
+				([double]$dest[0] + 0.5), [double]$dest[1], ([double]$dest[2] + 0.5))
+			Invoke-VanillaConsole $bTp | Out-Null
+			Start-Sleep -Milliseconds 300
+		}
+		$placeTp = [string]::Format($inv, "tp {0} {1} {2} {3} {4} {5}", $nickA, `
+			[double]$stand[0], [double]$stand[1], [double]$stand[2], [double]$stand[3], [double]$stand[4])
+		Invoke-VanillaConsole $placeTp | Out-Null
+		Start-Sleep -Milliseconds 400
+		$aim = (Invoke-TestCmd $portA (New-ObserveCmd "s17-$name-place-aim")).result
+		$preA = Get-S16BlockId $portA ([PSCustomObject]@{ name=$name; x=$dest[0]; y=$dest[1]; z=$dest[2] }) "s17-$name-pre-a"
+		$preB = Get-S16BlockId $portB ([PSCustomObject]@{ name=$name; x=$dest[0]; y=$dest[1]; z=$dest[2] }) "s17-$name-pre-b"
+		Add-Check $Result "S17 $name`: A and B see the prepared destination" `
+			($preA -eq $initialId -and $preB -eq $initialId) ("A={0} B={1} expected={2}" -f $preA, $preB, $initialId)
+		$null = Invoke-TestCmd $portA (New-KeyCmd "s17-$name-use" 'use' 'tap' 100)
+		Start-Sleep -Milliseconds $settle
+		$postAResult = (Invoke-TestCmd $portA (New-BlockCmd "s17-$name-post-a" ([int]$dest[0]) ([int]$dest[1]) ([int]$dest[2]))).result
+		$postBResult = (Invoke-TestCmd $portB (New-BlockCmd "s17-$name-post-b" ([int]$dest[0]) ([int]$dest[1]) ([int]$dest[2]))).result
+		$postA = [string]$postAResult.block.id
+		$postB = [string]$postBResult.block.id
+		Add-Check $Result "S17 $name`: vanilla placement outcome is visible to A and B" `
+			($postA -eq [string]$case.expectBlock -and $postB -eq [string]$case.expectBlock) `
+			("A={0} B={1} expected={2}" -f $postA, $postB, $case.expectBlock)
+
+		$caseFacts.Add([PSCustomObject]@{
+			name = $name; source = @($source); support = @($support); destination = @($dest)
+			item = [string]$case.item; selectedSlot = $held.selectedSlot; heldCount = $held.heldCount
+			pickHit = $pickAim.hitBlock; placeHit = $aim.hitBlock
+			beforeA = $preA; beforeB = $preB; afterA = $postA; afterB = $postB
+			propertiesA = $postAResult.block.properties; propertiesB = $postBResult.block.properties
+			occupied = [bool]$case.occupyWithB; outOfRange = [bool]$case.outOfRange
+		}) | Out-Null
+		if ($case.occupyWithB -eq $true) {
+			Invoke-VanillaConsole ("tp {0} 96.5 145 -31.5 0 0" -f $nickB) | Out-Null
+		}
+	}
+
+	Start-Sleep -Seconds 1
+	# Disconnect both clients before the trace is read. While they stay
+	# connected the two vanilla clients keep streaming entity/rotation packets
+	# into the trace, so a full-file read never converges (observed 18.11.2026:
+	# the conn traces grew to ~300 MB during post-processing and the run
+	# stalled for >35 min). Disconnecting first bounds the trace.
+	try { $null = Invoke-TestCmd $portA (New-SessionCmd 's17-off-a' 'disconnect') } catch { }
+	try { $null = Invoke-TestCmd $portB (New-SessionCmd 's17-off-b' 'disconnect') } catch { }
+	Start-Sleep -Seconds 3
+	$files = @(Get-NewTraceFiles $traceDir $watermark)
+	$aTrace = Select-TraceByPattern $files 'minecraft:(set_creative_mode_slot|use_item_on)'
+	$bTrace = if ($aTrace) { @($files | Where-Object { $_.FullName -ne $aTrace.FullName } | Select-Object -First 1) } else { $null }
+	$packetNames = @(
+		'minecraft:pick_item_from_block', 'minecraft:set_carried_item', 'minecraft:set_creative_mode_slot',
+		'minecraft:use_item_on', 'minecraft:use_item', 'minecraft:interact',
+		'minecraft:block_update', 'minecraft:block_changed_ack', 'minecraft:section_blocks_update',
+		'minecraft:container_set_content', 'minecraft:container_set_slot', 'minecraft:set_held_slot',
+		'minecraft:set_cursor_item', 'minecraft:level_event', 'minecraft:sound'
+	)
+	$wire = New-Object System.Collections.ArrayList
+	foreach ($trace in @($aTrace, $bTrace)) {
+		if ($null -eq $trace) { continue }
+		foreach ($row in @(Read-TraceMatches $trace.FullName $packetNames)) {
+			$wire.Add([PSCustomObject]@{
+				trace = $trace.Name; seq = [int]$row.seq; ms = [double]$row.read_ms
+				state = [string]$row.state; dir = [string]$row.dir; id = [int]$row.id
+				name = [string]$row.name; b64 = [string]$row.b64
+			}) | Out-Null
+		}
+	}
+	$pickRows = @($wire | Where-Object { $_.dir -eq 'serverbound' -and $_.name -eq 'minecraft:pick_item_from_block' })
+	$creativeRows = @($wire | Where-Object { $_.dir -eq 'serverbound' -and $_.name -eq 'minecraft:set_creative_mode_slot' })
+	$useRows = @($wire | Where-Object { $_.dir -eq 'serverbound' -and ($_.name -eq 'minecraft:use_item_on' -or $_.name -eq 'minecraft:use_item') })
+	Add-Check $Result 'S17: vanilla creative pick sends pick_item_from_block' ($pickRows.Count -gt 0) "count=$($pickRows.Count)"
+	Add-Check $Result 'S17: vanilla trace carries use_item_on/use_item placements' ($useRows.Count -gt 0) "count=$($useRows.Count)"
+	Add-Check $Result 'S17: no set_creative_mode_slot in the pick-block flow (observed, not required)' $true `
+		("set_creative_mode_slot={0} set_carried_item={1}" -f $creativeRows.Count,
+			@($wire | Where-Object { $_.dir -eq 'serverbound' -and $_.name -eq 'minecraft:set_carried_item' }).Count)
+
+	Invoke-VanillaConsole 'save-all flush' | Out-Null
+	Start-Sleep -Seconds 2
+	$playerFile = Join-Path (Join-Path $script:activeWorldDir 'players\data') (Get-OfflinePlayerFileName $nickA)
+	$inventory = @()
+	$selectedItemSlot = $null
+	if (Test-Path -LiteralPath $playerFile) {
+		$playerDoc = Read-PlayerNbt $playerFile
+		$selectedItemSlot = $playerDoc.root['SelectedItemSlot']
+		$inventory = @($playerDoc.root['Inventory'])
+	}
+	Add-Check $Result 'S17: vanilla playerdata contains the creative inventory' `
+		($inventory.Count -gt 0) ("file={0} selected={1} inventory entries={2}" -f $playerFile, $selectedItemSlot, $inventory.Count)
+
+	$artifact = [PSCustomObject]@{
+		generated = (Get-Date).ToString('o')
+		cases = @($caseFacts)
+		wire = @($wire)
+		playerdata = [PSCustomObject]@{ path = $playerFile; selectedItemSlot = $selectedItemSlot; inventory = @($inventory) }
+	}
+	$artifactPath = Join-Path $traceDir 's17-samples.json'
+	$artifact | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $artifactPath -Encoding utf8
+	$script:s7Facts.Add("S17 artifact: $artifactPath")
+}
+
 # --- S15 (РЁР°Рі 20a): duplicate login on one name ---------------------------
 # The scenario opens a second connection with the same player name and
 # records what the first connection receives. The vanilla trace is the
@@ -3452,12 +3991,13 @@ $scenarioDir = Join-Path $here 'scenarios'
 $allResults = @()
 try {
 	Prepare-RunWorld
-	if (-not $isVanilla -and (($Scenarios -contains 's13') -or ($Scenarios -contains 's13-stop') -or ($Scenarios -contains 's13-gamemode'))) {
+	$s16Requested = (($Scenarios -contains 's16a') -or ($Scenarios -contains 's16b'))
+	if (-not $isVanilla -and (($Scenarios -contains 's13') -or ($Scenarios -contains 's13-stop') -or ($Scenarios -contains 's13-gamemode') -or $s16Requested)) {
 		# РЁР°Рі 19a: the player save root lives inside the run directory. The
 		# gamemode variant reuses the directory of the preceding s13 run, so
 		# its file (with the patched mode) is still there.
 		if (-not $OursSaveDir) {
-			if (($Scenarios -contains 's13-gamemode') -or ($Scenarios -contains 's13-stop')) {
+			if ((-not $s16Requested) -and (($Scenarios -contains 's13-gamemode') -or ($Scenarios -contains 's13-stop'))) {
 				throw '-OursSaveDir is required for this scenario (point it at the s13 run save root)'
 			}
 			$OursSaveDir = Join-Path $RunDir 'save'
@@ -3470,8 +4010,14 @@ try {
 				throw "refusing save_dir inside $forbidden (template/world is read-only)"
 			}
 		}
-		if ($OursAutosaveTicks -lt 0) { $OursAutosaveTicks = 200 }
-		Write-Host ("player saves: {0} (autosave {1} ticks, force_gamemode '{2}')" -f $OursSaveDir, $OursAutosaveTicks, $OursForceGamemode)
+		if (-not $s16Requested -and $OursAutosaveTicks -lt 0) { $OursAutosaveTicks = 200 }
+		if ($s16Requested) {
+			if ($OursWorldAutosaveTicks -lt 0) { $OursWorldAutosaveTicks = 40 }
+			if (-not $OursSaveIgnoreWorldMismatch) { $OursSaveIgnoreWorldMismatch = 'false' }
+			if ($OursGameMode -lt 0) { $OursGameMode = 1 }
+		}
+		Write-Host ("save root: {0} (player autosave {1}, world autosave {2}, ignore mismatch '{3}')" -f `
+			$OursSaveDir, $OursAutosaveTicks, $OursWorldAutosaveTicks, $OursSaveIgnoreWorldMismatch)
 	}
 	if (-not $isVanilla -and $OursDevGeometry -and (($Scenarios -contains 's10') -or ($Scenarios -contains 's11') -or ($Scenarios -contains 's12') -or ($Scenarios -contains 's14'))) {
 		Write-DevGeometryFile $OursDevGeometry
@@ -3521,6 +4067,9 @@ try {
 			's15' { Invoke-S15 $cfg $result }
 			's15b' { Invoke-S15 $cfg $result }
 			's15c' { Invoke-S15 $cfg $result }
+			's16a' { Invoke-S16a $cfg $result }
+			's16b' { Invoke-S16b $cfg $result }
+			's17' { Invoke-S17 $cfg $result }
 			default { throw "unknown scenario '$($cfg.id)'" }
 		}
 		Stop-ClientByName $cfg.playerA

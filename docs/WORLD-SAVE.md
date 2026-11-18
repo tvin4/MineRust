@@ -348,18 +348,33 @@ u32 CRC32. Пустой список = чанк вернулся к шаблон
 
 ## 12. S16 и замеры (статус на 18.11.2026)
 
-**S16 живым клиентом — не выполнялся.** Сценария `s16-world-save` в
-`tools/testclient/scenarios/` нет: существующий раннер поднимает стенд один
-раз и не умеет останавливать/перезапускать сервер посреди прогона, а ручной
-`tools/run-server-blocks-check.bat` требует двух GUI-клиентов и человека.
-Что проверено вместо этого: интеграционный тест
-`crates/worldsave/tests/roundtrip.rs` (ломание → писатель → новый старт →
-клетка воздуха; возврат клетки в шаблон удаляет файл) и юнит-тесты
-`Store`/`Writer`/`ChunkStore`. Не проверено живьём: «B не видит блоки после
-рестарта» глазами клиента, неизменность шаблона и `vanilla\world` по SHA-256
-после прогона.
+**S16a/S16b живым стендом — выполнены (Шаг 23b, 18.11.2026).** Раннер
+`tools/testclient/run-scenario.ps1` научился останавливать наш сервер
+graceful-командой console `stop` (пишется в stdin, как ванильная консоль и
+`parity::VanillaServer::stop`) и hard-kill (`Stop-Process -Force`), затем
+перезапускать стенд с тем же `save_dir`.
+
+- **S16a** `2026-11-18_s16a-ours-step23-r4` — 18/18 PASS: A ломает обычный
+  блок,`short_grass`, `seagrass` и `kelp`; graceful stop `exited=True
+  exitCode=0` со строками `final world save flushed` → `world-save writer
+  stopped` → `player saves flushed`; restart с тем же конфигом (SHA-256 до =
+  после); A и поздний B видят отсутствие; каждый дифф валиден по CRC и без
+  `.tmp`; SHA-256 шаблона v3 (55 файлов) и `vanilla\world` (64) — 0 изменений.
+- **S16b** `2026-11-18_s16b-ours-step23-r2` — 15/15 PASS: правка до автосейва
+  durable (CRC-valid `<chunk>.mrchunk` новее момента ломания, `world autosave
+  queued` сигналом не считается), затем hard kill **без** shutdown flush
+  (`exit=-1`, строки `final world save flushed` нет); после kill нет битых и
+  временных файлов; restart тем же config; durable-блок сохранён; поздняя
+  правка после автосейва согласована у A и B; шаблон и `vanilla\world` не
+  изменились.
+
+Промежуточные провалы (`r2` с пустым `ExitCode`, `r3` — `taskkill` без `/F`
+не завершил процесс): переход на `System.Diagnostics.Process` без
+console-окна лишил процесс оконного сигнала WM_CLOSE. Решение — console
+`stop` в stdin (vanilla parity), см. `crates/net/src/connection.rs`.
 
 **Отдельный process-kill после автосейва — выполнен (headless writer).**
+`s16b` дополняет, но не подменяет этот headless-тест:
 `cargo test -p worldsave --release --test kill_after_autosave -- --ignored
 --nocapture`: дочерний процесс запускает настоящий bounded writer, получает
 успешный ack после `.tmp`/file fsync/rename/directory fsync, пишет ready-marker

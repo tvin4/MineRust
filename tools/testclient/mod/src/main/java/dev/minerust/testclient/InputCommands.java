@@ -73,7 +73,7 @@ final class InputCommands {
 	 * key: presses, releases or taps one of the client's key bindings.
 	 *
 	 * <p>Args: {@code key} - up/down/left/right/jump/shift/sprint/attack/
-	 * use/swing; {@code action} - down, up or tap (default tap);
+	 * use/swing/pick/hotbar1..hotbar9; {@code action} - down, up or tap (default tap);
 	 * {@code hold_ms} - tap duration (default 100 ms). attack/use replay the
 	 * GLFW mouse button callback ({@code MouseHandler.onButton}) and, unlike
 	 * held keys, can also be held with down/up/tap so the client's own mouse
@@ -94,12 +94,18 @@ final class InputCommands {
 			case "up", "down", "left", "right", "jump", "shift", "sprint" -> heldKey(key, action, holdMs);
 			case "attack" -> heldMouse(minecraft.options.keyAttack, action, holdMs, path(args));
 			case "use" -> heldMouse(minecraft.options.keyUse, action, holdMs, path(args));
+			case "pick" -> momentaryMapping(minecraft.options.keyPickItem, action, holdMs, key);
+			case "hotbar1", "hotbar2", "hotbar3", "hotbar4", "hotbar5", "hotbar6", "hotbar7", "hotbar8",
+					"hotbar9" -> {
+				int slot = Integer.parseInt(key.substring("hotbar".length())) - 1;
+				momentaryMapping(minecraft.options.keyHotbarSlots[slot], action, holdMs, key);
+			}
 			case "swing" -> {
 				requireMomentary(action, key);
 				swing(args);
 			}
 			default -> throw new IllegalArgumentException("unknown key: " + key
-					+ " (up/down/left/right/jump/shift/sprint/attack/use/swing)");
+					+ " (up/down/left/right/jump/shift/sprint/attack/use/swing/pick/hotbar1..hotbar9)");
 		}
 		return out;
 	}
@@ -170,6 +176,13 @@ final class InputCommands {
 		if (down) {
 			KeyMapping.click(mapping.getDefaultKey());
 		}
+	}
+
+	private void momentaryMapping(KeyMapping mapping, String action, long holdMs, String key) {
+		requireMomentary(action, key);
+		mappingDown(mapping, true);
+		int delay = Math.max(1, (int) (Math.max(holdMs, 50) / MS_PER_TICK));
+		ticks.schedule(delay, () -> mappingDown(mapping, false));
 	}
 
 	/** Old path: replays one GLFW mouse button tap (press now, release later). */

@@ -10,6 +10,7 @@ import net.minecraft.world.phys.HitResult;
 
 import java.util.concurrent.CompletableFuture;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
@@ -32,7 +33,7 @@ final class ObserveCommand {
 		this.minecraft = minecraft;
 	}
 
-	/** Registers the {@code observe} command on the dispatcher. */
+	/** Registers the read-only {@code observe} and {@code block} commands. */
 	void register(CommandDispatcher dispatcher) {
 		dispatcher.register("observe", args -> {
 			try {
@@ -43,6 +44,34 @@ final class ObserveCommand {
 				return failed;
 			}
 		});
+		dispatcher.register("block", args -> {
+			try {
+				return CompletableFuture.completedFuture(blockAt(args));
+			} catch (Exception error) {
+				CompletableFuture<JsonElement> failed = new CompletableFuture<>();
+				failed.completeExceptionally(error);
+				return failed;
+			}
+		});
+	}
+
+	/** One arbitrary cell from this client's own loaded ClientLevel. */
+	private JsonElement blockAt(JsonObject args) {
+		JsonObject out = new JsonObject();
+		int x = args.get("x").getAsInt();
+		int y = args.get("y").getAsInt();
+		int z = args.get("z").getAsInt();
+		out.addProperty("x", x);
+		out.addProperty("y", y);
+		out.addProperty("z", z);
+		LocalPlayer player = minecraft.player;
+		if (player == null || minecraft.level == null) {
+			out.addProperty("inGame", false);
+			return out;
+		}
+		out.addProperty("inGame", true);
+		out.add("block", blockSnapshot(player, new BlockPos(x, y, z)));
+		return out;
 	}
 
 	/**
@@ -125,6 +154,9 @@ final class ObserveCommand {
 		boolean waterlogged = state.getValues().anyMatch(value ->
 				"waterlogged".equals(value.property().getName()) && "true".equals(value.valueName()));
 		block.addProperty("waterlogged", waterlogged);
+		JsonObject properties = new JsonObject();
+		state.getValues().forEach(value -> properties.addProperty(value.property().getName(), value.valueName()));
+		block.add("properties", properties);
 		return block;
 	}
 
@@ -177,6 +209,22 @@ final class ObserveCommand {
 		out.add("rot", rot);
 
 		out.addProperty("gameMode", minecraft.gameMode.getPlayerMode().getSerializedName());
+		var inventory = player.getInventory();
+		out.addProperty("selectedSlot", inventory.getSelectedSlot());
+		out.addProperty("heldItem", net.minecraft.core.registries.BuiltInRegistries.ITEM
+				.getKey(inventory.getSelectedItem().getItem()).toString());
+		out.addProperty("heldCount", inventory.getSelectedItem().getCount());
+		JsonArray hotbar = new JsonArray();
+		for (int slot = 0; slot < 9; slot++) {
+			var stack = inventory.getItem(slot);
+			JsonObject item = new JsonObject();
+			item.addProperty("slot", slot);
+			item.addProperty("id", net.minecraft.core.registries.BuiltInRegistries.ITEM
+					.getKey(stack.getItem()).toString());
+			item.addProperty("count", stack.getCount());
+			hotbar.add(item);
+		}
+		out.add("hotbar", hotbar);
 		out.addProperty("version", minecraft.getLaunchedVersion());
 		out.addProperty("maxMemory", Runtime.getRuntime().maxMemory());
 
@@ -198,6 +246,13 @@ final class ObserveCommand {
 				block.addProperty("y", blockHit.getBlockPos().getY());
 				block.addProperty("z", blockHit.getBlockPos().getZ());
 				block.addProperty("face", blockHit.getDirection().name());
+				block.addProperty("inside", blockHit.isInside());
+				block.addProperty("worldBorder", blockHit.isWorldBorderHit());
+				JsonObject location = new JsonObject();
+				location.addProperty("x", blockHit.getLocation().x);
+				location.addProperty("y", blockHit.getLocation().y);
+				location.addProperty("z", blockHit.getLocation().z);
+				block.add("location", location);
 				out.add("hitBlock", block);
 			}
 			out.addProperty("crosshairEntity", minecraft.crosshairPickEntity == null ? "none"
