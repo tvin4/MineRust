@@ -515,13 +515,28 @@ pub(crate) fn visibility_pass(regions: &mut [Region]) -> Vec<StreamEntities> {
 
     // The symmetric target: `a` sees `b` iff the distance is within the
     // smaller radius. Self is never included. `target[a]` is ascending by id.
+    //
+    // Spectators (Шаг 25c) are invisible to every non-spectator while a
+    // spectator itself keeps seeing everyone; the spectator trace shows the
+    // actor removed from the observer's stream and re-added on the way back
+    // (S21 l2: `remove_entities`, then `add_entity`).
+    // SOURCE: 2026-11-18_s21-l2-vanilla-step25-r2, conn-2 around the
+    // spectator switch.
+    let spectator = |index: usize| game_mode[index] == 3;
     let mut target: Vec<Vec<usize>> = vec![Vec::new(); ids.len()];
     for &a in &sorted {
         let pose_a = position[a];
         let radius_a = radius[a];
+        let watcher_is_spectator = spectator(a);
         let seen = &mut target[a];
         for &b in &sorted {
-            if a != b && mutually_visible(&pose_a, radius_a, &position[b], radius[b]) {
+            if a == b {
+                continue;
+            }
+            if !watcher_is_spectator && spectator(b) {
+                continue;
+            }
+            if mutually_visible(&pose_a, radius_a, &position[b], radius[b]) {
                 seen.push(b);
             }
         }

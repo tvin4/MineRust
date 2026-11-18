@@ -163,6 +163,32 @@ fn two_players_in_range_spawn_each_other() {
     );
 }
 
+#[test]
+fn a_spectator_is_hidden_from_players_and_sees_them() {
+    let mut regions = vec![region_with(&[(1, (0, 64, 0)), (2, (50, 64, 0))])];
+    regions[0].get_mut(2).expect("player 2").set_game_mode(3);
+
+    let events = visibility_pass(&mut regions);
+    assert!(spawned(&events, 1).is_empty(), "the observer of S21");
+    assert_eq!(spawned(&events, 2), vec![1], "a spectator sees players");
+
+    // Back to survival: the observer spawns the player again.
+    regions[0].get_mut(2).expect("player 2").set_game_mode(0);
+    let events = visibility_pass(&mut regions);
+    assert_eq!(spawned(&events, 1), vec![2], "the entity comes back");
+
+    // Spectator again: the observer gets the removal, Шаг 25c.
+    regions[0].get_mut(2).expect("player 2").set_game_mode(3);
+    let events = visibility_pass(&mut regions);
+    assert_eq!(
+        removed(&events, 1)
+            .into_iter()
+            .map(|remove| remove.id)
+            .collect::<Vec<_>>(),
+        vec![2]
+    );
+}
+
 /// Sneak transitions map only to the trace-confirmed standing and crouching poses.
 // SOURCE: E:\\MineRust-data\\autotests\\stage10-s5-vanilla-sprint-forward-2026-11-14, B seq 2259/3355.
 #[test]

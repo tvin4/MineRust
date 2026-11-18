@@ -327,4 +327,17 @@ mod tests {
         assert_eq!(snapshot.saturation, 5.0);
         assert_eq!(snapshot.game_mode, 1);
     }
+
+    #[test]
+    fn a_gamemode_command_change_reaches_the_saved_snapshot() {
+        // Шаг 25c: `/gamemode` mutates the tick-side player, and the save
+        // snapshot reads that field, so the new mode is what the next join
+        // sees (subject to `force_gamemode`, covered in the play tests).
+        let (join, _slot, _rx) = join_at_mode(9, (0, 64, 0), 0);
+        let mut player = Player::new(join);
+        assert!(player.set_game_mode(3), "survival to spectator changes it");
+        assert!(!player.set_game_mode(3), "setting the same mode is a no-op");
+        let snapshot = snapshot_of(&player, None);
+        assert_eq!(snapshot.game_mode, 3);
+    }
 }
