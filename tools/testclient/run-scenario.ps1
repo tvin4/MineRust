@@ -73,6 +73,8 @@ $vanillaDir = 'E:\MineRust-data\vanilla'
 $templateWorldDir = 'E:\MineRust-data\world-template-v3'
 $script:activeWorldDir = $null
 $serverJar = 'E:\MineRust-data\server.jar'
+# Step 24c: name + properties -> state id for the expected placement results.
+$blocksReportPath = 'E:\MineRust-data\reports\blocks.json'
 $buildProfile = if ($Release) { 'release' } else { 'debug' }
 $mcproxyExe = "E:\projects\MineRust\target\$buildProfile\mcproxy.exe"
 # Stage G target: our own Rust server (workspace server.toml, listen patched
@@ -1858,6 +1860,43 @@ function Get-S10Build {
 # applies to its in-memory store at startup (dev_geometry, РЁР°Рі 15 Рї.2). Must run
 # before Start-Stand: our server has no /fill, so the geometry has to be in the
 # store before the port opens. S10 and S11 share the format and the file.
+# The S17/S18 fixture commands (step 24c): the same setblock/fill lines the
+# vanilla branch of Invoke-S17 sends through its console, emitted for our
+# server, which has no console and reads them from -OursDevGeometry at start.
+function Get-PlacementGeometry {
+	param($Cfg, [switch]$PlatformOnly)
+	$lines = New-Object System.Collections.Generic.List[string]
+	$entries = if ($null -ne $Cfg.cases) { @($Cfg.cases) } else { @($Cfg.placements) }
+	foreach ($case in $entries) {
+		$support = @($case.support)
+		$dest = @($case.dest)
+		$stand = @($case.stand)
+		# -PlatformOnly keeps the stand floor and drops the fixture itself.
+		# S18 restarts the server on the same save_dir: the dev geometry is
+		# in-memory only and is applied again on every start, so re-applying
+		# the fixture would reset the destinations to `initial` and hide what
+		# the save holds (generation 1 of 2026-11-18_s18-ours-step24-r1 read
+		# air for all three cells for exactly that reason).
+		if (-not $PlatformOnly) {
+			if ($null -ne $case.source) {
+				$source = @($case.source)
+				$lines.Add(("setblock {0} {1} {2} {3}" -f $source[0], $source[1], $source[2], [string]$case.sourceBlock))
+			}
+			$lines.Add(("setblock {0} {1} {2} minecraft:stone" -f $support[0], $support[1], $support[2]))
+			$lines.Add(("setblock {0} {1} {2} {3}" -f $dest[0], $dest[1], $dest[2], [string]$case.initial))
+			$lines.Add(("setblock {0} {1} {2} minecraft:stone" -f $dest[0], ([int]$dest[1] - 1), $dest[2]))
+			if ($case.surface) {
+				$lines.Add(("setblock {0} {1} {2} {3}" -f $dest[0], ([int]$dest[1] - 1), $dest[2], [string]$case.surface))
+				$lines.Add(("setblock {0} {1} {2} {3}" -f $dest[0], $dest[1], $dest[2], [string]$case.initial))
+			}
+		}
+		$lines.Add(("fill {0} 200 {1} {2} 200 {3} minecraft:stone" -f `
+			([int][Math]::Floor([double]$stand[0]) - 1), ([int][Math]::Floor([double]$stand[2]) - 1), `
+			([int][Math]::Floor([double]$stand[0]) + 1), ([int][Math]::Floor([double]$stand[2]) + 1)))
+	}
+	return $lines
+}
+
 function Write-DevGeometryFile {
 	param([string]$Path)
 	$lines = New-Object System.Collections.Generic.List[string]
@@ -1904,6 +1943,13 @@ function Write-DevGeometryFile {
 		if (-not $scenarioFile) { throw 'no s14 scenario file to build the geometry from' }
 		$cfg = Get-Content $scenarioFile.FullName -Raw | ConvertFrom-Json
 		foreach ($cmd in (Get-S14Commands $cfg)) { $lines.Add([string]$cmd) }
+	}
+	foreach ($id in @('s17', 's18')) {
+		if (-not ($Scenarios -contains $id)) { continue }
+		$scenarioFile = Get-ChildItem (Join-Path $here 'scenarios') -Filter "$id-*.json" | Select-Object -First 1
+		if (-not $scenarioFile) { throw "no $id scenario file to build the geometry from" }
+		$cfg = Get-Content $scenarioFile.FullName -Raw | ConvertFrom-Json
+		foreach ($cmd in (Get-PlacementGeometry $cfg)) { $lines.Add([string]$cmd) }
 	}
 	if ($lines.Count -eq 0) { throw 'no dev geometry for the selected scenarios' }
 	$lines | Set-Content -LiteralPath $Path -Encoding utf8
@@ -3324,6 +3370,37 @@ function Get-S16BlockId {
 	return [string]$response.result.block.id
 }
 
+# Canonical rendering of a `block` command property map ("a=b,c=d", sorted),
+# so the S17 expectation and the client answer compare as plain strings.
+function Format-BlockProperties {
+	param($Properties)
+	if ($null -eq $Properties) { return '' }
+	return (@($Properties.PSObject.Properties | ForEach-Object { "$($_.Name)=$($_.Value)" } | Sort-Object) -join ',')
+}
+
+# Step 24c: the mod's `block` command reports the block name and the property
+# map but never a state id, so the id the vanilla run ended on is resolved
+# through the generated reports/blocks.json (name + sorted properties -> id).
+# The index is built once per run and cached.
+$script:blockStateIndex = $null
+function Resolve-BlockStateId {
+	param([string]$Name, $Properties)
+	if ($null -eq $script:blockStateIndex) {
+		if (-not (Test-Path -LiteralPath $blocksReportPath)) { return $null }
+		$report = Get-Content -LiteralPath $blocksReportPath -Raw | ConvertFrom-Json
+		$index = @{}
+		foreach ($blockProperty in $report.PSObject.Properties) {
+			foreach ($state in @($blockProperty.Value.states)) {
+				$key = '{0}[{1}]' -f $blockProperty.Name, (Format-BlockProperties $state.properties)
+				$index[$key] = [int]$state.id
+			}
+		}
+		$script:blockStateIndex = $index
+	}
+	$lookup = '{0}[{1}]' -f $Name, (Format-BlockProperties $Properties)
+	return $script:blockStateIndex[$lookup]
+}
+
 function Wait-S16BlockId {
 	param([int]$Port, $Target, [string]$Expected, [int]$Seconds = 10)
 	$deadline = (Get-Date).AddSeconds($Seconds)
@@ -3556,23 +3633,51 @@ function Invoke-S16b {
 
 function Invoke-S17 {
 	param($Cfg, $Result)
-	if (-not $isVanilla) { throw 'S17 is a vanilla trace/plan scenario; server implementation is forbidden in Step 23d' }
+	# Step 23d collected the vanilla rows; step 24c replays the same cases
+	# against our server and compares the answers. The scenario file carries
+	# the block name, property set and state id measured from the vanilla trace
+	# (docs/BLOCK-PLACING.md, section 24.0/24c), so the same assertions run on
+	# both targets.
+	$ours = -not $isVanilla
 	$portA = [int]$Cfg.controlPortA
 	$portB = [int]$Cfg.controlPortB
 	$nickA = [string]$Cfg.playerA
 	$nickB = [string]$Cfg.playerB
 	$settle = [int]$Cfg.settleMs
 	$inv = [Globalization.CultureInfo]::InvariantCulture
+	$prefix = if ($ours) { 'S17 ours' } else { 'S17' }
+	if ($ours -and -not $OursDevGeometry) {
+		Add-Check $Result 'S17 ours: the fixture blocks reached our store' $false `
+			'pass -OursDevGeometry <file>: the runner writes the s17 setblock/fill commands before start'
+		return
+	}
 	$watermark = Get-Date
 	$launchA = Start-Client $nickA $portA $watermark
 	$null = Start-Client $nickB $portB (Get-Date)
 	$null = Wait-ObserverChunksStable $portB 30
-	Invoke-VanillaConsole ("gamemode creative {0}" -f $nickA) | Out-Null
-	Invoke-VanillaConsole ("gamemode creative {0}" -f $nickB) | Out-Null
-	Invoke-VanillaConsole 'gamerule doMobSpawning false' | Out-Null
-	$fl = @($Cfg.forceload)
-	if ($fl.Count -eq 4) {
-		Invoke-VanillaConsole ("forceload add {0} {1} {2} {3}" -f $fl[0], $fl[1], $fl[2], $fl[3]) | Out-Null
+	if ($ours) {
+		# Our server has no console: creative mode comes from the generated
+		# config (-OursGameMode 1) and the fixtures from -OursDevGeometry.
+		$mode = (Invoke-TestCmd $portA (New-ObserveCmd 's17-mode')).result.gameMode
+		Add-Check $Result 'S17 ours: A is in creative' ($mode -eq 'creative') "mode=$mode"
+		# Live creative-inventory path of 24a: the mod's `creative` command ends
+		# in handleCreativeModeItemAdd (a genuine set_creative_mode_slot), the
+		# number key then sends set_carried_item. The server has to keep both.
+		$menu = (Invoke-TestCmd $portA (New-CreativeCmd 's17-menu-add' 'minecraft:glass' 43 1)).result
+		$null = Invoke-TestCmd $portA (New-KeyCmd 's17-menu-select' 'hotbar8' 'tap')
+		Start-Sleep -Milliseconds 400
+		$menuHeld = (Invoke-TestCmd $portA (New-ObserveCmd 's17-menu-held')).result
+		Add-Check $Result 'S17 ours: creative menu add + hotbar key select glass' `
+			([string]$menuHeld.heldItem -eq 'minecraft:glass' -and [int]$menuHeld.selectedSlot -eq 7) `
+			("slot={0} item={1} menu={2}" -f $menuHeld.selectedSlot, $menuHeld.heldItem, ($menu | ConvertTo-Json -Compress))
+	} else {
+		Invoke-VanillaConsole ("gamemode creative {0}" -f $nickA) | Out-Null
+		Invoke-VanillaConsole ("gamemode creative {0}" -f $nickB) | Out-Null
+		Invoke-VanillaConsole 'gamerule doMobSpawning false' | Out-Null
+		$fl = @($Cfg.forceload)
+		if ($fl.Count -eq 4) {
+			Invoke-VanillaConsole ("forceload add {0} {1} {2} {3}" -f $fl[0], $fl[1], $fl[2], $fl[3]) | Out-Null
+		}
 	}
 	Start-Sleep -Seconds 2
 
@@ -3587,24 +3692,31 @@ function Invoke-S17 {
 
 		# Every case owns unique coordinates, so its wire rows can be attributed
 		# without comparing independent A/B clocks.
-		Invoke-VanillaConsole ("setblock {0} {1} {2} {3}" -f $source[0], $source[1], $source[2], $case.sourceBlock) | Out-Null
-		Invoke-VanillaConsole ("setblock {0} {1} {2} minecraft:stone" -f $support[0], $support[1], $support[2]) | Out-Null
-		Invoke-VanillaConsole ("setblock {0} {1} {2} {3}" -f $dest[0], $dest[1], $dest[2], $case.initial) | Out-Null
-		Invoke-VanillaConsole ("setblock {0} {1} {2} minecraft:stone" -f $dest[0], ([int]$dest[1] - 1), $dest[2]) | Out-Null
-		if ($case.surface) {
-			Invoke-VanillaConsole ("setblock {0} {1} {2} {3}" -f $dest[0], ([int]$dest[1] - 1), $dest[2], ([string]$case.surface)) | Out-Null
+		if (-not $ours) {
+			Invoke-VanillaConsole ("setblock {0} {1} {2} {3}" -f $source[0], $source[1], $source[2], $case.sourceBlock) | Out-Null
+			Invoke-VanillaConsole ("setblock {0} {1} {2} minecraft:stone" -f $support[0], $support[1], $support[2]) | Out-Null
 			Invoke-VanillaConsole ("setblock {0} {1} {2} {3}" -f $dest[0], $dest[1], $dest[2], $case.initial) | Out-Null
+			Invoke-VanillaConsole ("setblock {0} {1} {2} minecraft:stone" -f $dest[0], ([int]$dest[1] - 1), $dest[2]) | Out-Null
+			if ($case.surface) {
+				Invoke-VanillaConsole ("setblock {0} {1} {2} {3}" -f $dest[0], ([int]$dest[1] - 1), $dest[2], ([string]$case.surface)) | Out-Null
+				Invoke-VanillaConsole ("setblock {0} {1} {2} {3}" -f $dest[0], $dest[1], $dest[2], $case.initial) | Out-Null
+			}
+			Invoke-VanillaConsole ("fill {0} 200 {1} {2} 200 {3} minecraft:stone" -f `
+				([int][Math]::Floor([double]$stand[0]) - 1), ([int][Math]::Floor([double]$stand[2]) - 1), `
+				([int][Math]::Floor([double]$stand[0]) + 1), ([int][Math]::Floor([double]$stand[2]) + 1)) | Out-Null
 		}
-		Invoke-VanillaConsole ("fill {0} 200 {1} {2} 200 {3} minecraft:stone" -f `
-			([int][Math]::Floor([double]$stand[0]) - 1), ([int][Math]::Floor([double]$stand[2]) - 1), `
-			([int][Math]::Floor([double]$stand[0]) + 1), ([int][Math]::Floor([double]$stand[2]) + 1)) | Out-Null
 		Start-Sleep -Milliseconds 400
 
 		# Creative pick-block is the real key path; its trace must prove whether
 		# the client emitted set_creative_mode_slot.
-		$pickTp = [string]::Format($inv, "tp {0} {1} {2} {3} 0 90", $nickA, `
-			([double]$source[0] + 0.5), ([double]$source[1] + 1.0), ([double]$source[2] + 0.5))
-		Invoke-VanillaConsole $pickTp | Out-Null
+		if ($ours) {
+			$null = Invoke-TestCmd $portA (New-TpCmd "s17-$name-pick-tp" `
+					([double]$source[0] + 0.5) ([double]$source[1] + 1.0) ([double]$source[2] + 0.5) 0.0 90.0)
+		} else {
+			$pickTp = [string]::Format($inv, "tp {0} {1} {2} {3} 0 90", $nickA, `
+				([double]$source[0] + 0.5), ([double]$source[1] + 1.0), ([double]$source[2] + 0.5))
+			Invoke-VanillaConsole $pickTp | Out-Null
+		}
 		Start-Sleep -Milliseconds 350
 		$pickAim = (Invoke-TestCmd $portA (New-ObserveCmd "s17-$name-pick-aim")).result
 		$pickAimed = ($pickAim.hitType -eq 'BLOCK' -and $null -ne $pickAim.hitBlock -and `
@@ -3620,16 +3732,56 @@ function Invoke-S17 {
 			("slot={0} held={1} count={2}" -f $held.selectedSlot, $held.heldItem, $held.heldCount)
 
 		if ($case.occupyWithB -eq $true) {
-			$bTp = [string]::Format($inv, "tp {0} {1} {2} {3} 0 0", $nickB, `
-				([double]$dest[0] + 0.5), [double]$dest[1], ([double]$dest[2] + 0.5))
-			Invoke-VanillaConsole $bTp | Out-Null
+			if ($ours) {
+				# Every cast needs its own parentheses: in argument position
+				# PowerShell otherwise swallows `[double]$x[0]` into one literal
+				# word (observed 18.11.2026: the tp went out with garbage args).
+				$null = Invoke-TestCmd $portB (New-TpCmd "s17-$name-b-tp" `
+						(([double]$dest[0]) + 0.5) ([double]$dest[1]) (([double]$dest[2]) + 0.5) 0.0 0.0)
+			} else {
+				$bTp = [string]::Format($inv, "tp {0} {1} {2} {3} 0 0", $nickB, `
+					([double]$dest[0] + 0.5), [double]$dest[1], ([double]$dest[2] + 0.5))
+				Invoke-VanillaConsole $bTp | Out-Null
+			}
 			Start-Sleep -Milliseconds 300
 		}
-		$placeTp = [string]::Format($inv, "tp {0} {1} {2} {3} {4} {5}", $nickA, `
-			[double]$stand[0], [double]$stand[1], [double]$stand[2], [double]$stand[3], [double]$stand[4])
-		Invoke-VanillaConsole $placeTp | Out-Null
+		if ($ours) {
+			$null = Invoke-TestCmd $portA (New-TpCmd "s17-$name-place-tp" `
+					([double]$stand[0]) ([double]$stand[1]) ([double]$stand[2]) ([double]$stand[3]) ([double]$stand[4]))
+		} else {
+			$placeTp = [string]::Format($inv, "tp {0} {1} {2} {3} {4} {5}", $nickA, `
+				[double]$stand[0], [double]$stand[1], [double]$stand[2], [double]$stand[3], [double]$stand[4])
+			Invoke-VanillaConsole $placeTp | Out-Null
+		}
 		Start-Sleep -Milliseconds 400
 		$aim = (Invoke-TestCmd $portA (New-ObserveCmd "s17-$name-place-aim")).result
+		# Where the crosshair lands is itself traced behaviour:
+		# - a normal case stops on the support or, when the destination is a
+		#   targetable replaceable block (short grass, S17
+		#   `replace-short-grass`), on the destination cell;
+		# - the occupied case stops on the player standing in the cell, so the
+		#   client sends `interact` and never asks the server to place;
+		# - the out-of-range case is a MISS, so the client sends `use_item`.
+		# SOURCE: 2026-11-18_s17-vanilla-step23-r2 — `placeHit` ENTITY / MISS,
+		# serverbound interact 2 + use_item 2, use_item_on 12.
+		$aimAtSupport = ($null -ne $aim.hitBlock -and `
+			[int]$aim.hitBlock.x -eq [int]$support[0] -and [int]$aim.hitBlock.y -eq [int]$support[1] -and `
+			[int]$aim.hitBlock.z -eq [int]$support[2])
+		$aimAtDest = ($null -ne $aim.hitBlock -and `
+			[int]$aim.hitBlock.x -eq [int]$dest[0] -and [int]$aim.hitBlock.y -eq [int]$dest[1] -and `
+			[int]$aim.hitBlock.z -eq [int]$dest[2])
+		if ($case.occupyWithB) {
+			Add-Check $Result ("{0} {1}: the crosshair stops on the occupying player" -f $prefix, $name) `
+				($aim.hitType -eq 'ENTITY') ("hit={0} expected=ENTITY" -f $aim.hitType)
+		} elseif ($case.outOfRange) {
+			Add-Check $Result ("{0} {1}: the crosshair misses beyond the creative reach" -f $prefix, $name) `
+				($aim.hitType -eq 'MISS') ("hit={0} expected=MISS" -f $aim.hitType)
+		} else {
+			$placeAimed = ($aim.hitType -eq 'BLOCK' -and ($aimAtSupport -or $aimAtDest))
+			Add-Check $Result ("{0} {1}: crosshair reaches the clicked cell before the click" -f $prefix, $name) $placeAimed `
+				("hit={0} ({1},{2},{3}) support=({4},{5},{6}) dest=({7},{8},{9})" -f $aim.hitType, $aim.hitBlock.x, $aim.hitBlock.y, `
+					$aim.hitBlock.z, $support[0], $support[1], $support[2], $dest[0], $dest[1], $dest[2])
+		}
 		$preA = Get-S16BlockId $portA ([PSCustomObject]@{ name=$name; x=$dest[0]; y=$dest[1]; z=$dest[2] }) "s17-$name-pre-a"
 		$preB = Get-S16BlockId $portB ([PSCustomObject]@{ name=$name; x=$dest[0]; y=$dest[1]; z=$dest[2] }) "s17-$name-pre-b"
 		Add-Check $Result "S17 $name`: A and B see the prepared destination" `
@@ -3640,20 +3792,39 @@ function Invoke-S17 {
 		$postBResult = (Invoke-TestCmd $portB (New-BlockCmd "s17-$name-post-b" ([int]$dest[0]) ([int]$dest[1]) ([int]$dest[2]))).result
 		$postA = [string]$postAResult.block.id
 		$postB = [string]$postBResult.block.id
-		Add-Check $Result "S17 $name`: vanilla placement outcome is visible to A and B" `
+		Add-Check $Result ("{0} {1}: placement outcome is visible to A and B" -f $prefix, $name) `
 			($postA -eq [string]$case.expectBlock -and $postB -eq [string]$case.expectBlock) `
 			("A={0} B={1} expected={2}" -f $postA, $postB, $case.expectBlock)
+		$propsA = Format-BlockProperties $postAResult.block.properties
+		$propsB = Format-BlockProperties $postBResult.block.properties
+		$propsExpected = Format-BlockProperties $case.expectProps
+		Add-Check $Result ("{0} {1}: client properties match the vanilla state" -f $prefix, $name) `
+			($propsA -eq $propsExpected -and $propsB -eq $propsExpected) `
+			("A=[{0}] B=[{1}] expected=[{2}]" -f $propsA, $propsB, $propsExpected)
+		# Byte-exact wire rows and the final state id are the two acceptance
+		# criteria agreed with the owner (BLOCK-PLACING.md §8.5).
+		$stateA = Resolve-BlockStateId $postA $postAResult.block.properties
+		$stateB = Resolve-BlockStateId $postB $postBResult.block.properties
+		$expectState = [int]$case.expectState
+		Add-Check $Result ("{0} {1}: final state id matches vanilla" -f $prefix, $name) `
+			($null -ne $stateA -and $null -ne $stateB -and [int]$stateA -eq $expectState -and [int]$stateB -eq $expectState) `
+			("A={0} B={1} expected={2} ({3}[{4}])" -f $stateA, $stateB, $expectState, $postA, $propsA)
 
 		$caseFacts.Add([PSCustomObject]@{
 			name = $name; source = @($source); support = @($support); destination = @($dest)
 			item = [string]$case.item; selectedSlot = $held.selectedSlot; heldCount = $held.heldCount
 			pickHit = $pickAim.hitBlock; placeHit = $aim.hitBlock
 			beforeA = $preA; beforeB = $preB; afterA = $postA; afterB = $postB
+			expectedState = $expectState; stateA = $stateA; stateB = $stateB
 			propertiesA = $postAResult.block.properties; propertiesB = $postBResult.block.properties
 			occupied = [bool]$case.occupyWithB; outOfRange = [bool]$case.outOfRange
 		}) | Out-Null
 		if ($case.occupyWithB -eq $true) {
-			Invoke-VanillaConsole ("tp {0} 96.5 145 -31.5 0 0" -f $nickB) | Out-Null
+			if ($ours) {
+				$null = Invoke-TestCmd $portB (New-TpCmd "s17-$name-b-back" 96.5 145.0 -31.5 0.0 0.0)
+			} else {
+				Invoke-VanillaConsole ("tp {0} 96.5 145 -31.5 0 0" -f $nickB) | Out-Null
+			}
 		}
 	}
 
@@ -3690,27 +3861,43 @@ function Invoke-S17 {
 	$pickRows = @($wire | Where-Object { $_.dir -eq 'serverbound' -and $_.name -eq 'minecraft:pick_item_from_block' })
 	$creativeRows = @($wire | Where-Object { $_.dir -eq 'serverbound' -and $_.name -eq 'minecraft:set_creative_mode_slot' })
 	$useRows = @($wire | Where-Object { $_.dir -eq 'serverbound' -and ($_.name -eq 'minecraft:use_item_on' -or $_.name -eq 'minecraft:use_item') })
-	Add-Check $Result 'S17: vanilla creative pick sends pick_item_from_block' ($pickRows.Count -gt 0) "count=$($pickRows.Count)"
-	Add-Check $Result 'S17: vanilla trace carries use_item_on/use_item placements' ($useRows.Count -gt 0) "count=$($useRows.Count)"
-	Add-Check $Result 'S17: no set_creative_mode_slot in the pick-block flow (observed, not required)' $true `
+	$placeRows = @($wire | Where-Object { $_.dir -eq 'serverbound' -and $_.name -eq 'minecraft:use_item_on' })
+	$askedCases = @($caseFacts | Where-Object { -not $_.occupied -and -not $_.outOfRange })
+	Add-Check $Result ("{0}: creative pick sends pick_item_from_block" -f $prefix) ($pickRows.Count -gt 0) "count=$($pickRows.Count)"
+	Add-Check $Result ("{0}: the trace carries use_item_on/use_item placements" -f $prefix) ($useRows.Count -gt 0) "count=$($useRows.Count)"
+	# The two negative cases never ask the server to place (`interact` on the
+	# occupying player, `use_item` on a miss), so the placement packets are
+	# exactly the other cases — the same 12/2/2 split as the vanilla r2 trace.
+	Add-Check $Result ("{0}: only the in-range cases ask the server to place" -f $prefix) `
+		($placeRows.Count -eq $askedCases.Count) ("use_item_on={0} expected={1}" -f $placeRows.Count, $askedCases.Count)
+	Add-Check $Result ("{0}: no set_creative_mode_slot in the pick-block flow (observed, not required)" -f $prefix) $true `
 		("set_creative_mode_slot={0} set_carried_item={1}" -f $creativeRows.Count,
 			@($wire | Where-Object { $_.dir -eq 'serverbound' -and $_.name -eq 'minecraft:set_carried_item' }).Count)
 
-	Invoke-VanillaConsole 'save-all flush' | Out-Null
-	Start-Sleep -Seconds 2
-	$playerFile = Join-Path (Join-Path $script:activeWorldDir 'players\data') (Get-OfflinePlayerFileName $nickA)
+	$playerFile = $null
 	$inventory = @()
 	$selectedItemSlot = $null
-	if (Test-Path -LiteralPath $playerFile) {
-		$playerDoc = Read-PlayerNbt $playerFile
-		$selectedItemSlot = $playerDoc.root['SelectedItemSlot']
-		$inventory = @($playerDoc.root['Inventory'])
+	if ($ours) {
+		# No console save-all on our server: the inventory in our own player
+		# file is checked by S18 after the graceful stop, and 24d covers the
+		# hotbar round trip.
+		$script:s7Facts.Add('S17 ours: no save-all; the player-file hotbar is covered by S18/24d')
+	} else {
+		Invoke-VanillaConsole 'save-all flush' | Out-Null
+		Start-Sleep -Seconds 2
+		$playerFile = Join-Path (Join-Path $script:activeWorldDir 'players\data') (Get-OfflinePlayerFileName $nickA)
+		if (Test-Path -LiteralPath $playerFile) {
+			$playerDoc = Read-PlayerNbt $playerFile
+			$selectedItemSlot = $playerDoc.root['SelectedItemSlot']
+			$inventory = @($playerDoc.root['Inventory'])
+		}
+		Add-Check $Result 'S17: vanilla playerdata contains the creative inventory' `
+			($inventory.Count -gt 0) ("file={0} selected={1} inventory entries={2}" -f $playerFile, $selectedItemSlot, $inventory.Count)
 	}
-	Add-Check $Result 'S17: vanilla playerdata contains the creative inventory' `
-		($inventory.Count -gt 0) ("file={0} selected={1} inventory entries={2}" -f $playerFile, $selectedItemSlot, $inventory.Count)
 
 	$artifact = [PSCustomObject]@{
 		generated = (Get-Date).ToString('o')
+		target = $Target
 		cases = @($caseFacts)
 		wire = @($wire)
 		playerdata = [PSCustomObject]@{ path = $playerFile; selectedItemSlot = $selectedItemSlot; inventory = @($inventory) }
@@ -3718,6 +3905,143 @@ function Invoke-S17 {
 	$artifactPath = Join-Path $traceDir 's17-samples.json'
 	$artifact | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $artifactPath -Encoding utf8
 	$script:s7Facts.Add("S17 artifact: $artifactPath")
+}
+
+# --- S18 (step 24c): placed blocks survive a graceful stop and restart ------
+# Reuses the S16a harness (graceful stop, same save_dir, restart, both clients
+# rejoin) with blocks placed through the live mod path: the `creative` command
+# fills a hotbar slot, the number key selects it, `use` sends use_item_on.
+function Invoke-S18 {
+	param($Cfg, $Result)
+	if ($isVanilla) { throw 'S18 targets our world-save implementation' }
+	if (-not $OursDevGeometry) {
+		Add-Check $Result 'S18: the fixture blocks reached our store' $false `
+			'pass -OursDevGeometry <file>: the runner writes the s18 setblock/fill commands before start'
+		return
+	}
+	if (-not $OursSaveDir) {
+		Add-Check $Result 'S18: a persistent save_dir is configured' $false 'pass -OursSaveDir <dir>'
+		return
+	}
+	$portA = [int]$Cfg.controlPortA
+	$portB = [int]$Cfg.controlPortB
+	$nickA = [string]$Cfg.playerA
+	$nickB = [string]$Cfg.playerB
+	$settle = [int]$Cfg.settleMs
+
+	$launchA = Start-Client $nickA $portA (Get-Date)
+	$null = Start-Client $nickB $portB (Get-Date)
+	$null = Wait-ObserverChunksStable $portB 30
+	$mode = (Invoke-TestCmd $portA (New-ObserveCmd 's18-mode')).result.gameMode
+	Add-Check $Result 'S18: A is in creative' ($mode -eq 'creative') "mode=$mode"
+
+	$index = 0
+	foreach ($case in @($Cfg.placements)) {
+		$name = [string]$case.name
+		$support = @($case.support)
+		$dest = @($case.dest)
+		$stand = @($case.stand)
+		$menuSlot = 36 + $index
+		$add = (Invoke-TestCmd $portA (New-CreativeCmd "s18-$name-add" ([string]$case.item) $menuSlot 1)).result
+		Start-Sleep -Milliseconds 250
+		$null = Invoke-TestCmd $portA (New-KeyCmd "s18-$name-key" ("hotbar{0}" -f ($index + 1)) 'tap')
+		$null = Invoke-TestCmd $portA (New-TpCmd "s18-$name-tp" `
+				([double]$stand[0]) ([double]$stand[1]) ([double]$stand[2]) ([double]$stand[3]) ([double]$stand[4]))
+		Start-Sleep -Milliseconds 500
+		$aim = (Invoke-TestCmd $portA (New-ObserveCmd "s18-$name-aim")).result
+		$aimed = ($aim.hitType -eq 'BLOCK' -and $null -ne $aim.hitBlock -and `
+			[int]$aim.hitBlock.x -eq [int]$support[0] -and [int]$aim.hitBlock.y -eq [int]$support[1] -and `
+			[int]$aim.hitBlock.z -eq [int]$support[2])
+		Add-Check $Result ("S18 {0}: A aims at the support" -f $name) $aimed `
+			("hit={0} ({1},{2},{3})" -f $aim.hitType, $aim.hitBlock.x, $aim.hitBlock.y, $aim.hitBlock.z)
+		if (-not $aimed) { $index++; continue }
+		$held = (Invoke-TestCmd $portA (New-ObserveCmd "s18-$name-held")).result
+		Add-Check $Result ("S18 {0}: the creative menu item is held" -f $name) `
+			([string]$held.heldItem -eq [string]$case.item) `
+			("slot={0} held={1} menu={2}" -f $held.selectedSlot, $held.heldItem, ($add | ConvertTo-Json -Compress))
+		$null = Invoke-TestCmd $portA (New-KeyCmd "s18-$name-use" 'use' 'tap' 100)
+		Start-Sleep -Milliseconds $settle
+		$postA = (Invoke-TestCmd $portA (New-BlockCmd "s18-$name-post-a" ([int]$dest[0]) ([int]$dest[1]) ([int]$dest[2]))).result
+		$postB = (Invoke-TestCmd $portB (New-BlockCmd "s18-$name-post-b" ([int]$dest[0]) ([int]$dest[1]) ([int]$dest[2]))).result
+		$expectedProps = Format-BlockProperties $case.expectProps
+		Add-Check $Result ("S18 {0}: the placed state is visible to A and B" -f $name) `
+			([string]$postA.block.id -eq [string]$case.expectBlock -and [string]$postB.block.id -eq [string]$case.expectBlock) `
+			("A={0} B={1} expected={2}" -f $postA.block.id, $postB.block.id, $case.expectBlock)
+		$stateA = Resolve-BlockStateId ([string]$postA.block.id) $postA.block.properties
+		$stateB = Resolve-BlockStateId ([string]$postB.block.id) $postB.block.properties
+		Add-Check $Result ("S18 {0}: final state id matches vanilla" -f $name) `
+			([int]$case.expectState -eq [int]$stateA -and [int]$case.expectState -eq [int]$stateB) `
+			("A={0} B={1} expected={2}" -f $stateA, $stateB, $case.expectState)
+		Add-Check $Result ("S18 {0}: client properties match the vanilla state" -f $name) `
+			((Format-BlockProperties $postA.block.properties) -eq $expectedProps -and `
+				(Format-BlockProperties $postB.block.properties) -eq $expectedProps) `
+			("A=[{0}] B=[{1}] expected=[{2}]" -f (Format-BlockProperties $postA.block.properties), `
+				(Format-BlockProperties $postB.block.properties), $expectedProps)
+		$index++
+	}
+
+	# Graceful stop with the S16a markers, then a restart on the same save_dir.
+	$stopped = Stop-OursServer -Mode graceful -TimeoutSec 30
+	$log = [string]$stopped.log
+	$worldFlushed = Select-String -LiteralPath $log -Pattern 'final world save flushed' -Quiet -ErrorAction SilentlyContinue
+	$playersFlushed = Select-String -LiteralPath $log -Pattern 'player saves flushed' -Quiet -ErrorAction SilentlyContinue
+	Add-Check $Result 'S18: graceful stop flushed the world and the players' `
+		($stopped.exited -and $stopped.exitCode -eq 0 -and $worldFlushed -and $playersFlushed) `
+		("exited={0} exitCode={1} world={2} players={3} log={4}" -f $stopped.exited, $stopped.exitCode, $worldFlushed, $playersFlushed, $log)
+
+	# 24d live: the hotbar of A reached our own player file.
+	$playerFile = Join-Path (Join-Path $OursSaveDir 'players\data') (Get-OfflinePlayerFileName $nickA)
+	$entries = @()
+	if (Test-Path -LiteralPath $playerFile) {
+		$doc = Read-PlayerNbt $playerFile
+		$entries = @($doc.root['Inventory'])
+	}
+	$slot = 0
+	foreach ($case in @($Cfg.placements)) {
+		$entry = @($entries | Where-Object { $null -ne $_['Slot'] -and [int]$_['Slot'] -eq $slot })
+		Add-Check $Result ("S18 {0}: our player file keeps hotbar slot {1}" -f $case.name, $slot) `
+			($entry.Count -eq 1 -and [string]$entry[0]['id'] -eq [string]$case.item -and [int]$entry[0]['count'] -eq 1) `
+			("file={0} slot={1} entry={2}" -f $playerFile, $slot, ($entry | ConvertTo-Json -Compress -Depth 4))
+		$slot++
+	}
+
+	Stop-S16Clients $Cfg
+	# The fixture must not be re-applied on the restart: dev geometry lives in
+	# memory only and every start applies it after the save is loaded, so the
+	# destinations would go back to `initial` and the check would read air
+	# (proved by generation 1: 2026-11-18_s18-ours-step24-r1). Generation 2
+	# gets the same config with a platform-only geometry file.
+	$restartGeometry = Join-Path $RunDir 'dev-geometry-restart.txt'
+	(Get-PlacementGeometry $Cfg -PlatformOnly) | Set-Content -LiteralPath $restartGeometry -Encoding utf8
+	$restartConfig = Join-Path $RunDir 'server-ours-restart.toml'
+	$restartGeometryPath = $restartGeometry -replace '\\', '/'
+	$configText = Get-Content -LiteralPath $script:oursConfig -Raw
+	$configText = $configText -replace '(?m)^dev_geometry\s*=.*$', "dev_geometry = `"$restartGeometryPath`""
+	Set-Content -LiteralPath $restartConfig -Value $configText -Encoding utf8
+	$script:oursConfig = $restartConfig
+	Add-Check $Result 'S18: the restart geometry keeps only the stand floor' `
+		(@(Get-Content -LiteralPath $restartGeometry).Count -gt 0 -and `
+			@(Get-Content -LiteralPath $restartGeometry | Where-Object { $_ -like 'setblock*' }).Count -eq 0) `
+		("lines={0} setblock={1}" -f @(Get-Content -LiteralPath $restartGeometry).Count, `
+			@(Get-Content -LiteralPath $restartGeometry | Where-Object { $_ -like 'setblock*' }).Count)
+	$null = Restart-OursServer
+	Start-S16Pair $Cfg
+	foreach ($case in @($Cfg.placements)) {
+		$name = [string]$case.name
+		$dest = @($case.dest)
+		$afterA = (Invoke-TestCmd $portA (New-BlockCmd "s18-$name-restart-a" ([int]$dest[0]) ([int]$dest[1]) ([int]$dest[2]))).result
+		$afterB = (Invoke-TestCmd $portB (New-BlockCmd "s18-$name-restart-b" ([int]$dest[0]) ([int]$dest[1]) ([int]$dest[2]))).result
+		$expectedProps = Format-BlockProperties $case.expectProps
+		Add-Check $Result ("S18 {0}: the placed block survived the restart" -f $name) `
+			([string]$afterA.block.id -eq [string]$case.expectBlock -and [string]$afterB.block.id -eq [string]$case.expectBlock -and `
+				(Format-BlockProperties $afterA.block.properties) -eq $expectedProps -and `
+				(Format-BlockProperties $afterB.block.properties) -eq $expectedProps) `
+			("A={0}[{1}] B={2}[{3}] expected={4}[{5}]" -f $afterA.block.id, (Format-BlockProperties $afterA.block.properties), `
+				$afterB.block.id, (Format-BlockProperties $afterB.block.properties), $case.expectBlock, $expectedProps)
+	}
+	try { $null = Invoke-TestCmd $portA (New-SessionCmd 's18-off-a' 'disconnect') } catch { }
+	try { $null = Invoke-TestCmd $portB (New-SessionCmd 's18-off-b' 'disconnect') } catch { }
+	$script:s7Facts.Add(("S18: placed {0} blocks, graceful stop, restart on {1}" -f @($Cfg.placements).Count, $OursSaveDir))
 }
 
 # --- S24a (Шаг 24.0a/e): creative-menu item add and hotbar selection --------
@@ -4317,7 +4641,7 @@ $scenarioDir = Join-Path $here 'scenarios'
 $allResults = @()
 try {
 	Prepare-RunWorld
-	$s16Requested = (($Scenarios -contains 's16a') -or ($Scenarios -contains 's16b'))
+	$s16Requested = (($Scenarios -contains 's16a') -or ($Scenarios -contains 's16b') -or ($Scenarios -contains 's18'))
 	if (-not $isVanilla -and (($Scenarios -contains 's13') -or ($Scenarios -contains 's13-stop') -or ($Scenarios -contains 's13-gamemode') -or $s16Requested)) {
 		# РЁР°Рі 19a: the player save root lives inside the run directory. The
 		# gamemode variant reuses the directory of the preceding s13 run, so
@@ -4345,7 +4669,7 @@ try {
 		Write-Host ("save root: {0} (player autosave {1}, world autosave {2}, ignore mismatch '{3}')" -f `
 			$OursSaveDir, $OursAutosaveTicks, $OursWorldAutosaveTicks, $OursSaveIgnoreWorldMismatch)
 	}
-	if (-not $isVanilla -and $OursDevGeometry -and (($Scenarios -contains 's10') -or ($Scenarios -contains 's11') -or ($Scenarios -contains 's12') -or ($Scenarios -contains 's14'))) {
+	if (-not $isVanilla -and $OursDevGeometry -and (($Scenarios -contains 's10') -or ($Scenarios -contains 's11') -or ($Scenarios -contains 's12') -or ($Scenarios -contains 's14') -or ($Scenarios -contains 's17') -or ($Scenarios -contains 's18'))) {
 		Write-DevGeometryFile $OursDevGeometry
 	}
 	Start-Stand
@@ -4396,6 +4720,7 @@ try {
 			's16a' { Invoke-S16a $cfg $result }
 			's16b' { Invoke-S16b $cfg $result }
 			's17' { Invoke-S17 $cfg $result }
+			's18' { Invoke-S18 $cfg $result }
 			's24a' { Invoke-S24a $cfg $result }
 			's24b' { Invoke-S24b $cfg $result }
 			default { throw "unknown scenario '$($cfg.id)'" }

@@ -309,21 +309,45 @@ $run = 'E:\MineRust-data\autotests\2026-11-18_s16-ours'
   после. `mcproxy` между поколениями сервера не перезапускается; GUI-клиенты
   перезапускаются через quickPlay.
 
-### S17: постановка блоков в творческом режиме (Шаг 23d, только трейс ванили)
+### S17/S18: творческий инвентарь и постановка блоков (Шаг 24c)
 
-`scenarios/s17-creative-place.json` (`s17`) запускается **только** с
-`-Target vanilla`: 14 кейсов творческой постановки (pick → hotbar →
-`use_item_on`), фикстура собирается командами `setblock`/`fill`. Раннер
-пишет `s17-samples.json` (кейсы + wire-строки + инвентарь из
-`players/data/*.dat`) и требует, чтобы клиенты отключились **до** чтения
-трейсов (иначе поток entity-пакетов не даёт чтению сойтись). Наш сервер этот
-сценарий не запускает (`throw`, пока нет `use_item_on`); данные и план —
-`docs/BLOCK-PLACING.md`.
+`scenarios/s17-creative-place.json` (`s17`) — 14 кейсов творческой постановки
+(pick → hotbar → `use_item_on`), фикстура собирается командами
+`setblock`/`fill`. С 24c сценарий идёт и на ванили, и на нашем сервере:
+
+- **vanilla**: фикстура уходит в консоль сервера, клиенты телепортируются
+  `/tp`, раннер пишет `s17-samples.json` (кейсы + wire-строки + инвентарь из
+  `players/data/*.dat`) и требует, чтобы клиенты отключились **до** чтения
+  трейсов (иначе поток entity-пакетов не даёт чтению сойтись).
+- **ours**: та же фикстура пишется в файл `-OursDevGeometry` и применяется
+  нашим сервером при старте (у нас нет консоли/`/fill`), телепорт — командой
+  тест-мода (`tp`), режим на входе — `-OursGameMode 1`, сейв — `-OursSaveDir`.
+  Проверки те же плюс итоговый state id: мод возвращает имя и `properties`
+  блока, раннер резолвит id по `reports/blocks.json`.
+
+`scenarios/s18-block-persist.json` (`s18`) — три постановки живым путём
+(меню креатива → клавиша хотбара → `use`), graceful stop (`stop` в stdin),
+рестарт на том же `save_dir` и проверка, что A и B видят те же state id и
+свойства, а хотбар A лежит в `players/data/<uuid>.dat`. На рестарт раннер
+пишет отдельный конфиг с платформенной геометрией (только пол под стойкой):
+dev-геометрия применяется на каждом старте после загрузки сейва и иначе
+вернула бы `dest` в `initial` (баг r1, тест
+`tests/placement-runner.Tests.ps1`).
 
 ```powershell
 $run = 'E:\MineRust-data\autotests\2026-11-18_s17-vanilla'
 & .\tools\testclient\run-scenario.ps1 -Scenarios s17 -Target vanilla -Release `
   -RunDir $run
+
+$run = 'E:\MineRust-data\autotests\2026-11-18_s17-ours'
+& .\tools\testclient\run-scenario.ps1 -Scenarios s17 -Target ours `
+  -RunDir $run -OursDevGeometry "$run\dev-geometry.txt" `
+  -OursSaveDir "$run\save" -OursGameMode 1
+
+$run = 'E:\MineRust-data\autotests\2026-11-18_s18-ours'
+& .\tools\testclient\run-scenario.ps1 -Scenarios s18 -Target ours `
+  -RunDir $run -OursDevGeometry "$run\dev-geometry.txt" `
+  -OursSaveDir "$run\save" -OursGameMode 1
 ```
 
 Прогон **2026-11-14_1735** (чистый): S2 **6/6 PASS**, остальное — честные пробелы

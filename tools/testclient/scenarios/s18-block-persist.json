@@ -1,0 +1,14 @@
+{
+  "id": "s18",
+  "title": "creative placement survives a graceful stop and restart (step 24c)",
+  "playerA": "SaveA",
+  "playerB": "SaveB",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "settleMs": 900,
+  "placements": [
+    { "name": "stone", "support": [60,202,-70], "dest": [60,202,-71], "initial": "minecraft:air", "stand": [60.5,201,-74.5,0,2], "item": "minecraft:stone", "expectBlock": "minecraft:stone", "expectState": 1, "expectProps": {} },
+    { "name": "log", "support": [66,202,-70], "dest": [66,202,-71], "initial": "minecraft:air", "stand": [66.5,201,-74.5,0,2], "item": "minecraft:oak_log", "expectBlock": "minecraft:oak_log", "expectState": 141, "expectProps": { "axis": "z" } },
+    { "name": "stairs", "support": [72,202,-70], "dest": [72,202,-71], "initial": "minecraft:air", "stand": [72.5,201,-74.5,0,2], "item": "minecraft:oak_stairs", "expectBlock": "minecraft:oak_stairs", "expectState": 5494, "expectProps": { "facing": "south", "half": "bottom", "shape": "straight", "waterlogged": "false" } }
+  ]
+}
