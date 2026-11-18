@@ -25,7 +25,7 @@ fn default_true() -> bool {
     true
 }
 
-/// Serde default of `autosave_interval_ticks` (Шаг 18a): three minutes at
+/// Serde default of `autosave_interval_ticks` (Шаг 18a): five minutes at
 /// 20 TPS.
 fn default_autosave_ticks() -> u64 {
     DEFAULT_AUTOSAVE_TICKS
@@ -33,6 +33,12 @@ fn default_autosave_ticks() -> u64 {
 
 /// Autosave period both the serde default and the example use.
 pub const DEFAULT_AUTOSAVE_TICKS: u64 = 6000;
+
+/// Serde default of `world_autosave_ticks` (Шаг 22b): the same five minutes
+/// at 20 TPS as the player save, but an independent setting.
+fn default_world_autosave_ticks() -> u64 {
+    DEFAULT_AUTOSAVE_TICKS
+}
 
 /// Serde default of `workers` (M4.3 A2): logical cores − 2, at least 1.
 ///
@@ -263,6 +269,22 @@ pub struct ServerConfig {
     /// stop still save.
     #[serde(default = "default_autosave_ticks")]
     pub autosave_interval_ticks: u64,
+    /// Autosave period of the **world** in ticks (Шаг 22b). Default 6000,
+    /// independent of `autosave_interval_ticks`; `0` disables the periodic
+    /// pass, while the save at the server stop still runs. Only chunks with
+    /// unsaved block changes are written, at most 256 per pass, and the tick
+    /// never waits for the disk.
+    #[serde(default = "default_world_autosave_ticks")]
+    pub world_autosave_ticks: u64,
+    /// Apply the saved chunk diffs even when `world.json` records another
+    /// template (another SHA-256 of `level.dat` or another `DataVersion`).
+    ///
+    /// Off by default: the server refuses to start on a mismatch, because a
+    /// diff written against one world palette would silently produce a wrong
+    /// world in another. Turning it on keeps the diffs and logs a warning —
+    /// the operator's explicit choice (Шаг 22b, `docs/WORLD-SAVE.md` §6).
+    #[serde(default)]
+    pub save_ignore_world_mismatch: bool,
 }
 
 impl ServerConfig {
@@ -529,6 +551,23 @@ simulation_distance = 4
         let text = example_toml() + "game_mode = 1\n";
         let config: ServerConfig = toml::from_str(&text).expect("valid toml");
         assert_eq!(config.game_mode, 1, "creative");
+        config.validate().expect("valid");
+    }
+
+    #[test]
+    fn world_save_settings_have_safe_defaults_and_parse_overrides() {
+        let config: ServerConfig = toml::from_str(&example_toml()).expect("valid toml");
+        assert_eq!(config.world_autosave_ticks, DEFAULT_AUTOSAVE_TICKS);
+        assert!(
+            !config.save_ignore_world_mismatch,
+            "mismatch refuses by default"
+        );
+
+        let text =
+            example_toml() + "world_autosave_ticks = 200\nsave_ignore_world_mismatch = true\n";
+        let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+        assert_eq!(config.world_autosave_ticks, 200);
+        assert!(config.save_ignore_world_mismatch);
         config.validate().expect("valid");
     }
 

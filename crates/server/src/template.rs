@@ -13,7 +13,7 @@ use std::sync::{Arc, OnceLock};
 use data::{BlockStates, CollisionShapes, GameData, RegistryIds};
 use net::chunks::ReadyChunks;
 use net::loader::LoadError;
-use net::store::ChunkStore;
+use net::store::{ChunkStore, SavedChunk};
 use protocol::LevelChunkWithLight;
 use tracing::{debug, info, warn};
 use world::{Chunk, ChunkNotReady, StoredChunk};
@@ -93,6 +93,10 @@ pub struct TemplateWorld {
     data_version: i32,
     /// Id lookups of the wire conversion.
     refs: Arc<WireTables>,
+    /// The saved diffs to lay over the template before the first chunk is
+    /// sent (Шаг 22b). `None` keeps the template untouched: the parity stands
+    /// read a world they did not create and must not inherit a save.
+    saved: Option<Arc<worldsave::Store>>,
     /// The whole ready world, built once and then shared by every
     /// connection (`Arc`, first build wins the `OnceLock` slot). It carries
     /// the payloads and the `(x, z) -> position` index (M4.4 A), both built
@@ -118,8 +122,17 @@ impl TemplateWorld {
             region_dir,
             data_version,
             refs,
+            saved: None,
             ready: OnceLock::new(),
         }
+    }
+
+    /// Lays the diffs of `store` over the template when the batch is built
+    /// (Шаг 22b). The server sets this before [`net::ChunkSource::load_batch`];
+    /// the parity stands leave it unset.
+    pub fn with_saved(mut self, store: Arc<worldsave::Store>) -> Self {
+        self.saved = Some(store);
+        self
     }
 
     /// All region files of the dimension, name-sorted so one batch has a
@@ -168,10 +181,12 @@ impl TemplateWorld {
         if let Some(cached) = self.ready.get() {
             return Ok(Arc::clone(cached));
         }
-        let built = Arc::new(ChunkStore::with_collisions(
-            ReadyChunks::new(self.build_batch()?),
+        let (payload, saved) = self.build_batch()?;
+        let built = Arc::new(ChunkStore::with_saved(
+            ReadyChunks::from_arcs(payload),
             Arc::clone(&self.refs.blocks),
             Arc::clone(&self.refs.collisions),
+            saved,
         ));
         Ok(Arc::clone(self.ready.get_or_init(|| built)))
     }
@@ -184,23 +199,34 @@ impl TemplateWorld {
     /// The `world batch built` summary belongs here and only here: it used
     /// to print on every join — around 2.4 s of reading and encoding that
     /// this cache now does once at warm-up.
-    fn build_batch(&self) -> Result<Vec<LevelChunkWithLight>, LoadError> {
+    ///
+    /// When a save is attached, its diffs are laid over the batch here, before
+    /// `warm_world` and before the port is bound (Шаг 22b). Only the chunks
+    /// with a file are cloned: every other payload stays the template one.
+    fn build_batch(&self) -> Result<(Vec<Arc<LevelChunkWithLight>>, Vec<SavedChunk>), LoadError> {
         let files = self.region_files()?;
-        let mut payload = Vec::new();
+        let mut payload: Vec<Arc<LevelChunkWithLight>> = Vec::new();
         let mut refused = 0_usize;
         for path in files {
             for stored in world::load_region(&path)? {
                 match self.payload_of(stored)? {
-                    Some(chunk) => payload.push(chunk),
+                    Some(chunk) => payload.push(Arc::new(chunk)),
                     None => refused += 1,
                 }
             }
         }
+        let saved = match self.saved.as_deref() {
+            Some(store) => store.apply(&mut payload, &self.refs.blocks)?,
+            None => Vec::new(),
+        };
         info!(
             sent = payload.len(),
-            refused, self.data_version, "world batch built"
+            refused,
+            saved = saved.len(),
+            self.data_version,
+            "world batch built"
         );
-        Ok(payload)
+        Ok((payload, saved))
     }
 }
 

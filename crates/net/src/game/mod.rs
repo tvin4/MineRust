@@ -24,6 +24,7 @@ mod pool;
 mod region;
 mod replay;
 mod scheduler;
+mod worldsave;
 
 #[cfg(test)]
 mod block_action_tests;
@@ -76,6 +77,7 @@ pub use region::{
 };
 pub use replay::{Replay, ReplayRecord};
 pub use scheduler::Scheduler;
+pub use worldsave::{WorldSave, SAVE_CHUNKS_PER_PASS};
 
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -86,7 +88,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
-use self::playerdata::{save_all, save_player};
+use self::playerdata::{save_all, save_player, stage_all};
 use metrics::Recorder;
 
 use crate::store::ChunkStore;
@@ -216,6 +218,12 @@ pub struct GameConfig {
     /// fresh vitals. The connection reads the store at join and the game
     /// thread queues snapshots for the writer.
     pub playerdata: Option<Arc<PlayerdataRuntime>>,
+    /// World-save writer (Шаг 22b). `None` keeps the world in memory only:
+    /// nothing is written and a restart starts from the template.
+    pub worldsave: Option<Arc<dyn WorldSave>>,
+    /// Autosave period of the world in ticks (Шаг 22b); `0` disables the
+    /// periodic pass. The shutdown save still runs.
+    pub world_autosave_ticks: u64,
 }
 
 impl Default for GameConfig {
@@ -234,6 +242,8 @@ impl Default for GameConfig {
             hardness: None,
             dig_tolerance_ticks: None,
             playerdata: None,
+            worldsave: None,
+            world_autosave_ticks: 0,
         }
     }
 }
@@ -462,6 +472,9 @@ fn game_loop(
         .playerdata
         .as_ref()
         .map_or(0, |runtime| runtime.autosave_interval_ticks);
+    // World autosave period (Шаг 22b): independent of the player save, `0`
+    // disables the periodic pass; the shutdown save still runs.
+    let world_autosave_every = config.world_autosave_ticks;
     let started = Instant::now();
     let mut deadline = started + config.period;
     let mut last_log = started;
@@ -513,6 +526,39 @@ fn game_loop(
         // Autosave (Шаг 18a): the snapshot is queued for the writer thread,
         // the tick never writes. The period is checked after the tick applied
         // every position, so the saved pose is the one this tick settled on.
+        //
+        // The world goes first (Шаг 22b, docs/WORLD-SAVE.md §6): the player
+        // position is written after the world it stands in. The writer's
+        // acknowledgements are drained here, before the new snapshot, so a
+        // chunk the writer already stored is not queued twice.
+        if world_autosave_every > 0 && tick.is_multiple_of(world_autosave_every) {
+            if let (Some(save), Some(store)) = (config.worldsave.as_ref(), config.store.as_deref())
+            {
+                let started = Instant::now();
+                for done in save.completed() {
+                    store.saved(done);
+                }
+                let batch = store.autosave_batch(SAVE_CHUNKS_PER_PASS);
+                let queued = batch.len();
+                let retry = batch.clone();
+                let accepted = queued == 0 || save.submit(batch);
+                if !accepted {
+                    store.not_queued(&retry);
+                    warn!(
+                        tick,
+                        queued,
+                        "world autosave queue is full; the chunks stay dirty for the next pass"
+                    );
+                }
+                info!(
+                    tick,
+                    chunks = queued,
+                    dirty = store.dirty_chunks(),
+                    save_us = phase_us(started.elapsed()),
+                    "world autosave queued"
+                );
+            }
+        }
         if autosave_every > 0 && tick.is_multiple_of(autosave_every) {
             if let Some(runtime) = config.playerdata.as_deref() {
                 // The tick only builds the snapshots and enqueues them; the
@@ -597,10 +643,11 @@ fn game_loop(
         }
     }
     recorder.finish(metrics);
-    // Players still online at stop: queue their final state. The server
-    // drains the writer after this thread has left (Шаг 18a).
+    // Players still online at stop: capture their final state without queuing
+    // disk work. The server first makes the final world durable, then queues
+    // these staged snapshots and drains the player writer (Шаг 18a/22b).
     if let Some(runtime) = config.playerdata.as_deref() {
-        save_all(&scheduler, runtime);
+        stage_all(&scheduler, runtime);
     }
     if let Err(err) = replay.flush() {
         warn!(%err, "could not flush the replay journal");

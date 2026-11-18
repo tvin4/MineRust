@@ -168,12 +168,18 @@ pub struct ReadyChunks {
 impl ReadyChunks {
     /// Builds the coordinate index over `chunks` once.
     pub fn new(chunks: Vec<LevelChunkWithLight>) -> Self {
+        Self::from_arcs(chunks.into_iter().map(Arc::new).collect())
+    }
+
+    /// Builds the coordinate index over payloads that are already shared
+    /// (the startup path, where a saved diff replaces one element of the
+    /// template batch without copying the others; Шаг 22b).
+    pub fn from_arcs(chunks: Vec<Arc<LevelChunkWithLight>>) -> Self {
         let index = chunks
             .iter()
             .enumerate()
             .map(|(position, chunk)| ((chunk.chunk_x, chunk.chunk_z), position))
             .collect();
-        let chunks = chunks.into_iter().map(Arc::new).collect();
         Self { chunks, index }
     }
 

@@ -19,10 +19,11 @@
 //! chunk_payload.rs`; the section slots (Y −4..19, 24 sections) are the
 //! owner's template, the same numbers `world::wire_section::SLOT` uses.
 
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use data::{BlockStates, CollisionShapes};
-use protocol::{ChunkSection, PaletteContainer, BLOCK_CELLS};
+use protocol::{ChunkSection, LevelChunkWithLight, PaletteContainer, BLOCK_CELLS};
 
 use crate::chunks::ReadyChunks;
 
@@ -89,6 +90,97 @@ pub enum StoreError {
     },
 }
 
+/// A chunk whose cells differ from the template, with the generation the
+/// cells reached at the moment they were changed.
+#[derive(Debug)]
+struct DirtyChunk {
+    /// Incremented by every write to the chunk; a save acknowledgement only
+    /// clears the entry when it still carries the generation it saved.
+    generation: u64,
+    /// Generation currently queued for the writer. `None` means the next
+    /// autosave may select this chunk.
+    in_flight: Option<u64>,
+    /// The chunk as the template had it. `Arc` keeps one immutable comparison
+    /// baseline without copying a payload.
+    baseline: Arc<LevelChunkWithLight>,
+    /// Changed cells relative to `baseline`: cell index → state id.
+    cells: BTreeMap<u32, i32>,
+}
+
+/// A diff that was already present on disk when the world was opened.
+///
+/// It is not dirty by itself. Keeping its template payload and cells here
+/// lets the first later edit start from the complete saved diff instead of
+/// rewriting or forgetting the other saved cells.
+#[derive(Debug)]
+struct LoadedChunk {
+    /// The template chunk the saved cells differ from.
+    baseline: Arc<LevelChunkWithLight>,
+    /// Cells that were read from the existing `.mrchunk` file.
+    cells: BTreeMap<u32, i32>,
+}
+
+/// Every chunk with unsaved changes, in coordinate order.
+#[derive(Debug, Default)]
+struct DirtyState {
+    /// Generation handed to the next newly dirty chunk.
+    next: u64,
+    /// Dirty chunks by coordinate.
+    chunks: BTreeMap<(i32, i32), DirtyChunk>,
+    /// The diffs each chunk was loaded with, already durable on disk.
+    ///
+    /// [`ChunkStore::reset_dirty`] (the development geometry) clears new
+    /// changes but keeps this state, so a loaded diff is neither written back
+    /// by a development-only edit nor lost when a real edit happens later.
+    loaded: BTreeMap<(i32, i32), LoadedChunk>,
+}
+
+/// One chunk handed to the world-save writer: the cells that differ from the
+/// template and the generation they belong to.
+///
+/// The tick builds these by copying the per-chunk change map and hands them to
+/// the writer thread; nothing here holds the store lock after the snapshot
+/// returns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChunkSave {
+    /// Chunk x coordinate.
+    pub chunk_x: i32,
+    /// Chunk z coordinate.
+    pub chunk_z: i32,
+    /// Generation of the chunk when the snapshot was taken.
+    pub generation: u64,
+    /// Changed cells, sorted: `(cell index, state id)`.
+    pub changes: Vec<(u32, i32)>,
+}
+
+/// What the writer reports after one chunk: whether its file now matches the
+/// snapshot of `generation`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChunkSaved {
+    /// Chunk x coordinate.
+    pub chunk_x: i32,
+    /// Chunk z coordinate.
+    pub chunk_z: i32,
+    /// Generation the writer saved.
+    pub generation: u64,
+    /// Whether the file (or its deletion) was written successfully.
+    pub ok: bool,
+}
+
+/// A chunk read back from the save: the cells that differ from the template,
+/// with the template payload they were compared against (Шаг 22b).
+#[derive(Debug, Clone)]
+pub struct SavedChunk {
+    /// Chunk x coordinate.
+    pub chunk_x: i32,
+    /// Chunk z coordinate.
+    pub chunk_z: i32,
+    /// The template chunk, before the saved cells were applied.
+    pub baseline: Arc<LevelChunkWithLight>,
+    /// Saved cells, sorted: `(cell index, state id)`.
+    pub cells: Vec<(u32, i32)>,
+}
+
 /// The shared world state: the current wire snapshot and the block report.
 ///
 /// See the module docs and `docs/DECISIONS.md` («Шаг 13a») for the single
@@ -105,6 +197,11 @@ pub struct ChunkStore {
     /// free-headroom query of the crawl rule (Шаг 15 п.5). Empty when the
     /// server was started without `collision_report`.
     collisions: Arc<CollisionShapes>,
+    /// Cells changed against the template, per chunk (Шаг 22b).
+    ///
+    /// The lock is taken only by a block write and by the autosave snapshot,
+    /// never by a tick that changes no block (docs/DECISIONS.md «Шаг 22b»).
+    dirty: Mutex<DirtyState>,
 }
 
 impl std::fmt::Debug for ChunkStore {
@@ -140,7 +237,34 @@ impl ChunkStore {
             current: RwLock::new(Arc::new(ready)),
             blocks,
             collisions,
+            dirty: Mutex::new(DirtyState::default()),
         }
+    }
+
+    /// Like [`Self::with_collisions`], plus the chunks a previous run saved:
+    /// their cells are already applied to `ready`, and the template payloads
+    /// in `saved` become the baseline a later write is compared against, so a
+    /// cell set back to its template value leaves the diff (Шаг 22b).
+    pub fn with_saved(
+        ready: ReadyChunks,
+        blocks: Arc<BlockStates>,
+        collisions: Arc<CollisionShapes>,
+        saved: Vec<SavedChunk>,
+    ) -> Self {
+        let store = Self::with_collisions(ready, blocks, collisions);
+        if !saved.is_empty() {
+            let mut dirty = store.lock_dirty();
+            for chunk in saved {
+                dirty.loaded.insert(
+                    (chunk.chunk_x, chunk.chunk_z),
+                    LoadedChunk {
+                        baseline: chunk.baseline,
+                        cells: chunk.cells.into_iter().collect(),
+                    },
+                );
+            }
+        }
+        store
     }
 
     /// The current snapshot, behind the shared `Arc`.
@@ -356,7 +480,199 @@ impl ChunkStore {
         set_cell(section, cell, state_id, y)?;
         adjust_counts(section, old, state_id, &self.blocks);
         *guard = Arc::new(snapshot.with_chunk(position, Arc::new(new_chunk)));
+        self.record_change(chunk, slot, cell, old, state_id);
         Ok(old)
+    }
+
+    /// Records one changed cell of a chunk for the world save (Шаг 22b).
+    ///
+    /// `chunk` is the payload the write started from: on the first change of
+    /// a chunk it becomes the baseline (an `Arc` clone), so the map keeps the
+    /// difference against the template, not against the previous edit. A cell
+    /// set back to its baseline value leaves the map, which is what turns the
+    /// file into an empty diff (and its deletion).
+    fn record_change(
+        &self,
+        chunk: &Arc<LevelChunkWithLight>,
+        slot: usize,
+        cell: usize,
+        old: i32,
+        state_id: i32,
+    ) {
+        let key = (chunk.chunk_x, chunk.chunk_z);
+        let mut dirty = self.lock_dirty();
+        let state = &mut *dirty;
+        let generation = match state.chunks.get(&key) {
+            Some(entry) => entry.generation.saturating_add(1),
+            None => state.next,
+        };
+        if generation >= state.next {
+            state.next = generation.saturating_add(1);
+        }
+        let loaded = state.loaded.get(&key);
+        let baseline = loaded
+            .map(|saved| Arc::clone(&saved.baseline))
+            .unwrap_or_else(|| Arc::clone(chunk));
+        let cells = loaded.map(|saved| saved.cells.clone()).unwrap_or_default();
+        let entry = state.chunks.entry(key).or_insert_with(|| DirtyChunk {
+            generation,
+            in_flight: None,
+            baseline,
+            cells,
+        });
+        entry.generation = generation;
+        // A new generation is eligible even while an older snapshot of this
+        // chunk is still in the writer queue.
+        entry.in_flight = None;
+        // The baseline always has the section: the write above read that very
+        // section from it. A malformed baseline falls back to `old`, which
+        // keeps the cell in the diff (the safe direction).
+        let template = entry
+            .baseline
+            .sections
+            .get(slot)
+            .and_then(|section| container_state(&section.blocks, cell))
+            .unwrap_or(old);
+        // The save addresses cells section-major: the container index is only
+        // the cell inside one section (Шаг 22b).
+        let cell = (slot * BLOCK_CELLS + cell) as u32;
+        if state_id == template {
+            entry.cells.remove(&cell);
+        } else {
+            entry.cells.insert(cell, state_id);
+        }
+    }
+
+    /// Up to `limit` dirty chunks, in coordinate order, for the writer thread.
+    ///
+    /// The entries stay in the map: only a successful [`Self::saved`] with the
+    /// same generation removes one, so an edit during the write keeps the
+    /// chunk dirty.
+    pub fn autosave_batch(&self, limit: usize) -> Vec<ChunkSave> {
+        let mut dirty = self.lock_dirty();
+        let mut batch = Vec::with_capacity(limit.min(dirty.chunks.len()));
+        for (&(chunk_x, chunk_z), entry) in &mut dirty.chunks {
+            if batch.len() == limit {
+                break;
+            }
+            if entry.in_flight.is_some() {
+                continue;
+            }
+            entry.in_flight = Some(entry.generation);
+            batch.push(ChunkSave {
+                chunk_x,
+                chunk_z,
+                generation: entry.generation,
+                changes: entry
+                    .cells
+                    .iter()
+                    .map(|(&cell, &state)| (cell, state))
+                    .collect(),
+            });
+        }
+        batch
+    }
+
+    /// Every dirty chunk at its newest generation, for the final flush after
+    /// the game thread has stopped.
+    ///
+    /// Unlike [`Self::autosave_batch`], this includes snapshots already in
+    /// flight: the final writer command is queued after them and overwrites
+    /// each file with the newest complete diff.
+    pub fn shutdown_batch(&self) -> Vec<ChunkSave> {
+        let dirty = self.lock_dirty();
+        dirty
+            .chunks
+            .iter()
+            .map(|(&(chunk_x, chunk_z), entry)| ChunkSave {
+                chunk_x,
+                chunk_z,
+                generation: entry.generation,
+                changes: entry
+                    .cells
+                    .iter()
+                    .map(|(&cell, &state)| (cell, state))
+                    .collect(),
+            })
+            .collect()
+    }
+
+    /// Makes a batch eligible again when a nonblocking queue submission was
+    /// refused. Only the same generation is cleared: a later edit has already
+    /// reset its own in-flight marker.
+    pub fn not_queued(&self, batch: &[ChunkSave]) {
+        let mut dirty = self.lock_dirty();
+        for save in batch {
+            if let Some(entry) = dirty.chunks.get_mut(&(save.chunk_x, save.chunk_z)) {
+                if entry.in_flight == Some(save.generation) {
+                    entry.in_flight = None;
+                }
+            }
+        }
+    }
+
+    /// Applies one writer report: a successful save of the generation the
+    /// chunk still carries drops the entry, so it is not written again.
+    pub fn saved(&self, done: ChunkSaved) {
+        let mut dirty = self.lock_dirty();
+        let key = (done.chunk_x, done.chunk_z);
+        if !done.ok {
+            if let Some(entry) = dirty.chunks.get_mut(&key) {
+                if entry.in_flight == Some(done.generation) {
+                    entry.in_flight = None;
+                }
+            }
+            return;
+        }
+        if dirty
+            .chunks
+            .get(&key)
+            .is_some_and(|entry| entry.generation == done.generation)
+        {
+            let Some(entry) = dirty.chunks.remove(&key) else {
+                return;
+            };
+            if entry.cells.is_empty() {
+                dirty.loaded.remove(&key);
+            } else {
+                dirty.loaded.insert(
+                    key,
+                    LoadedChunk {
+                        baseline: entry.baseline,
+                        cells: entry.cells,
+                    },
+                );
+            }
+        }
+    }
+
+    /// How many chunks carry unsaved changes.
+    ///
+    /// Diffs read at startup are already durable and do not count until a
+    /// later block write changes their chunk.
+    pub fn dirty_chunks(&self) -> usize {
+        self.lock_dirty().chunks.len()
+    }
+
+    /// Forgets every change: the in-memory world stays as it is, but nothing
+    /// is saved.
+    ///
+    /// This is the startup hook of the development geometry (Шаг 22b): loaded
+    /// diffs already live in `loaded`, so clearing only the newly dirty map
+    /// drops the geometry without scheduling an unchanged save file for a
+    /// rewrite. Call it before the first autosave, never later: it would
+    /// discard real edits too.
+    pub fn reset_dirty(&self) {
+        self.lock_dirty().chunks.clear();
+    }
+
+    /// Locks the dirty map, recovering from a poisoned lock like
+    /// [`Self::read`]: the map is rebuilt from whole entries, never left
+    /// half-updated by a panic.
+    fn lock_dirty(&self) -> MutexGuard<'_, DirtyState> {
+        self.dirty
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Locks the current snapshot for reading, recovering from a poisoned
@@ -375,6 +691,47 @@ impl ChunkStore {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+}
+
+/// Number of block cells one payload holds across all its sections.
+pub fn chunk_cell_count(chunk: &LevelChunkWithLight) -> u32 {
+    (chunk.sections.len() * BLOCK_CELLS) as u32
+}
+
+/// The state id of one cell of a chunk payload, addressed by the flat
+/// section-major index the world save stores (`Шаг 22b`).
+///
+/// `None` when the index is outside the payload or its container is
+/// malformed — the same "no guess" rule [`ChunkStore::block`] follows.
+pub fn chunk_cell_state(chunk: &LevelChunkWithLight, cell: u32) -> Option<i32> {
+    let cell = cell as usize;
+    let section = chunk.sections.get(cell / BLOCK_CELLS)?;
+    container_state(&section.blocks, cell % BLOCK_CELLS)
+}
+
+/// Puts `state_id` into one cell of a chunk payload, extending the palette
+/// and fixing the section counts — the read of a saved diff (`Шаг 22b`).
+pub fn set_chunk_cell(
+    chunk: &mut LevelChunkWithLight,
+    cell: u32,
+    state_id: i32,
+    blocks: &BlockStates,
+) -> Result<(), StoreError> {
+    let cell = cell as usize;
+    let slot = cell / BLOCK_CELLS;
+    let local = cell % BLOCK_CELLS;
+    let y = (MIN_SECTION_Y + slot as i32) * 16;
+    let section = chunk
+        .sections
+        .get_mut(slot)
+        .ok_or(StoreError::Malformed { y })?;
+    let old = container_state(&section.blocks, local).ok_or(StoreError::Malformed { y })?;
+    if old == state_id {
+        return Ok(());
+    }
+    set_cell(section, local, state_id, y)?;
+    adjust_counts(section, old, state_id, blocks);
+    Ok(())
 }
 
 /// The section slot a block y belongs to, as the payload indexes it.
@@ -868,5 +1225,223 @@ mod tests {
         assert!(store.is_air(0), "air");
         assert!(!store.is_air(1), "stone");
         assert_eq!(store.blocks().block_name(1), Some("minecraft:stone"));
+    }
+
+    /// The flat cell index of `(x, y, z)` the save format uses: section slot
+    /// first, then the wire cell inside the section.
+    fn flat_cell(x: i32, y: i32, z: i32) -> u32 {
+        let slot = (y >> 4) - MIN_SECTION_Y;
+        let local = ((y & 15) << 8) | ((z & 15) << 4) | (x & 15);
+        slot as u32 * BLOCK_CELLS as u32 + local as u32
+    }
+
+    /// A write marks exactly its chunk, the batch carries the cell, and a
+    /// successful save of that generation drops the chunk (Шаг 22b).
+    #[test]
+    fn a_write_is_saved_once_and_then_leaves_the_dirty_set() {
+        let store = store_with(vec![test_chunk(0, 0), test_chunk(1, 0)]);
+        store.set_block(8, 64, 8, 1).expect("stone");
+        assert_eq!(store.dirty_chunks(), 1, "only the touched chunk is dirty");
+
+        let batch = store.autosave_batch(256);
+        assert_eq!(batch.len(), 1);
+        let save = &batch[0];
+        assert_eq!((save.chunk_x, save.chunk_z), (0, 0));
+        assert_eq!(save.changes, vec![(flat_cell(8, 64, 8), 1)]);
+        let generation = save.generation;
+
+        store.saved(ChunkSaved {
+            chunk_x: 0,
+            chunk_z: 0,
+            generation,
+            ok: true,
+        });
+        assert_eq!(store.dirty_chunks(), 0, "the saved chunk is clean");
+        assert!(
+            store.autosave_batch(256).is_empty(),
+            "nothing to write twice"
+        );
+
+        store.set_block(9, 64, 9, 2).expect("a later edit");
+        assert_eq!(
+            store.autosave_batch(256)[0].changes,
+            vec![(flat_cell(8, 64, 8), 1), (flat_cell(9, 64, 9), 2)],
+            "a later save keeps the cells already durable in the same file"
+        );
+    }
+
+    /// A write that lands after the snapshot keeps the chunk dirty even when
+    /// the older generation is acknowledged.
+    #[test]
+    fn a_write_during_the_save_keeps_the_chunk_dirty() {
+        let store = store_with(vec![test_chunk(0, 0)]);
+        store.set_block(8, 64, 8, 1).expect("stone");
+        let first = store.autosave_batch(256);
+        let generation = first[0].generation;
+
+        store.set_block(8, 64, 8, 2).expect("log");
+        store.saved(ChunkSaved {
+            chunk_x: 0,
+            chunk_z: 0,
+            generation,
+            ok: true,
+        });
+        assert_eq!(store.dirty_chunks(), 1, "the newer edit is still pending");
+
+        let second = store.autosave_batch(256);
+        assert_eq!(second[0].changes, vec![(flat_cell(8, 64, 8), 2)]);
+    }
+
+    /// Setting a cell back to the template value leaves an empty diff: the
+    /// writer deletes the file instead of keeping a stale one.
+    #[test]
+    fn a_cell_returned_to_the_template_leaves_an_empty_diff() {
+        let store = store_with(vec![test_chunk(0, 0)]);
+        store.set_block(8, 64, 8, 1).expect("stone");
+        store.set_block(8, 64, 8, 0).expect("air again");
+
+        let batch = store.autosave_batch(256);
+        assert_eq!(batch.len(), 1, "the chunk still needs its file removed");
+        assert!(batch[0].changes.is_empty(), "the diff is empty");
+    }
+
+    /// A failed save keeps the chunk dirty for the next autosave.
+    #[test]
+    fn a_failed_save_keeps_the_chunk_dirty() {
+        let store = store_with(vec![test_chunk(0, 0)]);
+        store.set_block(8, 64, 8, 1).expect("stone");
+        let save = store.autosave_batch(256).remove(0);
+        store.saved(ChunkSaved {
+            chunk_x: 0,
+            chunk_z: 0,
+            generation: save.generation,
+            ok: false,
+        });
+        assert_eq!(store.dirty_chunks(), 1);
+        assert_eq!(
+            store.autosave_batch(1).len(),
+            1,
+            "the negative ack makes the generation eligible for retry"
+        );
+    }
+
+    /// A slow first batch is not copied into the queue repeatedly: the next
+    /// pass advances to later dirty chunks, and a refused submission can make
+    /// its generation eligible again.
+    #[test]
+    fn an_in_flight_batch_does_not_starve_the_dirty_tail() {
+        let store = store_with(vec![test_chunk(0, 0), test_chunk(1, 0)]);
+        store.set_block(8, 64, 8, 1).expect("first chunk");
+        store.set_block(24, 64, 8, 2).expect("second chunk");
+
+        let first = store.autosave_batch(1);
+        assert_eq!((first[0].chunk_x, first[0].chunk_z), (0, 0));
+        let second = store.autosave_batch(1);
+        assert_eq!(
+            (second[0].chunk_x, second[0].chunk_z),
+            (1, 0),
+            "the next pass skips the generation already in flight"
+        );
+        assert!(
+            store.autosave_batch(1).is_empty(),
+            "both dirty generations are already queued"
+        );
+
+        store.not_queued(&first);
+        let retry = store.autosave_batch(1);
+        assert_eq!((retry[0].chunk_x, retry[0].chunk_z), (0, 0));
+    }
+
+    /// A chunk loaded from the save keeps its template baseline: a cell set
+    /// back to the template value becomes an empty diff.
+    #[test]
+    fn a_loaded_diff_keeps_the_template_as_its_baseline() {
+        let template = test_chunk(0, 0);
+        let mut loaded = template.clone();
+        set_chunk_cell(&mut loaded, flat_cell(8, 64, 8), 1, &test_blocks()).expect("cell");
+        let baseline = Arc::new(template);
+        let store = ChunkStore::with_saved(
+            ReadyChunks::new(vec![loaded]),
+            test_blocks(),
+            Arc::new(CollisionShapes::default()),
+            vec![SavedChunk {
+                chunk_x: 0,
+                chunk_z: 0,
+                baseline,
+                cells: vec![(flat_cell(8, 64, 8), 1)],
+            }],
+        );
+        assert_eq!(store.block(8, 64, 8), Some(1), "the saved cell is there");
+        assert_eq!(
+            store.dirty_chunks(),
+            0,
+            "a diff already durable on disk is not dirty after startup"
+        );
+        assert!(
+            store.autosave_batch(16).is_empty(),
+            "the first autosave does not rewrite an unchanged loaded diff"
+        );
+
+        store.set_block(8, 64, 8, 0).expect("back to air");
+        assert!(
+            store.autosave_batch(16)[0].changes.is_empty(),
+            "the template value leaves no diff"
+        );
+    }
+
+    /// A reset forgets development geometry without scheduling an unchanged
+    /// loaded diff for another write.
+    #[test]
+    fn a_reset_keeps_loaded_diffs_and_drops_geometry_edits() {
+        let template = test_chunk(0, 0);
+        let mut loaded = template.clone();
+        set_chunk_cell(&mut loaded, flat_cell(8, 64, 8), 1, &test_blocks()).expect("cell");
+        let store = ChunkStore::with_saved(
+            ReadyChunks::new(vec![loaded]),
+            test_blocks(),
+            Arc::new(CollisionShapes::default()),
+            vec![SavedChunk {
+                chunk_x: 0,
+                chunk_z: 0,
+                baseline: Arc::new(template),
+                cells: vec![(flat_cell(8, 64, 8), 1)],
+            }],
+        );
+        store.set_block(9, 64, 9, 2).expect("geometry edit");
+        store.reset_dirty();
+        assert_eq!(
+            store.dirty_chunks(),
+            0,
+            "nothing changed since the disk save"
+        );
+        assert_eq!(
+            store.block(9, 64, 9),
+            Some(2),
+            "the in-memory geometry stays"
+        );
+        assert!(
+            store.autosave_batch(16).is_empty(),
+            "neither the stored diff nor the geometry is queued"
+        );
+
+        store.set_block(10, 64, 10, 2).expect("real edit");
+        assert_eq!(
+            store.autosave_batch(16)[0].changes,
+            vec![(flat_cell(8, 64, 8), 1), (flat_cell(10, 64, 10), 2)],
+            "a later real edit preserves the loaded cells in the next diff"
+        );
+    }
+
+    /// The chunk-level cell helpers address the same cell as the world
+    /// coordinates, and an index outside the payload is an error.
+    #[test]
+    fn chunk_cells_are_addressed_by_the_flat_index() {
+        let mut chunk = test_chunk(0, 0);
+        assert_eq!(chunk_cell_count(&chunk), 24 * BLOCK_CELLS as u32);
+        let cell = flat_cell(3, -64, 12);
+        set_chunk_cell(&mut chunk, cell, 1, &test_blocks()).expect("inside the chunk");
+        assert_eq!(chunk_cell_state(&chunk, cell), Some(1));
+        assert_eq!(chunk.sections[0].non_air, 1, "the count was fixed");
+        assert_eq!(chunk_cell_state(&chunk, chunk_cell_count(&chunk)), None);
     }
 }

@@ -293,12 +293,7 @@ fn playerdata_runtime(
 ) -> (Arc<PlayerdataRuntime>, playerdata::Writer) {
     let store = playerdata::Store::open(temp_dir(name), 5023, &[]).expect("store");
     let (sink, writer) = playerdata::spawn(store.clone(), 8).expect("writer");
-    let runtime = PlayerdataRuntime {
-        store: Arc::new(store),
-        sink,
-        force_gamemode,
-        autosave_interval_ticks: 0,
-    };
+    let runtime = PlayerdataRuntime::new(Arc::new(store), sink, force_gamemode, 0);
     (Arc::new(runtime), writer)
 }
 

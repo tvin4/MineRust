@@ -18,7 +18,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use data::{BlockHardness, BlockStates, CollisionShapes, GameData};
+use net::game::WorldSave as _;
 use protocol::StatusInfo;
+use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
 
 /// Builds the status document advertised to the multiplayer server list.
@@ -70,6 +72,22 @@ pub enum RunError {
     /// writer thread that could not start.
     #[error(transparent)]
     Playerdata(#[from] playerdata::PlayerdataError),
+    /// The world save could not be opened (Шаг 22b): the save belongs to
+    /// another template, a directory or file could not be read or written,
+    /// or the writer thread could not start.
+    #[error(transparent)]
+    Worldsave(#[from] worldsave::StoreError),
+    /// The template or its saved diffs could not be built before bind.
+    #[error("world warm-up failed: {0}")]
+    Warmup(String),
+    /// The game thread could still mutate the world after its join deadline,
+    /// so no racy final snapshot was attempted.
+    #[error("the game thread did not stop; final world/player saves were not attempted")]
+    GameShutdown,
+    /// The final player snapshots were staged in the right order but the
+    /// bounded writer queue could not accept all of them.
+    #[error("the final player-save queue dropped {0} snapshot(s)")]
+    FinalPlayerQueue(usize),
 }
 
 /// What each required chunk-serving path must point at (see
@@ -199,6 +217,21 @@ pub fn build_world(
     config: &ServerConfig,
     game_data: Arc<GameData>,
 ) -> Result<(Option<net::Loader>, net::WorldInfo), RunError> {
+    build_world_with_save(config, game_data, None)
+}
+
+/// [`build_world`] with the saved chunk diffs to lay over the template
+/// (Шаг 22b).
+///
+/// The save is optional and explicit: the parity stands keep reading exactly
+/// the template, while `run` passes the store opened from `save_dir`. The
+/// diffs are applied when the batch is built (the warm-up), before any
+/// connection can join.
+pub fn build_world_with_save(
+    config: &ServerConfig,
+    game_data: Arc<GameData>,
+    saved: Option<Arc<worldsave::Store>>,
+) -> Result<(Option<net::Loader>, net::WorldInfo), RunError> {
     let Some(dir) = config.world_dir.as_deref().map(str::trim) else {
         // Only reachable when `run` was bypassed; `run` refuses to start
         // without a world (require_chunk_paths).
@@ -256,7 +289,15 @@ pub fn build_world(
     };
     let collisions = load_collisions(config)?;
     let tables = Arc::new(WireTables::new(blocks, registries, game_data, collisions));
-    let world = TemplateWorld::new(region_dir, level.data_version, tables);
+    let mut world = TemplateWorld::new(region_dir, level.data_version, tables);
+    if let Some(store) = saved {
+        tracing::info!(
+            save_dir = %store.root().display(),
+            mismatch = store.mismatch(),
+            "saved chunk diffs will be applied over the template"
+        );
+        world = world.with_saved(store);
+    }
     tracing::info!(
         data_version = level.data_version,
         seed = settings.seed,
@@ -305,12 +346,12 @@ fn open_playerdata(
     }
     let store = Arc::new(playerdata::Store::open(save_dir, data_version, &forbidden)?);
     let (sink, writer) = playerdata::spawn((*store).clone(), playerdata::DEFAULT_CAPACITY)?;
-    let runtime = net::game::PlayerdataRuntime {
+    let runtime = net::game::PlayerdataRuntime::new(
         store,
         sink,
-        force_gamemode: config.force_gamemode,
-        autosave_interval_ticks: config.autosave_interval_ticks,
-    };
+        config.force_gamemode,
+        config.autosave_interval_ticks,
+    );
     tracing::info!(
         save_dir,
         data_version,
@@ -319,6 +360,77 @@ fn open_playerdata(
         "player saves enabled"
     );
     Ok(Some((runtime, writer)))
+}
+
+/// The world template's identity as `world.json` records it (Шаг 22b).
+///
+/// `level.dat` is read twice on purpose: the SHA-256 pins the exact file the
+/// diffs were written against, the `DataVersion` is the schema the chunk
+/// palettes mean, and the world builder has to read the same file anyway.
+fn world_identity(config: &ServerConfig) -> Result<worldsave::WorldIdentity, RunError> {
+    let Some(dir) = config.world_dir.as_deref().map(str::trim) else {
+        return Err(RunError::MissingSetting {
+            setting: "world_dir",
+            hint: WORLD_HINT,
+        });
+    };
+    let level_dat = Path::new(dir).join("level.dat");
+    let bytes = std::fs::read(&level_dat)?;
+    let level = world::read_level_dat(&level_dat)?;
+    let level_dat_sha256 = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok(worldsave::WorldIdentity {
+        template: dir.to_owned(),
+        level_dat_sha256,
+        data_version: level.data_version,
+    })
+}
+
+/// The world-save runtime, its writer and the store the template reads its
+/// diffs from (Шаг 22b).
+struct WorldSaveHandles {
+    /// The game thread's end of the writer queue.
+    runtime: Arc<worldsave::Runtime>,
+    /// The writer thread, drained after the game thread stops.
+    writer: worldsave::Writer,
+    /// The save root: `world.json`, `chunks/` and the diffs.
+    store: Arc<worldsave::Store>,
+}
+
+/// Opens the world save and starts its writer thread (Шаг 22b).
+///
+/// Returns `None` when `save_dir` is unset: block changes stay in memory and
+/// a restart starts from the template. Everything happens before the port is
+/// bound, so a save that belongs to another template (another `level.dat`
+/// SHA-256 or `DataVersion`) fails the start unless
+/// `save_ignore_world_mismatch = true`, instead of silently serving a world
+/// built from mismatched diffs.
+fn open_worldsave(config: &ServerConfig) -> Result<Option<WorldSaveHandles>, RunError> {
+    let Some(save_dir) = config.save_dir.as_deref().map(str::trim) else {
+        tracing::warn!(
+            "no save_dir configured: block changes are not saved between sessions \
+             (see server.example.toml)"
+        );
+        return Ok(None);
+    };
+    let identity = world_identity(config)?;
+    let store = worldsave::Store::open(save_dir, &identity, config.save_ignore_world_mismatch)?;
+    let (runtime, writer) = worldsave::spawn(store.clone(), worldsave::DEFAULT_CAPACITY)?;
+    tracing::info!(
+        save_dir,
+        template = %identity.template,
+        data_version = identity.data_version,
+        world_autosave_ticks = config.world_autosave_ticks,
+        ignore_mismatch = config.save_ignore_world_mismatch,
+        "world saves enabled"
+    );
+    Ok(Some(WorldSaveHandles {
+        runtime: Arc::new(runtime),
+        writer,
+        store: Arc::new(store),
+    }))
 }
 
 /// Binds the configured address and serves connections until an I/O error.
@@ -337,9 +449,25 @@ pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> Result<(), R
     // connection arrives.
     net::trace::start();
     net::trace::install_names(net::trace::names_for(&packet_ids));
-    let (loader, mut world) = build_world(&config, Arc::clone(&game_data))?;
+    // Player saves (Шаг 18a) and the world save (Шаг 22b) both start before
+    // the port is bound, so a refused save root fails the start. The world
+    // diffs are read by `build_world_with_save` below, before the warm-up.
+    let (playerdata, playerdata_writer) = match open_playerdata(&config)? {
+        Some((runtime, writer)) => (Some(Arc::new(runtime)), Some(writer)),
+        None => (None, None),
+    };
+    let (worldsave, worldsave_writer, saved_store) = match open_worldsave(&config)? {
+        Some(handles) => (
+            Some(handles.runtime),
+            Some(handles.writer),
+            Some(handles.store),
+        ),
+        None => (None, None, None),
+    };
+    let shutdown_playerdata = playerdata.clone();
+    let (loader, mut world) = build_world_with_save(&config, Arc::clone(&game_data), saved_store)?;
     let store = match &loader {
-        Some(loader) => warm_world(loader).await,
+        Some(loader) => Some(warm_world(loader).await?),
         None => None,
     };
     if let Some(raw_override) = config.spawn_override.as_deref() {
@@ -370,17 +498,12 @@ pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> Result<(), R
     }
     // Development geometry (Шаг 15 п.2): off unless configured; applied to
     // the in-memory store before the port is bound, never written to the
-    // world directory.
+    // world directory. The dirty map is then returned to the cells the save
+    // had (Шаг 22b): the geometry is not saved, and neither is a stored diff
+    // dropped.
     if let Some(path) = config.dev_geometry.as_deref() {
         apply_dev_geometry(path, store.as_deref())?;
     }
-    // Player saves (Шаг 18a): the store and its writer start before the port
-    // is bound, so a refused save root fails the start. Without `save_dir`
-    // the runtime is `None` and the server warns that nothing is saved.
-    let (playerdata, playerdata_writer) = match open_playerdata(&config)? {
-        Some((runtime, writer)) => (Some(Arc::new(runtime)), Some(writer)),
-        None => (None, None),
-    };
     let listener = TcpListener::bind(&config.listen).await?;
     let local = listener.local_addr()?;
     tracing::info!(
@@ -391,6 +514,7 @@ pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> Result<(), R
         version_name = %config.version_name,
         "listening"
     );
+    let shutdown_store = store.clone();
     let game_config = net::game::GameConfig {
         workers: config.workers,
         region_side: config.region_side,
@@ -400,9 +524,13 @@ pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> Result<(), R
         default_game_mode: config.game_mode,
         dig_tolerance_ticks: config.dig_tolerance_ticks,
         playerdata,
+        worldsave: worldsave
+            .as_ref()
+            .map(|runtime| Arc::clone(runtime) as Arc<dyn net::game::WorldSave>),
+        world_autosave_ticks: config.world_autosave_ticks,
         ..net::game::GameConfig::default()
     };
-    net::serve_with(
+    let serve_exit = net::serve_with_shutdown_status(
         game_config,
         listener,
         Arc::new(status_info(&config)),
@@ -411,16 +539,81 @@ pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> Result<(), R
         loader,
         world,
     )
-    .await?;
-    // The game thread queued every online player's final snapshot before it
-    // left; drain the writer now (Шаг 18a). A timeout or a failed write is a
-    // warning: the server has already stopped serving.
+    .await;
+    if !serve_exit.game_stopped {
+        // The detached game thread may still call set_block or stage a newer
+        // player snapshot. Taking or closing either writer here would race it;
+        // return a failing status and let process exit terminate the threads.
+        return Err(RunError::GameShutdown);
+    }
+    let serve_result = serve_exit.result;
+    let mut shutdown_error = None;
+    let mut world_flush_ok = true;
+    // The game thread has stopped changing chunks. Queue one complete final
+    // snapshot after every periodic batch and wait for its actual write
+    // result; this runs even when the accept loop returned an I/O error.
+    // The world flush is awaited before the player writer is drained
+    // (docs/WORLD-SAVE.md §6, Шаг 22b).
+    if let (Some(runtime), Some(store)) = (worldsave.as_deref(), shutdown_store.as_deref()) {
+        for done in runtime.completed() {
+            store.saved(done);
+        }
+        let final_batch = store.shutdown_batch();
+        let chunks = final_batch.len();
+        match runtime.flush(final_batch, std::time::Duration::from_secs(5)) {
+            Ok(()) => tracing::info!(chunks, "final world save flushed"),
+            Err(error) => {
+                tracing::warn!(%error, chunks, "final world save was not flushed completely");
+                world_flush_ok = false;
+                shutdown_error = Some(RunError::Worldsave(error));
+            }
+        }
+    }
+    if world_flush_ok {
+        if let Some(runtime) = shutdown_playerdata.as_deref() {
+            let (queued, dropped) = runtime.flush_final();
+            if dropped == 0 {
+                tracing::info!(
+                    players = queued,
+                    "final player saves queued after the world flush"
+                );
+            } else {
+                tracing::warn!(queued, dropped, "the final player-save queue was full");
+                shutdown_error = Some(RunError::FinalPlayerQueue(dropped));
+            }
+        }
+    } else if shutdown_playerdata.is_some() {
+        tracing::warn!(
+            "final player snapshots were not queued because the final world flush failed"
+        );
+    }
+    // Drain the writer threads even after a failed final write. A timeout is
+    // a warning: the listener and game thread are already stopped.
+    if let Some(writer) = worldsave_writer {
+        match writer.shutdown(std::time::Duration::from_secs(5)) {
+            Ok(()) => tracing::info!("world-save writer stopped"),
+            Err(error) => {
+                tracing::warn!(%error, "the world writer did not stop cleanly");
+                shutdown_error.get_or_insert(RunError::Worldsave(error));
+            }
+        }
+    }
     if let Some(writer) = playerdata_writer {
         match writer.shutdown(std::time::Duration::from_secs(5)) {
             Ok(()) => tracing::info!("player saves flushed"),
-            Err(error) => tracing::warn!(%error, "the player writer did not stop cleanly"),
+            Err(error) => {
+                tracing::warn!(%error, "the player writer did not stop cleanly");
+                shutdown_error.get_or_insert(RunError::Playerdata(error));
+            }
         }
     }
+    if let Some(error) = shutdown_error {
+        if let Err(serve_error) = serve_result {
+            tracing::warn!(%serve_error, "the accept loop also failed during shutdown");
+        }
+        return Err(error);
+    }
+    serve_result?;
     Ok(())
 }
 
@@ -441,6 +634,9 @@ fn apply_dev_geometry(path: &str, store: Option<&net::ChunkStore>) -> Result<(),
         return Ok(());
     };
     let touched = geometry::apply_file(store, store.blocks(), path)?;
+    // The geometry is development-only and must not reach the save: return the
+    // dirty map to the cells the save had (Шаг 22b).
+    store.reset_dirty();
     tracing::info!(
         path,
         blocks = touched,
@@ -453,33 +649,24 @@ fn apply_dev_geometry(path: &str, store: Option<&net::ChunkStore>) -> Result<(),
 /// shows how many chunks are ready to be sent (the live check asks for
 /// exactly that number) and the game thread gets the very store the
 /// connections send from (Шаг 13b) — the one object a later block write and
-/// a later join both see. Not fatal: a world that cannot be read now will
-/// fail the same read with a warning on someone's join, and the game thread
-/// then has no store (a block action is only acknowledged).
-async fn warm_world(loader: &net::Loader) -> Option<Arc<net::ChunkStore>> {
-    let reply = match loader.load_batch().await {
-        Ok(reply) => reply,
-        Err(error) => {
-            tracing::warn!(%error, "world warm-up could not be queued");
-            return None;
-        }
-    };
+/// a later join both see. A failure is fatal before `bind`: in particular an
+/// unreadable save directory must not silently turn a persisted world into
+/// the untouched template for every joining player (Шаг 22b).
+async fn warm_world(loader: &net::Loader) -> Result<Arc<net::ChunkStore>, RunError> {
+    let reply = loader
+        .load_batch()
+        .await
+        .map_err(|error| RunError::Warmup(error.to_string()))?;
     match reply.await {
         Ok(Ok(store)) => {
             tracing::info!(
                 ready_chunks = store.len(),
                 "world warm-up finished: chunks ready to send"
             );
-            Some(store)
+            Ok(store)
         }
-        Ok(Err(error)) => {
-            tracing::warn!(%error, "world warm-up failed at startup");
-            None
-        }
-        Err(error) => {
-            tracing::warn!(%error, "the world warm-up reply was dropped");
-            None
-        }
+        Ok(Err(error)) => Err(RunError::Warmup(error.to_string())),
+        Err(error) => Err(RunError::Warmup(error.to_string())),
     }
 }
 
@@ -517,6 +704,8 @@ mod tests {
             save_dir: None,
             force_gamemode: true,
             autosave_interval_ticks: config::DEFAULT_AUTOSAVE_TICKS,
+            world_autosave_ticks: config::DEFAULT_AUTOSAVE_TICKS,
+            save_ignore_world_mismatch: false,
         }
     }
 

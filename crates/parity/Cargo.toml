@@ -22,3 +22,4 @@ tracing-subscriber.workspace = true
 
 [dev-dependencies]
 sha2.workspace = true
+worldsave = { path = "../worldsave" }

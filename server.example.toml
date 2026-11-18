@@ -153,6 +153,20 @@ client_jar = "path/to/client.jar"
 # writer thread does the disk work, atomically (`.tmp` + rename).
 # autosave_interval_ticks = 6000
 
+# Autosave period of the world (block changes) in ticks (Шаг 22b). Default
+# 6000, independent of the player save above; 0 disables the periodic pass,
+# while the save at the server stop still runs. Only chunks with unsaved
+# changes are written (at most 256 per pass), to
+#   <save_dir>/chunks/<x>.<z>.mrchunk
+# as diffs against the template, and the tick never waits for the disk.
+# world_autosave_ticks = 6000
+
+# Whether saved chunk diffs are applied even when `world.json` records another
+# template (another SHA-256 of `level.dat` or another `DataVersion`). Off by
+# default: the server refuses to start on a mismatch, because a diff written
+# against one palette would silently produce a wrong world in another.
+# save_ignore_world_mismatch = false
+
 # Placeholders — replace with the real values from your game installation.
 protocol_version = 0
 version_name = "unknown"

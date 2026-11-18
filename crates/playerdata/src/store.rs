@@ -27,7 +27,7 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 use protocol::{NbtTag, Uuid};
 use serde::{Deserialize, Serialize};
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::error::PlayerdataError;
 use crate::state::{
@@ -40,7 +40,14 @@ pub const MARKER_FILE: &str = "minerust-save.json";
 
 /// Format version of [`MARKER_FILE`]; bump it when the marker's shape or the
 /// meaning of the directory changes.
-pub const MARKER_VERSION: u32 = 1;
+///
+/// Version 2 (Шаг 22b) adds no field: the same marker describes the player
+/// files and the world diffs of one `save_dir`. A version 1 marker is
+/// migrated in place, keeping its `data_version`.
+pub const MARKER_VERSION: u32 = 2;
+
+/// The version whose marker is rewritten as [`MARKER_VERSION`] on open.
+const MIGRATED_VERSION: u32 = 1;
 
 /// The `format` field of [`Marker`].
 const MARKER_FORMAT: &str = "minerust-save";
@@ -574,6 +581,25 @@ fn check_marker(root: &Path, data_version: i32) -> Result<(), PlayerdataError> {
     match fs::read(&marker) {
         Ok(bytes) => match serde_json::from_slice::<Marker>(&bytes) {
             Ok(found) if found.format == MARKER_FORMAT && found.version == MARKER_VERSION => Ok(()),
+            Ok(found) if found.format == MARKER_FORMAT && found.version == MIGRATED_VERSION => {
+                // Version 1 and 2 share every field; the rewrite records the
+                // new version and keeps the world's `data_version` (Шаг 22b).
+                let document = serde_json::to_vec_pretty(&Marker {
+                    format: MARKER_FORMAT.to_owned(),
+                    version: MARKER_VERSION,
+                    data_version: found.data_version,
+                })
+                .map_err(|err| PlayerdataError::corrupt(marker.display(), err.to_string()))?;
+                write_plain_atomically(&marker, &document)?;
+                info!(
+                    path = %marker.display(),
+                    from = MIGRATED_VERSION,
+                    to = MARKER_VERSION,
+                    data_version = found.data_version,
+                    "save marker migrated"
+                );
+                Ok(())
+            }
             Ok(found) => {
                 warn!(
                     path = %marker.display(),
@@ -1018,6 +1044,24 @@ mod tests {
         )
         .expect("seed future");
         Store::open(&dir, 5023, &[]).expect("a future marker version is logged, not fatal");
+    }
+
+    #[test]
+    fn open_migrates_a_version_one_marker_without_losing_its_fields() {
+        let dir = temp_dir("migrate");
+        fs::write(
+            dir.join(MARKER_FILE),
+            br#"{"format":"minerust-save","version":1,"data_version":5023}"#,
+        )
+        .expect("seed version 1");
+
+        Store::open(&dir, 5023, &[]).expect("a version 1 marker is migrated");
+
+        let json: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.join(MARKER_FILE)).expect("read")).expect("json");
+        assert_eq!(json["version"], MARKER_VERSION, "rewritten as version 2");
+        assert_eq!(json["format"], MARKER_FORMAT);
+        assert_eq!(json["data_version"], 5023, "the world's version is kept");
     }
 
     #[test]

@@ -6,7 +6,7 @@
 //! never touches the disk: it builds a [`Snapshot`] and hands it to the
 //! runtime's [`Sink`].
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use playerdata::{Pose, SavedPlayer, Sink, Snapshot, Store};
 use protocol::Uuid;
@@ -17,7 +17,7 @@ use super::region::Player;
 use super::Scheduler;
 
 /// Everything one run needs to persist its players.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PlayerdataRuntime {
     /// Open save store: reads at join, file naming, the data schema.
     pub store: Arc<Store>,
@@ -30,9 +30,32 @@ pub struct PlayerdataRuntime {
     /// Autosave period in ticks; `0` disables the periodic save (the quit and
     /// shutdown saves still run).
     pub autosave_interval_ticks: u64,
+    /// Final online-player snapshots staged after the tick loop. The server
+    /// queues them only after the final world flush, so the newest player
+    /// position cannot overtake the world it belongs to (Шаг 22b).
+    ///
+    /// This lock is used exactly twice during shutdown (replace, then take),
+    /// never on a running tick or connection path.
+    final_snapshots: Mutex<Vec<(String, Snapshot)>>,
 }
 
 impl PlayerdataRuntime {
+    /// Builds one runtime over the already opened store and writer sink.
+    pub fn new(
+        store: Arc<Store>,
+        sink: Sink,
+        force_gamemode: bool,
+        autosave_interval_ticks: u64,
+    ) -> Self {
+        Self {
+            store,
+            sink,
+            force_gamemode,
+            autosave_interval_ticks,
+            final_snapshots: Mutex::new(Vec::new()),
+        }
+    }
+
     /// Reads one player's file; a broken file is logged and read as "no file"
     /// (the player joins as new).
     ///
@@ -45,6 +68,28 @@ impl PlayerdataRuntime {
                 None
             }
         }
+    }
+
+    /// Queues the snapshots staged at game-thread shutdown, after the caller
+    /// has made the final world durable. Returns `(queued, dropped)`.
+    pub fn flush_final(&self) -> (usize, usize) {
+        let snapshots = {
+            let mut staged = self
+                .final_snapshots
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            std::mem::take(&mut *staged)
+        };
+        let total = snapshots.len();
+        let mut queued = 0;
+        for (name, snapshot) in snapshots {
+            if queue(self, &name, snapshot) {
+                queued += 1;
+            }
+        }
+        // `queue` does not put a rejected snapshot back: report it so the
+        // server never calls the final player flush successful by mistake.
+        (queued, total - queued)
     }
 }
 
@@ -83,15 +128,31 @@ pub fn save_all(scheduler: &Scheduler, runtime: &PlayerdataRuntime) {
     }
 }
 
+/// Captures every online player after the final tick, but does not hand the
+/// snapshots to the disk writer yet. The server flushes them after the world.
+pub fn stage_all(scheduler: &Scheduler, runtime: &PlayerdataRuntime) {
+    let snapshots = scheduler
+        .players()
+        .map(|player| (player.name().to_owned(), snapshot_of(player)))
+        .collect();
+    let mut staged = runtime
+        .final_snapshots
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *staged = snapshots;
+}
+
 /// Hands one snapshot to the writer queue; a full queue is logged, never a
 /// tick stall (the next autosave writes the newer state anyway).
-fn queue(runtime: &PlayerdataRuntime, name: &str, snapshot: Snapshot) {
-    if !runtime.sink.snapshot(snapshot) {
+fn queue(runtime: &PlayerdataRuntime, name: &str, snapshot: Snapshot) -> bool {
+    let queued = runtime.sink.snapshot(snapshot);
+    if !queued {
         warn!(
             player = name,
             "the player save queue is full, snapshot dropped"
         );
     }
+    queued
 }
 
 #[cfg(test)]
@@ -122,12 +183,7 @@ mod tests {
         let store = Store::open(temp_dir(name), 5023, &[]).expect("store");
         let reader = store.clone();
         let (sink, writer) = playerdata::spawn(store.clone(), 8).expect("writer");
-        let runtime = PlayerdataRuntime {
-            store: Arc::new(store),
-            sink,
-            force_gamemode: true,
-            autosave_interval_ticks: 0,
-        };
+        let runtime = PlayerdataRuntime::new(Arc::new(store), sink, true, 0);
         (runtime, reader, writer)
     }
 
@@ -205,6 +261,32 @@ mod tests {
                 "{name} was saved"
             );
         }
+    }
+
+    /// Shutdown snapshots stay in memory until the server confirms the world
+    /// flush, then enter the player writer together.
+    #[test]
+    fn final_snapshots_are_staged_before_their_writer_queue() {
+        let (runtime, store, writer) = runtime("staged-final");
+        let mut scheduler = scheduler();
+        let (first, _slot, _rx) = join_at(1, (0, 64, 0));
+        let name = first.name.clone();
+        let uuid = protocol::offline_uuid(&name);
+        scheduler.insert_player(first);
+
+        stage_all(&scheduler, &runtime);
+        assert!(
+            store.read(uuid).expect("read before flush").is_none(),
+            "staging alone does not let playerdata overtake the world"
+        );
+        assert_eq!(runtime.flush_final(), (1, 0));
+        writer
+            .shutdown(Duration::from_secs(10))
+            .expect("writer stops");
+        assert!(
+            store.read(uuid).expect("read after flush").is_some(),
+            "the server-side flush queues the staged snapshot"
+        );
     }
 
     #[test]

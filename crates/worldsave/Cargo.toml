@@ -1,0 +1,16 @@
+[package]
+name = "worldsave"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Chunk-diff world save for the MineRust server"
+
+[dependencies]
+data = { path = "../data" }
+net = { path = "../net" }
+protocol = { path = "../protocol" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

@@ -106,6 +106,42 @@ pub async fn serve_with(
     .await
 }
 
+/// Result of stopping the accept loop and its game thread.
+///
+/// A caller that owns persistence must only take a final snapshot when
+/// `game_stopped` is true: after a join timeout the detached game thread may
+/// still mutate the world.
+pub struct ServeExit {
+    /// Accept-loop or shutdown error.
+    pub result: std::io::Result<()>,
+    /// Whether the single writer game thread was joined successfully.
+    pub game_stopped: bool,
+}
+
+/// [`serve_with`] plus the game-thread shutdown status the server's final
+/// persistence barrier needs (Шаг 22b).
+pub async fn serve_with_shutdown_status(
+    game_config: game::GameConfig,
+    listener: TcpListener,
+    status: Arc<StatusInfo>,
+    game_data: Arc<GameData>,
+    packet_ids: Arc<PacketIds>,
+    loader: Option<Loader>,
+    world: WorldInfo,
+) -> ServeExit {
+    serve_core(
+        game_config,
+        None,
+        listener,
+        status,
+        game_data,
+        packet_ids,
+        loader,
+        world,
+    )
+    .await
+}
+
 /// [`serve_with`] with a caller-owned tick-metrics handle (M4.4 B): the
 /// in-process parity walker passes its own [`game::TickMetricsHandle`] and
 /// reads the run's percentiles from it afterwards, instead of scraping the
@@ -121,10 +157,51 @@ pub async fn serve_with_metrics(
     loader: Option<Loader>,
     world: WorldInfo,
 ) -> std::io::Result<()> {
+    let exit = serve_core(
+        game_config,
+        metrics,
+        listener,
+        status,
+        game_data,
+        packet_ids,
+        loader,
+        world,
+    )
+    .await;
+    if exit.game_stopped {
+        exit.result
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "the game thread did not stop within the timeout",
+        ))
+    }
+}
+
+/// Shared accept loop behind the public wrappers.
+#[allow(clippy::too_many_arguments)]
+async fn serve_core(
+    game_config: game::GameConfig,
+    metrics: Option<Arc<game::TickMetricsHandle>>,
+    listener: TcpListener,
+    status: Arc<StatusInfo>,
+    game_data: Arc<GameData>,
+    packet_ids: Arc<PacketIds>,
+    loader: Option<Loader>,
+    world: WorldInfo,
+) -> ServeExit {
     // One game thread owns the players of this server (ARCH-M4 §0). It runs
     // until this function returns; on shutdown it is asked to stop and
     // joined with a timeout, so a stuck tick cannot block the exit.
-    let (game_thread, game) = game::GameHandle::spawn_with_metrics(game_config, metrics)?;
+    let (game_thread, game) = match game::GameHandle::spawn_with_metrics(game_config, metrics) {
+        Ok(handles) => handles,
+        Err(error) => {
+            return ServeExit {
+                result: Err(error),
+                game_stopped: true,
+            }
+        }
+    };
     let accepting = async move {
         loop {
             let (stream, peer) = listener.accept().await?;
@@ -154,10 +231,17 @@ pub async fn serve_with_metrics(
             Ok(())
         }
     };
-    if let Err(err) = game_thread.join_timeout(SHUTDOWN_JOIN_TIMEOUT) {
-        warn!(%err, "the game thread did not stop in time");
+    let game_stopped = match game_thread.join_timeout(SHUTDOWN_JOIN_TIMEOUT) {
+        Ok(()) => true,
+        Err(err) => {
+            warn!(%err, "the game thread did not stop in time");
+            false
+        }
+    };
+    ServeExit {
+        result,
+        game_stopped,
     }
-    result
 }
 
 /// Resolves when the process is asked to shut down.
