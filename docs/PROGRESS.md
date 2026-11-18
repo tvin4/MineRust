@@ -3224,6 +3224,8 @@ V4 (`2026-11-17_s15-v4-ours-r1`) — расхождение: оба соедин
   `cargo test --workspace` — exit 0 (net 230 passed/4 ignored, server 51,
   playerdata 18, protocol 144, world 42, parity 35 + интеграционные,
   worldsave 21 + roundtrip; ignored measurements/kill компилируются).
+- Коммиты: 22a — `5a3dff1`, `c9a95e2`, `4e7d128`; gradual kelp —
+  `13669cb`; 22b code/tests — `d7a9014`; основной docs/report — `91c0342`.
 
 ### Блокеры / что не установлено
 
