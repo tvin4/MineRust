@@ -1,0 +1,29 @@
+{
+  "id": "s17",
+  "title": "vanilla creative placement and inventory trace",
+  "playerA": "PlaceA",
+  "playerB": "PlaceB",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "settleMs": 900,
+  "forceload": [70, -50, 170, 5],
+  "cases": [
+    { "name": "stone", "source": [80,200,-40], "sourceBlock": "minecraft:stone", "item": "minecraft:stone", "support": [80,202,-20], "dest": [80,202,-21], "initial": "minecraft:air", "stand": [80.5,201,-24.5,0,2], "expectBlock": "minecraft:stone" },
+    { "name": "dirt", "source": [86,200,-40], "sourceBlock": "minecraft:dirt", "item": "minecraft:dirt", "support": [86,202,-20], "dest": [86,202,-21], "initial": "minecraft:air", "stand": [86.5,201,-24.5,0,2], "expectBlock": "minecraft:dirt" },
+    { "name": "planks", "source": [92,200,-40], "sourceBlock": "minecraft:oak_planks", "item": "minecraft:oak_planks", "support": [92,202,-20], "dest": [92,202,-21], "initial": "minecraft:air", "stand": [92.5,201,-24.5,0,2], "expectBlock": "minecraft:oak_planks" },
+    { "name": "glass", "source": [98,200,-40], "sourceBlock": "minecraft:glass", "item": "minecraft:glass", "support": [98,202,-20], "dest": [98,202,-21], "initial": "minecraft:air", "stand": [98.5,201,-24.5,0,2], "expectBlock": "minecraft:glass" },
+
+    { "name": "replace-short-grass", "source": [104,200,-40], "sourceBlock": "minecraft:stone", "item": "minecraft:stone", "support": [104,202,-20], "dest": [104,202,-21], "initial": "minecraft:short_grass", "surface": "minecraft:dirt", "stand": [104.5,201,-24.5,0,2], "expectBlock": "minecraft:stone" },
+    { "name": "replace-snow", "source": [110,200,-40], "sourceBlock": "minecraft:stone", "item": "minecraft:stone", "support": [110,202,-20], "dest": [110,202,-21], "initial": "minecraft:snow[layers=1]", "stand": [110.5,201,-24.5,0,2], "expectBlock": "minecraft:stone" },
+    { "name": "replace-water", "source": [116,200,-40], "sourceBlock": "minecraft:stone", "item": "minecraft:stone", "support": [116,202,-20], "dest": [116,202,-21], "initial": "minecraft:water", "stand": [116.5,201,-24.5,0,2], "expectBlock": "minecraft:stone" },
+
+    { "name": "log-face", "source": [122,200,-40], "sourceBlock": "minecraft:oak_log", "item": "minecraft:oak_log", "support": [122,202,-20], "dest": [122,202,-21], "initial": "minecraft:air", "stand": [122.5,201,-24.5,0,2], "expectBlock": "minecraft:oak_log" },
+    { "name": "slab-low-click", "source": [128,200,-40], "sourceBlock": "minecraft:oak_slab", "item": "minecraft:oak_slab", "support": [128,202,-20], "dest": [128,202,-21], "initial": "minecraft:air", "stand": [128.5,201,-24.5,0,5], "expectBlock": "minecraft:oak_slab" },
+    { "name": "slab-high-click", "source": [134,200,-40], "sourceBlock": "minecraft:oak_slab", "item": "minecraft:oak_slab", "support": [134,202,-20], "dest": [134,202,-21], "initial": "minecraft:air", "stand": [134.5,201,-24.5,0,-2], "expectBlock": "minecraft:oak_slab" },
+    { "name": "stairs-south-view", "source": [140,200,-40], "sourceBlock": "minecraft:oak_stairs", "item": "minecraft:oak_stairs", "support": [140,202,-20], "dest": [140,202,-21], "initial": "minecraft:air", "stand": [140.5,201,-24.5,0,2], "expectBlock": "minecraft:oak_stairs" },
+    { "name": "stairs-west-view", "source": [146,200,-40], "sourceBlock": "minecraft:oak_stairs", "item": "minecraft:oak_stairs", "support": [146,202,-20], "dest": [147,202,-20], "initial": "minecraft:air", "stand": [150.5,201,-19.5,90,2], "expectBlock": "minecraft:oak_stairs" },
+
+    { "name": "occupied-by-player", "source": [152,200,-40], "sourceBlock": "minecraft:stone", "item": "minecraft:stone", "support": [152,202,-20], "dest": [152,202,-21], "initial": "minecraft:air", "stand": [152.5,201,-24.5,0,2], "expectBlock": "minecraft:air", "occupyWithB": true },
+    { "name": "out-of-range", "source": [158,200,-40], "sourceBlock": "minecraft:stone", "item": "minecraft:stone", "support": [158,202,-20], "dest": [158,202,-21], "initial": "minecraft:air", "stand": [158.5,201,-34.5,0,2], "expectBlock": "minecraft:air", "outOfRange": true }
+  ]
+}
