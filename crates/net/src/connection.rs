@@ -202,18 +202,21 @@ async fn serve_core(
             }
         }
     };
+    let configuration_claims = Arc::new(login::ConfigurationClaims::default());
     let accepting = async move {
         loop {
             let (stream, peer) = listener.accept().await?;
-            let status = Arc::clone(&status);
-            let game_data = Arc::clone(&game_data);
-            let packet_ids = Arc::clone(&packet_ids);
-            let loader = loader.clone();
-            let game = game.clone();
+            let inputs = ConnectionInputs {
+                status: Arc::clone(&status),
+                game_data: Arc::clone(&game_data),
+                packet_ids: Arc::clone(&packet_ids),
+                loader: loader.clone(),
+                world,
+                game: game.clone(),
+                configuration_claims: Arc::clone(&configuration_claims),
+            };
             tokio::spawn(async move {
-                match handle_connection(stream, status, game_data, packet_ids, loader, world, game)
-                    .await
-                {
+                match handle_connection(stream, inputs).await {
                     Ok(()) => debug!(%peer, "connection closed"),
                     Err(ConnectionError::TimedOut) => debug!(%peer, "connection timed out"),
                     Err(err) if err.is_client_disconnect() => {
@@ -242,6 +245,17 @@ async fn serve_core(
         result,
         game_stopped,
     }
+}
+
+/// Immutable/shared inputs cloned for one accepted connection.
+struct ConnectionInputs {
+    status: Arc<StatusInfo>,
+    game_data: Arc<GameData>,
+    packet_ids: Arc<PacketIds>,
+    loader: Option<Loader>,
+    world: WorldInfo,
+    game: GameHandle,
+    configuration_claims: Arc<login::ConfigurationClaims>,
 }
 
 /// Resolves when the process is asked to shut down.
@@ -314,14 +328,9 @@ where
 /// [`CONNECTION_TIMEOUT`]; the play state that follows is not capped.
 async fn handle_connection(
     stream: TcpStream,
-    status: Arc<StatusInfo>,
-    game_data: Arc<GameData>,
-    packet_ids: Arc<PacketIds>,
-    loader: Option<Loader>,
-    world: WorldInfo,
-    game: GameHandle,
+    inputs: ConnectionInputs,
 ) -> Result<(), ConnectionError> {
-    let ids = packet_ids.as_ref();
+    let ids = inputs.packet_ids.as_ref();
     let (read_half, write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
     let mut writer = write_half;
@@ -345,30 +354,34 @@ async fn handle_connection(
 
     match handshake.next_state {
         NextState::Status => {
-            with_timeout(status_state(&mut reader, &mut writer, &status, ids)).await
+            with_timeout(status_state(&mut reader, &mut writer, &inputs.status, ids)).await
         }
         NextState::Login => {
             let client = with_timeout(login::login_state(
                 &mut reader,
                 &mut writer,
-                &game_data,
+                &inputs.game_data,
                 ids,
+                &inputs.configuration_claims,
             ))
             .await?;
+            let Some(client) = client else {
+                return Ok(());
+            };
             play::play_state(
                 reader,
                 writer,
                 play::Session {
-                    game_data: &game_data,
-                    status: &status,
+                    game_data: &inputs.game_data,
+                    status: &inputs.status,
                     client: &client,
                     ids,
                     world: play::World {
-                        loader,
-                        info: world,
+                        loader: inputs.loader,
+                        info: inputs.world,
                     },
                 },
-                game,
+                inputs.game,
             )
             .await
         }

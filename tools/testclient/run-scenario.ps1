@@ -3288,10 +3288,12 @@ function Get-S15TraceFacts {
 			$readMs = [double]$disconnectRow[0].read_ms
 			$disconnectState = [string]$disconnectRow[0].state
 			$bytes = ConvertFrom-TraceB64 $disconnectRow[0].b64
-			$text = if ($disconnectRow[0].state -eq 'play') {
-				ConvertFrom-TraceDisconnectText $bytes
-			} else {
+			$text = if ($disconnectRow[0].state -eq 'login') {
 				(ConvertFrom-TraceString $bytes 0).value
+			} else {
+				# Configuration and play both carry a network-NBT text
+				# component in 26.3. Login Disconnect alone is a wire String.
+				ConvertFrom-TraceDisconnectText $bytes
 			}
 		}
 		$facts += [PSCustomObject]@{
@@ -3325,6 +3327,7 @@ function Invoke-S15 {
 	$outcome = if ($Cfg.expectOutcome) { [string]$Cfg.expectOutcome } else { 'old_kicked' }
 	$fast = [bool]$Cfg.fastLaunch
 	$expected = [string]$Cfg.expectedKickText
+	$expectedState = [string]$Cfg.expectedDisconnectState
 
 	# V1/V2: the first connection joins, then the second one connects. V4:
 	# both launches are started back to back, so the first may still be in
@@ -3422,6 +3425,10 @@ function Invoke-S15 {
 		if ($expected) {
 			Add-Check $Result 'S15: the disconnect text matches the recorded vanilla text' ($kick.text -eq $expected) `
 				("got='$($kick.text)' want='$expected'")
+		}
+		if ($expectedState) {
+			Add-Check $Result 'S15: the disconnect is sent in the recorded protocol phase' ($kick.disconnectState -eq $expectedState) `
+				("got='$($kick.disconnectState)' want='$expectedState'")
 		}
 	}
 	foreach ($t in $traces) {

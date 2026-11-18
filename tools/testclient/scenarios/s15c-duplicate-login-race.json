@@ -9,5 +9,7 @@
   "controlPortB": 25572,
   "settleMs": 5000,
   "fastLaunch": true,
-  "expectOutcome": "observe"
+  "expectOutcome": "new_rejected",
+  "expectedKickText": "multiplayer.disconnect.duplicate_login",
+  "expectedDisconnectState": "configuration"
 }

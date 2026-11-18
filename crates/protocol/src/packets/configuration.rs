@@ -7,6 +7,8 @@
 //! connection moves on to play. Field layouts follow the public protocol
 //! documentation (<https://minecraft.wiki/wiki/Java_Edition_protocol>).
 
+use std::collections::BTreeMap;
+
 use crate::codec::{CodecError, PacketReader, PacketWriter, MAX_STRING_CHARS};
 use crate::frame::encode_frame;
 use crate::nbt::NbtTag;
@@ -64,6 +66,46 @@ pub const UPDATE_ENABLED_FEATURES: PacketKey = PacketKey::clientbound(
     "minecraft:update_enabled_features",
     0x0d,
 );
+
+/// Clientbound Disconnect in the configuration state.
+///
+/// The text component uses the same nameless-root network NBT bytes recorded
+/// in the vanilla V4 duplicate-login trace. The configuration packet id (`2`)
+/// comes from the generated 26.3 `reports/packets.json`; Step 23a moves the
+/// rejection before play while preserving that recorded component byte for
+/// byte.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisconnectConfiguration {
+    /// Translation key of the reason, without arguments.
+    pub reason: String,
+}
+
+impl DisconnectConfiguration {
+    /// Generated default id of configuration/clientbound `minecraft:disconnect`.
+    pub const ID: u32 = 0x02;
+
+    /// Key resolved from the user's generated packet report at startup.
+    pub const KEY: PacketKey = PacketKey::clientbound(
+        ProtocolState::Configuration,
+        "minecraft:disconnect",
+        Self::ID,
+    );
+
+    /// Vanilla translation key recorded by V4.
+    pub const DUPLICATE_LOGIN: &'static str = "multiplayer.disconnect.duplicate_login";
+
+    /// Encodes `{"translate": reason}` as a nameless-root NBT compound.
+    pub fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
+        let mut map = BTreeMap::new();
+        map.insert("translate".to_owned(), NbtTag::String(self.reason.clone()));
+        Ok(NbtTag::Compound(map).to_network_bytes()?)
+    }
+
+    /// Encodes a complete configuration-state frame.
+    pub fn to_frame(&self) -> Result<Vec<u8>, CodecError> {
+        encode_frame(Self::ID, &self.encode_payload()?)
+    }
+}
 
 /// One entry of the Registry Data packet.
 #[derive(Debug, Clone, PartialEq)]
@@ -384,6 +426,21 @@ mod tests {
     use super::*;
     use crate::frame::split_frame;
     use std::collections::BTreeMap;
+
+    /// V4's reason bytes are unchanged; only the generated configuration id
+    /// (`02`) differs from the recorded pre-login play disconnect (`20`).
+    #[test]
+    fn configuration_duplicate_login_matches_the_v4_component_bytes() {
+        let packet = DisconnectConfiguration {
+            reason: DisconnectConfiguration::DUPLICATE_LOGIN.to_owned(),
+        };
+        assert_eq!(
+            packet.to_frame().expect("encodable"),
+            crate::packets::test_support::hex(
+                "37020a0800097472616e736c61746500266d756c7469706c617965722e646973636f6e6e6563742e6475706c69636174655f6c6f67696e00"
+            )
+        );
+    }
 
     /// A sample registry entry compound.
     fn sample_data() -> NbtTag {

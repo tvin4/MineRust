@@ -1284,3 +1284,33 @@ self-записях они не решают. Долг остаётся откр
 S16 на 18.11.2026 **не выполнялся**: существующий GUI-харнесс не умеет
 перезапускать сервер посреди сценария; не выдаём интеграционный тест за
 живую проверку (`docs/WORLD-SAVE.md` §12).
+
+## Шаг 23a: первый configuration-login владеет UUID (18.11.2026)
+
+**Решение.** Для каждого offline UUID первый pre-play connection получает
+RAII-claim от Login Start до конца configuration. Поздний дубль проходит
+Login Success/Acknowledged, затем получает configuration/clientbound
+`minecraft:disconnect` и не входит в play. После освобождения claim обычный
+V1-вход разрешён и прежняя game-thread логика выбрасывает старого play-игрока;
+`Alice`/`alice` имеют разные UUID и не конфликтуют (V2).
+
+**Блокировка.** `ConfigurationClaims` — один `Mutex<HashSet<Uuid>>` на server
+accept-loop. Он берётся только на короткий insert/remove при Login Start/Drop,
+никогда не держится через `await`, не читается игровым тиком и не находится в
+горячем пути. RAII удаляет claim при успехе, timeout, сетевой/codec ошибке и
+обычном закрытии.
+
+**Источник wire.** Архивный V4
+`E:\MineRust-data\autotests\2026-11-17_s15-v4-vanilla-r1` фактически несёт
+54-byte NBT reason в **play** packet id `32` после clientbound
+`finish_configuration`; это расхождение с формулировкой владельца «configuration
+phase» не скрывается. В Шаге 23 по явному решению владельца rejection перенесён
+до play; configuration id `2` взят из generated `reports/packets.json`, а NBT
+payload оставлен побайтно равным V4:
+`0a0800097472616e736c61746500266d756c7469706c617965722e646973636f6e6e6563742e6475706c69636174655f6c6f67696e00`.
+
+**Проверка.** Protocol frame-test фиксирует `37 02 + payload`; async net-test
+доказывает config id/reason и отсутствие play; claim-test фиксирует V4/V1/V2.
+Живые ours: `2026-11-18_s15-v4-ours-step23-r2`, V4 — 6/6 PASS;
+`2026-11-18_s15-v1-ours-step23-r1` и
+`2026-11-18_s15-v2-ours-step23-r1` — 0 failed.

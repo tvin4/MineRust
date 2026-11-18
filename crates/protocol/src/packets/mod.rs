@@ -30,8 +30,8 @@ pub use chunk_payload::{
     BLOCK_CELLS, LIGHT_ARRAY_BYTES,
 };
 pub use configuration::{
-    ClientInformation, FinishAck, FinishConfiguration, RegistryData, RegistryEntry, RegistryTag,
-    TagRegistry, UpdateTags, CONFIGURATION_CLIENTBOUND_PLUGIN_MESSAGE,
+    ClientInformation, DisconnectConfiguration, FinishAck, FinishConfiguration, RegistryData,
+    RegistryEntry, RegistryTag, TagRegistry, UpdateTags, CONFIGURATION_CLIENTBOUND_PLUGIN_MESSAGE,
     CONFIGURATION_PLUGIN_MESSAGE, SELECT_KNOWN_PACKS, SELECT_KNOWN_PACKS_SERVERBOUND,
     UPDATE_ENABLED_FEATURES,
 };
@@ -85,6 +85,7 @@ pub fn used_packet_keys() -> &'static [PacketKey] {
         LoginAcknowledged::KEY,
         DisconnectLogin::KEY,
         // configuration
+        DisconnectConfiguration::KEY,
         RegistryData::KEY,
         UpdateTags::KEY,
         FinishConfiguration::KEY,
