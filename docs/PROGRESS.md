@@ -3465,7 +3465,7 @@ diff`, chunk `3,-5` cells=1 и `4,-5` cells=2). Раннер теперь для
   protocol 153, parity 35, data 42/2, playerdata 19, world 42, worldsave 21 +
   integration: server `join`/`status`/`entrypoint` зелёные).
 - Живые прогоны: S17 ваниль `2026-11-18_s17-vanilla-step23-r2`; S17 наш
-  `2026-11-18_s17-ours-step24-r4` — 0 failed (103 проверки), побайтное
+  `2026-11-18_s17-ours-step24-r4` — 0 failed (104 проверки), побайтное
   сравнение 104 строк данных — 0 расхождений; S18 наш
   `2026-11-18_s18-ours-step24-r2` — 24/24 PASS.
 - Харнесс: `placement-runner.Tests.ps1` (платформенная геометрия на рестарте)
