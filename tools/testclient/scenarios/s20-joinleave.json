@@ -1,0 +1,14 @@
+{
+  "id": "s20",
+  "title": "join and leave messages and their order (step 25.0)",
+  "playerA": "JoinA",
+  "playerB": "JoinB",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "settleMs": 900,
+  "steps": [
+    { "type": "disconnect", "actor": "B", "waitMs": 2500 },
+    { "type": "rejoin", "actor": "B", "waitMs": 3000 },
+    { "type": "disconnect", "actor": "A", "waitMs": 2500 }
+  ]
+}

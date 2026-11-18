@@ -62,6 +62,12 @@ param(
 	# РЁР°Рі 19a: force_gamemode for the generated config ('' leaves it).
 	[ValidateSet('', 'true', 'false')]
 	[string]$OursForceGamemode = '',
+	# Шаг 25: operator rights for the vanilla stand. ops.json is read only at
+	# server start, so the level is a run-level parameter, not a per-scenario
+	# one; -1 leaves the file untouched. Level 0 writes the empty list (the
+	# non-operator baseline).
+	[int]$VanillaOpsLevel = -1,
+	[string]$VanillaOpsPlayer = '',
 	[switch]$KeepStand
 )
 $ErrorActionPreference = 'Stop'
@@ -348,6 +354,26 @@ function Prepare-RunWorld {
 
 function Start-Stand {
 	if ($isVanilla) {
+		# Шаг 25: ops.json is read once at start, so S21 gets its operator level
+		# from here. A level of 0 (or the empty player) writes the vanilla empty
+		# list, which keeps every other scenario a non-operator run.
+		if ($VanillaOpsLevel -ge 0) {
+			$opsPath = Join-Path $vanillaDir 'ops.json'
+			$opsEntries = @()
+			if ($VanillaOpsLevel -gt 0) {
+				if (-not $VanillaOpsPlayer) { throw '-VanillaOpsPlayer is required with -VanillaOpsLevel' }
+				$opsEntries = @([PSCustomObject]@{
+						uuid = Get-OfflineUuid $VanillaOpsPlayer
+						name = $VanillaOpsPlayer
+						level = $VanillaOpsLevel
+						bypassesPlayerLimit = $false
+					})
+			}
+			$opsJson = ConvertTo-Json -InputObject @($opsEntries) -Depth 3 -Compress
+			# No BOM: the server's JSON reader rejects a leading U+FEFF.
+			[IO.File]::WriteAllText($opsPath, $opsJson, (New-Object Text.UTF8Encoding($false)))
+			Write-Host ("vanilla ops.json: level {0} for '{1}'" -f $VanillaOpsLevel, $VanillaOpsPlayer)
+		}
 		$startInfo = New-Object System.Diagnostics.ProcessStartInfo
 		$startInfo.FileName = 'java'
 		$startInfo.Arguments = "-Xmx1G -jar `"$serverJar`" nogui"
@@ -4637,6 +4663,416 @@ function Invoke-S15 {
 	Start-Sleep -Seconds 2
 }
 
+# --- S19-S21 (Шаг 25.0): chat, join/leave and commands ----------------------
+# The packet names come from E:\MineRust-data\reports\packets.json; the byte
+# layouts are never guessed here, the artifact keeps the raw hex per row and
+# the docs table is built from that hex.
+
+# Every wire row this stage needs, streamed (the join chunk batch makes a
+# whole-file parse wasteful).
+function Get-ChatWireRows {
+	param([string]$Path)
+	$names = @(
+		'minecraft:chat', 'minecraft:chat_ack', 'minecraft:chat_command',
+		'minecraft:chat_command_signed', 'minecraft:chat_session_update',
+		'minecraft:player_chat', 'minecraft:system_chat', 'minecraft:disguised_chat',
+		'minecraft:delete_chat', 'minecraft:commands', 'minecraft:command_suggestions',
+		'minecraft:player_info_update', 'minecraft:player_info_remove',
+		'minecraft:add_entity', 'minecraft:remove_entities',
+		'minecraft:game_event', 'minecraft:player_abilities', 'minecraft:update_attributes',
+		'minecraft:set_entity_data', 'minecraft:set_time',
+		'minecraft:entity_position_sync', 'minecraft:teleport_entity'
+	)
+	$out = New-Object System.Collections.ArrayList
+	foreach ($row in @(Read-TraceMatches $Path $names)) {
+		# read_ms counts from the start of *this* connection, not from the
+		# proxy start (S21 r1: the same moment carried t=61 s in the first
+		# trace and t=7 s in the second), so replies are attributed by seq.
+		$out.Add([PSCustomObject]@{
+				seq = [int]$row.seq; ms = [double]$row.read_ms
+				state = [string]$row.state; dir = [string]$row.dir; id = [int]$row.id
+				name = [string]$row.name; b64 = [string]$row.b64
+			}) | Out-Null
+	}
+	return $out
+}
+
+# Dumps wire rows into the run facts: the docs table needs seq/time/direction/
+# name/id and the hex. t is the per-connection read_ms.
+function Add-WireFacts {
+	param($Rows, [string]$Tag, [string[]]$Only = @())
+	foreach ($r in @($Rows | Sort-Object seq)) {
+		if ($Only.Count -gt 0 -and ($Only -notcontains $r.name)) { continue }
+		$hex = [BitConverter]::ToString((ConvertFrom-TraceB64 $r.b64)).Replace('-', ' ').ToLowerInvariant()
+		$script:s7Facts.Add(("{0} seq={1} t={2:0.0}ms dir={3} state={4} name={5} id={6} hex={7}" -f `
+				$Tag, $r.seq, $r.ms, $r.dir, $r.state, $r.name, $r.id, $hex)) | Out-Null
+	}
+}
+
+# Translation keys of a chat payload (for a readable fact line; the hex dump
+# stays the source for the byte table).
+function Get-PayloadKeys {
+	param([string]$B64)
+	return (@([regex]::Matches((Get-PayloadUtf8 $B64), '[a-z]+\.[a-z._]+') |
+				ForEach-Object { $_.Value } | Select-Object -Unique) -join ',')
+}
+
+# The clientbound chat rows between two wire positions of one trace. The
+# serverbound chat_command of the next command bounds the previous reply.
+function Get-ChatReplyRows {
+	param($Rows, [long]$After, [long]$Before = [long]::MaxValue)
+	return @($Rows | Where-Object {
+			$_.seq -gt $After -and $_.seq -lt $Before -and $_.dir -eq 'clientbound' -and `
+				($_.name -eq 'minecraft:system_chat' -or $_.name -eq 'minecraft:player_chat' -or `
+					$_.name -eq 'minecraft:disguised_chat')
+		} | Sort-Object seq)
+}
+
+# S19: A and B send plain chat lines through the client's own chat path and
+# each must receive both lines (clientbound player_chat in both traces).
+function Invoke-S19 {
+	param($Cfg, $Result)
+	$prefix = if ($isVanilla) { 'S19' } else { 'S19 ours' }
+	$portA = [int]$Cfg.controlPortA
+	$portB = [int]$Cfg.controlPortB
+	$nickA = [string]$Cfg.playerA
+	$nickB = [string]$Cfg.playerB
+	$settle = [int]$Cfg.settleMs
+
+	$wmA = Get-Date
+	$null = Start-Client $nickA $portA $wmA
+	$aTrace = Get-FreshTrace $wmA
+	$wmB = Get-Date
+	$null = Start-Client $nickB $portB $wmB
+	$bTrace = Get-FreshTrace $wmB
+	if (-not $aTrace -or -not $bTrace) {
+		Add-Check $Result ("{0}: both connections produced a trace" -f $prefix) $false `
+			("A={0} B={1}" -f $aTrace, $bTrace)
+		return
+	}
+	Start-Sleep -Milliseconds 800
+
+	$marks = New-Object System.Collections.ArrayList
+	$index = 0
+	foreach ($m in @($Cfg.messages)) {
+		$port = if ([string]$m.from -eq 'A') { $portA } else { $portB }
+		$at = Get-Date
+		$resp = Invoke-TestCmd $port (New-ChatCmd ("s19-msg-$index") ([string]$m.text))
+		$marks.Add([PSCustomObject]@{
+				text = [string]$m.text; from = [string]$m.from; at = $at; ok = [bool]$resp.ok
+			}) | Out-Null
+		Add-Check $Result ("{0}: {1} sent '{2}'" -f $prefix, $m.from, $m.text) ([bool]$resp.ok) `
+			("sent={0} error={1}" -f $resp.result.sent, $resp.error)
+		Start-Sleep -Milliseconds $settle
+		$index++
+	}
+	try { $null = Invoke-TestCmd $portA (New-SessionCmd 's19-off-a' 'disconnect') } catch { }
+	try { $null = Invoke-TestCmd $portB (New-SessionCmd 's19-off-b' 'disconnect') } catch { }
+	Start-Sleep -Seconds 3
+
+	$aRows = @(Get-ChatWireRows $aTrace.FullName)
+	$bRows = @(Get-ChatWireRows $bTrace.FullName)
+	Add-WireFacts $aRows ("{0} A {1}" -f $prefix, $aTrace.Name)
+	Add-WireFacts $bRows ("{0} B {1}" -f $prefix, $bTrace.Name)
+
+	foreach ($m in $marks) {
+		$senderRows = if ($m.from -eq 'A') { $aRows } else { $bRows }
+		$sent = @($senderRows | Where-Object {
+				$_.dir -eq 'serverbound' -and $_.name -eq 'minecraft:chat' -and `
+					(Get-PayloadUtf8 $_.b64).Contains($m.text)
+			})
+		Add-Check $Result ("{0}: '{1}' reached the wire as serverbound chat" -f $prefix, $m.text) `
+			($sent.Count -ge 1) ("rows={0}" -f $sent.Count)
+		foreach ($side in @(@('A', $aRows), @('B', $bRows))) {
+			$received = @($side[1] | Where-Object {
+					$_.dir -eq 'clientbound' -and $_.name -eq 'minecraft:player_chat' -and `
+						(Get-PayloadUtf8 $_.b64).Contains($m.text)
+				})
+			Add-Check $Result ("{0}: {1} received '{2}' as player_chat" -f $prefix, $side[0], $m.text) `
+				($received.Count -ge 1) ("rows={0}" -f $received.Count)
+		}
+	}
+	$script:s7Facts.Add(("S19: messages={0}, traces A={1} B={2}, runner target={3}" -f `
+				$marks.Count, $aTrace.Name, $bTrace.Name, $Target))
+}
+
+# S20: an observer's view of a player leaving and coming back. The join/leave
+# messages, their translation keys and their order against player_info_update
+# and add_entity are record facts; the checks only assert presence/absence.
+function Invoke-S20 {
+	param($Cfg, $Result)
+	$prefix = if ($isVanilla) { 'S20' } else { 'S20 ours' }
+	$portA = [int]$Cfg.controlPortA
+	$portB = [int]$Cfg.controlPortB
+	$nickA = [string]$Cfg.playerA
+	$nickB = [string]$Cfg.playerB
+	$settle = [int]$Cfg.settleMs
+
+	$wmA = Get-Date
+	$null = Start-Client $nickA $portA $wmA
+	$aTrace = Get-FreshTrace $wmA
+	$wmB = Get-Date
+	$null = Start-Client $nickB $portB $wmB
+	$bTrace = Get-FreshTrace $wmB
+	if (-not $aTrace -or -not $bTrace) {
+		Add-Check $Result ("{0}: both connections produced a trace" -f $prefix) $false `
+			("A={0} B={1}" -f $aTrace, $bTrace)
+		return
+	}
+	$bJoinAt = Get-Date
+	Start-Sleep -Milliseconds $settle
+
+	# B leaves: A must see the leave message.
+	$bLeftAt = Get-Date
+	$null = Invoke-TestCmd $portB (New-SessionCmd 's20-b-off' 'disconnect')
+	Start-Sleep -Milliseconds 2500
+
+	# B comes back on a fresh connection and trace.
+	$wmB2 = Get-Date
+	$null = Start-Client $nickB $portB $wmB2
+	$bTrace2 = Get-FreshTrace $wmB2
+	$bBackAt = Get-Date
+	Start-Sleep -Milliseconds $settle
+
+	# A leaves: the new B connection must see it.
+	$aLeftAt = Get-Date
+	$null = Invoke-TestCmd $portA (New-SessionCmd 's20-a-off' 'disconnect')
+	Start-Sleep -Milliseconds 2500
+	try { $null = Invoke-TestCmd $portB (New-SessionCmd 's20-b2-off' 'disconnect') } catch { }
+	Start-Sleep -Seconds 3
+
+	$aRows = @(Get-ChatWireRows $aTrace.FullName)
+	$bRows = @(Get-ChatWireRows $bTrace.FullName)
+	$b2Rows = if ($bTrace2) { @(Get-ChatWireRows $bTrace2.FullName) } else { @() }
+	Add-WireFacts $aRows ("{0} A {1}" -f $prefix, $aTrace.Name)
+	Add-WireFacts $bRows ("{0} B1 {1}" -f $prefix, $bTrace.Name)
+	if ($bTrace2) { Add-WireFacts $b2Rows ("{0} B2 {1}" -f $prefix, $bTrace2.Name) }
+
+	$find = {
+		param($Rows, [string]$Key, [string]$Nick)
+		@($Rows | Where-Object {
+				$_.dir -eq 'clientbound' -and ($_.name -eq 'minecraft:system_chat' -or $_.name -eq 'minecraft:player_chat') -and `
+					(Get-PayloadUtf8 $_.b64).Contains($Key) -and (Get-PayloadUtf8 $_.b64).Contains($Nick)
+			})
+	}
+	# Every call is wrapped in @(): a scriptblock that returns exactly one
+	# object would otherwise unroll to a scalar without Count (S20 r1 read a
+	# present leave message as rows=null).
+	$joinedB = @(& $find $aRows 'multiplayer.player.joined' $nickB)
+	$leftB = @(& $find $aRows 'multiplayer.player.left' $nickB)
+	# The rejoin is told apart by wire order, not by a clock window: any join
+	# message after the leave message is the rejoin (S20 r2/r3 filtered by
+	# wall time and read 0 rows).
+	$leftSeq = if ($leftB.Count -gt 0) { ($leftB | Measure-Object -Property seq -Minimum).Minimum } else { 0 }
+	$joinedB2 = @($joinedB | Where-Object { $_.seq -gt $leftSeq })
+	$leftA = @(& $find $b2Rows 'multiplayer.player.left' $nickA)
+	Add-Check $Result ("{0}: A saw '{1} joined'" -f $prefix, $nickB) ($joinedB.Count -ge 1) `
+		("rows={0} keys={1}" -f $joinedB.Count, (@($joinedB | ForEach-Object { Get-PayloadKeys $_.b64 }) -join ' | '))
+	Add-Check $Result ("{0}: A saw '{1} left'" -f $prefix, $nickB) ($leftB.Count -ge 1) `
+		("rows={0}" -f $leftB.Count)
+	Add-Check $Result ("{0}: A saw the rejoin of '{1}'" -f $prefix, $nickB) ($joinedB2.Count -ge 1) `
+		("rows={0} (total joined={1})" -f $joinedB2.Count, $joinedB.Count)
+	Add-Check $Result ("{0}: the new connection of B saw '{1} left'" -f $prefix, $nickA) ($leftA.Count -ge 1) `
+		("rows={0}" -f $leftA.Count)
+	$ownJoin = @(& $find $bRows 'multiplayer.player.joined' $nickB)
+	Add-Check $Result ("{0}: the joining client does not receive its own join message" -f $prefix) `
+		($ownJoin.Count -eq 0) ("rows={0} (vanilla observation)" -f $ownJoin.Count)
+	$ownLeave = @(& $find $bRows 'multiplayer.player.left' $nickA)
+	Add-Check $Result ("{0}: B1 did not see A leave while B1 was offline" -f $prefix) ($ownLeave.Count -eq 0) `
+		("rows={0}" -f $ownLeave.Count)
+
+	# Order facts around B's first join: the join message against the player
+	# list and the entity spawn (docs table 25.0/S20). Neighbour seqs, not a
+	# clock window.
+	if ($joinedB.Count -gt 0) {
+		$firstJoin = ($joinedB | Where-Object { $_.seq -lt $leftSeq } | Measure-Object -Property seq -Minimum).Minimum
+		$orderNames = @('minecraft:player_info_update', 'minecraft:add_entity', 'minecraft:player_info_remove')
+		$nearBefore = @($aRows | Where-Object { $_.seq -lt $firstJoin -and $orderNames -contains $_.name } |
+				Sort-Object seq | Select-Object -Last 3)
+		$nearAfter = @($aRows | Where-Object { $_.seq -gt $firstJoin -and $orderNames -contains $_.name } |
+				Sort-Object seq | Select-Object -First 3)
+		$script:s7Facts.Add(("S20 A order: join message seq={0}; before=[{1}]; after=[{2}]" -f $firstJoin,
+				(($nearBefore | ForEach-Object { "$($_.name)@$($_.seq)" }) -join ' '),
+				(($nearAfter | ForEach-Object { "$($_.name)@$($_.seq)" }) -join ' '))) | Out-Null
+		Add-WireFacts ($nearBefore + $nearAfter) ("{0} A order B-join" -f $prefix)
+	}
+}
+
+# S21: commands and rights. The operator level is a run-level parameter
+# (ops.json is read at server start); the scenario file states which level it
+# expects, so a mismatch stops the run instead of collecting wrong data.
+function Invoke-S21 {
+	param($Cfg, $Result)
+	$prefix = if ($isVanilla) { 'S21' } else { 'S21 ours' }
+	$portA = [int]$Cfg.controlPortA
+	$portB = [int]$Cfg.controlPortB
+	$nickA = [string]$Cfg.playerA
+	$nickB = [string]$Cfg.playerB
+	$level = if ($Cfg.PSObject.Properties.Name -contains 'opLevel') { [int]$Cfg.opLevel } else { 0 }
+
+	if ($isVanilla) {
+		$runnerLevel = [Math]::Max(0, $VanillaOpsLevel)
+		$script:s7Facts.Add(("S21 ops: scenario level={0} runner level={1} player='{2}'" -f `
+					$level, $runnerLevel, $VanillaOpsPlayer))
+		if ($level -ne $runnerLevel -or ($level -gt 0 -and $VanillaOpsPlayer -ne $nickA)) {
+			Add-Check $Result ("{0}: the stand runs with the scenario's operator level" -f $prefix) $false `
+				("scenario={0} runner={1} opPlayer='{2}' playerA='{3}'" -f $level, $runnerLevel, $VanillaOpsPlayer, $nickA)
+			return
+		}
+	}
+
+	$wmA = Get-Date
+	$null = Start-Client $nickA $portA $wmA
+	$aTrace = Get-FreshTrace $wmA
+	$wmB = Get-Date
+	$null = Start-Client $nickB $portB $wmB
+	$bTrace = Get-FreshTrace $wmB
+	if (-not $aTrace -or -not $bTrace) {
+		Add-Check $Result ("{0}: both connections produced a trace" -f $prefix) $false `
+			("A={0} B={1}" -f $aTrace, $bTrace)
+		return
+	}
+	Start-Sleep -Milliseconds 1000
+
+	$marks = New-Object System.Collections.ArrayList
+	$index = 0
+	foreach ($c in @($Cfg.commands)) {
+		$port = if ([string]$c.actor -eq 'A') { $portA } else { $portB }
+		$at = Get-Date
+		$resp = Invoke-TestCmd $port (New-CommandCmd ("s21-cmd-$index") ([string]$c.text))
+		$mark = [PSCustomObject]@{
+			text = [string]$c.text; actor = [string]$c.actor; at = $at; ok = [bool]$resp.ok
+			expectMode = $c.expectMode; expectPos = $c.expectPos; expectNear = $c.expectNear
+			expectText = $c.expectText; expectPacket = $c.expectPacket; expectTime = $c.expectTime
+		}
+		Add-Check $Result ("{0}: {1} sent /{2}" -f $prefix, $c.actor, $c.text) ([bool]$resp.ok) `
+			("sent={0} error={1}" -f $resp.result.sent, $resp.error)
+		Start-Sleep -Milliseconds ([int]$c.waitMs)
+		if ($mark.expectMode) {
+			# The mode change always lands on the command's actor; the other
+			# client is the observer that has to see it too.
+			$actorPort = if ($mark.actor -eq 'A') { $portA } else { $portB }
+			$actorNick = if ($mark.actor -eq 'A') { $nickA } else { $nickB }
+			$observerPort = if ($mark.actor -eq 'A') { $portB } else { $portA }
+			$seenSelf = (Invoke-TestCmd $actorPort (New-ObserveCmd ("s21-$index-a"))).result
+			$seenOther = (Invoke-TestCmd $observerPort (New-ObserveCmd ("s21-$index-b") $actorNick)).result
+			$mark | Add-Member -NotePropertyName modeSelf -NotePropertyValue ([string]$seenSelf.gameMode)
+			$mark | Add-Member -NotePropertyName modeOther -NotePropertyValue ([string]$seenOther.gameMode)
+			# Vanilla stops tracking a spectator for non-spectator players:
+			# the observer gets remove_entities and its level no longer holds
+			# the actor (S21 r1: observer found=false right after the change).
+			$goneForObserver = ($seenOther.found -eq $false)
+			$sameForObserver = [string]$seenOther.gameMode -eq [string]$mark.expectMode
+			Add-Check $Result ("{0}: /{1}: both clients see {2}" -f $prefix, $c.text, $mark.expectMode) `
+				([string]$seenSelf.gameMode -eq [string]$mark.expectMode -and
+					($sameForObserver -or ([string]$mark.expectMode -eq 'spectator' -and $goneForObserver))) `
+				("self={0} observer={1} found={2} (spectator is untracked for non-spectators)" -f `
+						$seenSelf.gameMode, $seenOther.gameMode, $seenOther.found)
+		}
+		if ($mark.expectPos) {
+			$target = @($mark.expectPos)
+			$pos = (Invoke-TestCmd $portA (New-ObserveCmd ("s21-$index-pos"))).result
+			$seenB = (Invoke-TestCmd $portB (New-ObserveCmd ("s21-$index-posb") $nickA)).result
+			$dx = [Math]::Abs([double]$pos.pos.x - [double]$target[0])
+			$dy = [Math]::Abs([double]$pos.pos.y - [double]$target[1])
+			$dz = [Math]::Abs([double]$pos.pos.z - [double]$target[2])
+			$bx = [Math]::Abs([double]$seenB.pos.x - [double]$target[0])
+			$bz = [Math]::Abs([double]$seenB.pos.z - [double]$target[2])
+			# Vanilla applies gravity right after the teleport: the client
+			# reads the landed position (S21 r1: y 60.27 for a target of 64).
+			Add-Check $Result ("{0}: /{1}: A stands at ({2},{3},{4})" -f $prefix, $c.text, $target[0], $target[1], $target[2]) `
+				($dx -le 0.75 -and $dy -le 5.0 -and $dz -le 0.75 -and $bx -le 1.0 -and $bz -le 1.0) `
+				("A=({0:0.00},{1:0.00},{2:0.00}) B=({3:0.00},{4:0.00},{5:0.00})" -f `
+						$pos.pos.x, $pos.pos.y, $pos.pos.z, $seenB.pos.x, $seenB.pos.y, $seenB.pos.z)
+		}
+		if ($mark.expectNear) {
+			$posA = (Invoke-TestCmd $portA (New-ObserveCmd ("s21-$index-neara"))).result
+			$posB = (Invoke-TestCmd $portB (New-ObserveCmd ("s21-$index-nearb") $nickB)).result
+			$dist = [Math]::Sqrt([Math]::Pow([double]$posA.pos.x - [double]$posB.pos.x, 2) + `
+					[Math]::Pow([double]$posA.pos.z - [double]$posB.pos.z, 2))
+			Add-Check $Result ("{0}: /{1}: A stands next to {2}" -f $prefix, $c.text, $mark.expectNear) `
+				($dist -le 1.0) ("distance={0:0.00} A=({1:0.00},{2:0.00},{3:0.00}) B=({4:0.00},{5:0.00},{6:0.00})" -f `
+						$dist, $posA.pos.x, $posA.pos.y, $posA.pos.z, $posB.pos.x, $posB.pos.y, $posB.pos.z)
+		}
+		$marks.Add($mark) | Out-Null
+		$index++
+	}
+	try { $null = Invoke-TestCmd $portA (New-SessionCmd 's21-off-a' 'disconnect') } catch { }
+	try { $null = Invoke-TestCmd $portB (New-SessionCmd 's21-off-b' 'disconnect') } catch { }
+	Start-Sleep -Seconds 3
+
+	$aRows = @(Get-ChatWireRows $aTrace.FullName)
+	$bRows = @(Get-ChatWireRows $bTrace.FullName)
+	Add-WireFacts $aRows ("{0} A {1}" -f $prefix, $aTrace.Name)
+	Add-WireFacts $bRows ("{0} B {1}" -f $prefix, $bTrace.Name)
+
+	$cmdNames = @('minecraft:chat_command', 'minecraft:chat_command_signed')
+	$consumed = @{ A = 0L; B = 0L }
+	for ($i = 0; $i -lt $marks.Count; $i++) {
+		$m = $marks[$i]
+		$actorRows = if ($m.actor -eq 'A') { $aRows } else { $bRows }
+		$observerRows = if ($m.actor -eq 'A') { $bRows } else { $aRows }
+		# The command row is the wire anchor; replies are the clientbound chat
+		# rows between it and the actor's next command (per-connection clocks
+		# make a wall-time window unusable, S21 r1).
+		$cmdSeq = $null
+		foreach ($r in @($actorRows | Where-Object {
+					$_.dir -eq 'serverbound' -and $cmdNames -contains $_.name -and $_.seq -gt $consumed[$m.actor]
+				} | Sort-Object seq)) {
+			if ((Get-PayloadUtf8 $r.b64).Contains($m.text)) { $cmdSeq = [long]$r.seq; break }
+		}
+		if ($null -eq $cmdSeq) {
+			Add-Check $Result ("{0}: /{1} reached the wire as chat_command" -f $prefix, $m.text) $false `
+				'no matching serverbound chat_command row'
+			continue
+		}
+		$consumed[$m.actor] = $cmdSeq
+		$nextCmd = @($actorRows | Where-Object {
+				$_.dir -eq 'serverbound' -and $cmdNames -contains $_.name -and $_.seq -gt $cmdSeq
+			} | Sort-Object seq | Select-Object -First 1)
+		$before = if ($nextCmd.Count -gt 0) { [long]$nextCmd[0].seq } else { [long]::MaxValue }
+		$replies = @(Get-ChatReplyRows $actorRows $cmdSeq $before)
+		Add-Check $Result ("{0}: /{1} got a chat reply" -f $prefix, $m.text) ($replies.Count -ge 1) `
+			("cmdSeq={0} rows={1} keys={2}" -f $cmdSeq, $replies.Count,
+				(@($replies | ForEach-Object { Get-PayloadKeys $_.b64 }) -join ' | '))
+		$script:s7Facts.Add(("S21 reply /{0} by {1}: cmdSeq={2} nextCmd={3} replySeqs=[{4}]" -f `
+					$m.text, $m.actor, $cmdSeq, $before, (($replies | ForEach-Object { $_.seq }) -join ','))) | Out-Null
+		if ($m.expectText) {
+			$hit = @($replies | Where-Object { (Get-PayloadUtf8 $_.b64).Contains([string]$m.expectText) })
+			# The observer copy is found anywhere in its trace: the text is
+			# unique to this run.
+			$seen = @($observerRows | Where-Object {
+					$_.dir -eq 'clientbound' -and ($_.name -eq 'minecraft:system_chat' -or $_.name -eq 'minecraft:player_chat') -and `
+						(Get-PayloadUtf8 $_.b64).Contains([string]$m.expectText)
+				})
+			Add-Check $Result ("{0}: /{1}: both clients read '{2}'" -f $prefix, $m.text, $m.expectText) `
+				($hit.Count -ge 1 -and $seen.Count -ge 1) ("actor={0} observer={1}" -f $hit.Count, $seen.Count)
+		}
+		if ($m.expectPacket) {
+			$name = [string]$m.expectPacket
+			$actorHit = @($actorRows | Where-Object { $_.seq -gt $cmdSeq -and $_.seq -lt $before -and $_.name -eq $name })
+			$observerHit = @($observerRows | Where-Object { $_.name -eq $name })
+			Add-Check $Result ("{0}: /{1} traces {2} to A and B" -f $prefix, $m.text, $name) `
+				($actorHit.Count -ge 1 -and $observerHit.Count -ge 1) `
+				("actor={0} observer={1}" -f $actorHit.Count, $observerHit.Count)
+			if ($name -eq 'minecraft:set_time') {
+				# 26.3 SetTime carries game time plus a clock structure whose
+				# fields are not resolved from the trace yet (S21 r1: 9 bytes
+				# normally, 21 after /time set day). The hex is kept as a fact;
+				# no numeric assertion is made.
+				foreach ($r in $actorHit) {
+					$p = ConvertFrom-TraceB64 $r.b64
+					$hex = ($p | ForEach-Object { '{0:x2}' -f $_ }) -join ' '
+					$script:s7Facts.Add(("S21 set_time after /{0}: seq={1} len={2} hex={3}" -f `
+								$m.text, $r.seq, $p.Length, $hex)) | Out-Null
+				}
+			}
+		}
+	}
+	$script:s7Facts.Add(("S21: opLevel={0} commands={1} traces A={2} B={3}" -f `
+				$level, $marks.Count, $aTrace.Name, $bTrace.Name))
+}
+
 $scenarioDir = Join-Path $here 'scenarios'
 $allResults = @()
 try {
@@ -4723,6 +5159,12 @@ try {
 			's18' { Invoke-S18 $cfg $result }
 			's24a' { Invoke-S24a $cfg $result }
 			's24b' { Invoke-S24b $cfg $result }
+			's19' { Invoke-S19 $cfg $result }
+			's20' { Invoke-S20 $cfg $result }
+			's21' { Invoke-S21 $cfg $result }
+			's21-nonop' { Invoke-S21 $cfg $result }
+			's21-l2' { Invoke-S21 $cfg $result }
+			's21-l4' { Invoke-S21 $cfg $result }
 			default { throw "unknown scenario '$($cfg.id)'" }
 		}
 		Stop-ClientByName $cfg.playerA
@@ -4750,3 +5192,4 @@ Write-Host "summary: $summaryPath"
 $failedCount = @($allResults | Where-Object { $_.failed }).Count
 Write-Host ("{0} scenario(s) run, {1} with failed checks" -f $allResults.Count, $failedCount)
 if ($failedCount -gt 0) { exit 1 }
+

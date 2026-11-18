@@ -16,11 +16,12 @@ import com.mojang.blaze3d.platform.NativeImage;
 
 /**
  * Session commands (stage B4): {@code connect}, {@code disconnect},
- * {@code wait}, {@code command} and {@code screenshot}.
+ * {@code wait}, {@code chat}, {@code command} and {@code screenshot}.
  *
  * <p>All of them go through public client APIs only:
  * {@link ConnectScreen#startConnecting} (the same entry the multiplayer
  * screen uses), {@code Minecraft.disconnectWithSavingScreen()},
+ * {@code ClientPacketListener.sendChat} (the chat input path) and
  * {@code ClientPacketListener.sendCommand} (the chat-command path),
  * {@code Screenshot.takeScreenshot} (the F2 path) and a tick-scheduled
  * completion for {@code wait} (the client thread must never block).
@@ -54,6 +55,7 @@ final class SessionCommands {
 			return CompletableFuture.completedFuture(out);
 		});
 		dispatcher.register("wait", this::wait);
+		dispatcher.register("chat", args -> CompletableFuture.completedFuture(chat(args)));
 		dispatcher.register("command", args -> CompletableFuture.completedFuture(command(args)));
 		dispatcher.register("screenshot", this::screenshot);
 	}
@@ -106,6 +108,21 @@ final class SessionCommands {
 			future.complete(out);
 		});
 		return future;
+	}
+
+	/**
+	 * chat: sends a plain chat message through the client's own chat path
+	 * ({@code ClientPacketListener.sendChat}, what the chat screen calls for a
+	 * line without a leading slash). The server's reply arrives later as chat,
+	 * not here.
+	 */
+	private JsonElement chat(JsonObject args) throws Exception {
+		LocalPlayerCheck.requireInGame(minecraft);
+		String text = Json.requireString(args, "text", "chat needs text");
+		minecraft.player.connection.sendChat(text);
+		JsonObject out = new JsonObject();
+		out.addProperty("sent", text);
+		return out;
 	}
 
 	/**

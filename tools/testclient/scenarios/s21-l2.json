@@ -1,0 +1,26 @@
+{
+  "id": "s21-l2",
+  "title": "commands as an operator level 2 from ops.json (step 25.0)",
+  "playerA": "CmdA",
+  "playerB": "CmdB",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "settleMs": 900,
+  "opLevel": 2,
+  "commands": [
+    { "actor": "A", "text": "gamemode creative", "waitMs": 1200, "expectMode": "creative" },
+    { "actor": "A", "text": "gamemode survival", "waitMs": 1200, "expectMode": "survival" },
+    { "actor": "A", "text": "gamemode spectator", "waitMs": 1200, "expectMode": "spectator" },
+    { "actor": "A", "text": "gamemode adventure", "waitMs": 1200, "expectMode": "adventure" },
+    { "actor": "A", "text": "gamemode creative", "waitMs": 1200, "expectMode": "creative" },
+    { "actor": "A", "text": "tp 8 64 8", "waitMs": 1200, "expectPos": [8, 64, 8] },
+    { "actor": "A", "text": "tp CmdB", "waitMs": 1200, "expectNear": "CmdB" },
+    { "actor": "A", "text": "time set day", "waitMs": 1200, "expectPacket": "minecraft:set_time" },
+    { "actor": "A", "text": "say s21 level2 say", "waitMs": 1200, "expectText": "s21 level2 say" },
+    { "actor": "A", "text": "help", "waitMs": 1500 },
+    { "actor": "A", "text": "op CmdB", "waitMs": 900 },
+    { "actor": "B", "text": "gamemode banana", "waitMs": 900 },
+    { "actor": "A", "text": "gamemode banana", "waitMs": 900 },
+    { "actor": "A", "text": "definitelynotacommand", "waitMs": 900 }
+  ]
+}

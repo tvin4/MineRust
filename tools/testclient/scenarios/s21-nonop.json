@@ -1,0 +1,21 @@
+{
+  "id": "s21-nonop",
+  "title": "commands as a non-operator: tree, denial and help (step 25.0)",
+  "playerA": "CmdA",
+  "playerB": "CmdB",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "settleMs": 900,
+  "opLevel": 0,
+  "commands": [
+    { "actor": "A", "text": "gamemode creative", "waitMs": 900 },
+    { "actor": "B", "text": "gamemode creative", "waitMs": 900 },
+    { "actor": "A", "text": "tp 8 64 8", "waitMs": 900 },
+    { "actor": "A", "text": "time set day", "waitMs": 900 },
+    { "actor": "A", "text": "say s21 nonop say", "waitMs": 900 },
+    { "actor": "B", "text": "help", "waitMs": 1200 },
+    { "actor": "A", "text": "help gamemode", "waitMs": 1200 },
+    { "actor": "A", "text": "definitelynotacommand", "waitMs": 900 },
+    { "actor": "A", "text": "gamemode banana", "waitMs": 900 }
+  ]
+}

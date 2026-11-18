@@ -1,0 +1,14 @@
+{
+  "id": "s19",
+  "title": "chat: A and B messages through the client chat path (step 25.0)",
+  "playerA": "ChatA",
+  "playerB": "ChatB",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "settleMs": 900,
+  "messages": [
+    { "from": "A", "text": "s19 hello from A" },
+    { "from": "B", "text": "s19 hello from B" },
+    { "from": "A", "text": "s19 second from A" }
+  ]
+}

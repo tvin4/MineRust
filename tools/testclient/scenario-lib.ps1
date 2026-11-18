@@ -53,6 +53,23 @@ function Get-OfflinePlayerFileName {
 	return '{0}-{1}-{2}-{3}-{4}.dat' -f $hex.Substring(0, 8), $hex.Substring(8, 4), $hex.Substring(12, 4), $hex.Substring(16, 4), $hex.Substring(20, 12)
 }
 
+# The offline UUID itself (not the reversed playerdata file name): ops.json
+# keys players by this UUID, so a scenario that grants a test player operator
+# rights has to write the same value the server computes at login.
+function Get-OfflineUuid {
+	param([string]$Name)
+	$md5 = [System.Security.Cryptography.MD5]::Create()
+	try {
+		$bytes = $md5.ComputeHash([Text.Encoding]::UTF8.GetBytes("OfflinePlayer:$Name"))
+	} finally {
+		$md5.Dispose()
+	}
+	$bytes[6] = [byte](($bytes[6] -band 0x0F) -bor 0x30)
+	$bytes[8] = [byte](($bytes[8] -band 0x3F) -bor 0x80)
+	$hex = -join ($bytes | ForEach-Object { $_.ToString('x2') })
+	return '{0}-{1}-{2}-{3}-{4}' -f $hex.Substring(0, 8), $hex.Substring(8, 4), $hex.Substring(12, 4), $hex.Substring(16, 4), $hex.Substring(20, 12)
+}
+
 # Maps a player UUID to the 26.3 playerdata file name: the first three
 # UUID groups are byte-reversed in the file name (verified on Alice/Bob:
 # 08059210-d8d5-ed3e-... -> 10920508-d5d8-3eed-...). The file lives in
@@ -372,6 +389,31 @@ function New-KeyCmd {
 function New-SessionCmd {
 	param([string]$Id, [string]$Cmd)
 	return '{"id":"' + $Id + '","cmd":"' + $Cmd + '"}'
+}
+
+# Шаг 25: a plain chat line through the mod's `chat` command
+# (ClientPacketListener.sendChat, the chat-screen path for a line without a
+# leading slash). The text is JSON-escaped because it comes from a scenario.
+function New-ChatCmd {
+	param([string]$Id, [string]$Text)
+	$escaped = $Text.Replace('\', '\\').Replace('"', '\"')
+	return '{"id":"' + $Id + '","cmd":"chat","args":{"text":"' + $escaped + '"}}'
+}
+
+# Шаг 25: one chat command through the mod's `command` command
+# (ClientPacketListener.sendCommand). A leading slash is optional.
+function New-CommandCmd {
+	param([string]$Id, [string]$Text)
+	$escaped = $Text.Replace('\', '\\').Replace('"', '\"')
+	return '{"id":"' + $Id + '","cmd":"command","args":{"text":"' + $escaped + '"}}'
+}
+
+# Decoded payload as UTF-8: commands, chat bodies, NBT component strings and
+# translation keys are plain ASCII, so a substring check needs no field parser
+# (the exact field layout comes from the byte tables in the trace).
+function Get-PayloadUtf8 {
+	param([string]$B64)
+	return [Text.Encoding]::UTF8.GetString((ConvertFrom-TraceB64 $B64))
 }
 
 # Шаг 24.0a: the creative-menu item-add path. `slot` is the raw container slot

@@ -325,6 +325,105 @@ Fabric-клиент, команды тест-мода). Артефакты:
 остаётся с 4.5 и не ставит блок на 4.5+, поэтому наш join теперь отправляет
 `update_attributes` собственного entity сразу после `Set Health`.
 
+### 25.0a: чат — ваниль, S19 (`2026-11-18_s19s20-vanilla-step25-r1`)
+
+Ванильный сервер, чистый мир, два Fabric-клиента (`ChatA` = conn-1,
+`ChatB` = conn-2), `online-mode=false`. Сообщения набираются клиентским путём
+чата (`ClientPacketListener.sendChat`).
+
+| seq A | направление | пакет (id) | поля / hex |
+|---|---|---|---|
+| 62417 | serverbound | `chat` (9) | `10` + `s19 hello from A` + `timestamp i64` `00 00 01 a1 ef fe 1a a0` + `salt i64` `77 0f 7f 60 99 73 65 85` + `00 00 00 00 00 01` = 39 байт |
+| 62427 | clientbound A/B | `player_chat` (66) | `global_index=0`, `sender UUID` ChatA (`14 af be 82 … 9d e6`, big-endian, совпадает с NBT `IntArray`), `index=0`, подписи нет (`00`), текст, `timestamp` `00 00 01 a1 ef fe 1a ab`, `salt=0`, `00 00 00 01`, NBT-компонент имени, `target` нет; **258** байт |
+| 63507 | clientbound A/B | `player_chat` (66) | то же для ChatB: `global_index=1`, sender ChatB (`e7 83 4b 75 … 3c b4 3a`) |
+| 64350 / 64407 | A | `chat` / `player_chat` | второй текст `s19 second from A`, `global_index=2` |
+
+Факты:
+- `global_index` — счётчик сервера по всем сообщениям (A=0, B=1, A=2), не по отправителю.
+- `player_chat` получает и сам отправитель (S19: и A, и B видят обе строки).
+- В offline-режиме подписи нет: `index=0`, байт подписи `00`, `salt=0`.
+- `00 00 00 01` между `salt` и компонентом имени — константа во всех трёх
+  сообщениях; раскладка полей (unsigned content / filter / chat type) по
+  трассе **не установлена**.
+- Компонент имени: `{click_event:{action:"suggest_command",command:"/tell <ник> "},
+  insertion:<ник>, text:<ник>, hover_event:{name:<ник>, action:"show_entity",
+  id:"minecraft:player", uuid:[4×i32]}}`. Порядок ключей в NBT — порядок
+  вставки ванили; наш `BTreeMap` пишет их сортированными, длина и разбор от
+  этого не меняются.
+- `minecraft:chat_type` в `registries.json` 26.3 отсутствует; пакета «прав»
+  (permission level) в `packets.json` нет.
+
+### 25.0b: вход и выход другого игрока — S20 (`2026-11-18_s20-vanilla-step25-r4`)
+
+| seq (conn-1 = A) | направление | пакет (id) | поля / hex |
+|---|---|---|---|
+| 49174 | clientbound A | `system_chat` (124) | `{color:"yellow", translate:"multiplayer.player.joined", with:[<компонент имени JoinB>]}` + `overlay=false`; **270** байт |
+| 49175 | clientbound A | `player_info_update` (71) | `ff 01` + UUID JoinB + имя + свойства + gamemode/latency — запись в tab-list |
+| 49177 | clientbound A | `add_entity` | JoinB |
+| 3614 (conn-5 = B2) | clientbound B2 | `system_chat` (124) | `multiplayer.player.left`, **268** байт |
+| 3615 | clientbound B2 | `remove_entities` (78) | сущность A |
+| 3617 | clientbound B2 | `player_info_remove` (70) | UUID A |
+
+Факты:
+- Порядок входа: сообщение → tab-list → сущность. Порядок выхода:
+  сообщение → `remove_entities` → `player_info_remove`.
+- Своё сообщение о входе клиент **не получает** (у B1 нет строки `joined`
+  про себя).
+- Вход/выход идут именно `system_chat`, не `player_chat`.
+
+### 25.0c: команды и права — S21 (`…s21-nonop-…-r2`, `…s21-l2-…-r2`, `…s21-l4-…-r1`)
+
+Уровень оператора задаётся на запуск раннера (`-VanillaOpsLevel`/`-VanillaOpsPlayer`):
+`ops.json` читается только при старте сервера.
+
+| сценарий | проверки | пакеты |
+|---|---|---|
+| non-op (18/18) | дерево при входе | `commands` (16) — **265** байт |
+| l2 (38/38) | дерево при входе | `commands` — **34126** байт (34 КБ; в код не переносим — долг) |
+| non-op | `/gamemode`, `/tp`, `/time set` | `system_chat` с `command.unknown.command` + `command.context.here` |
+| non-op | `/help` | ~73 отдельных `system_chat`, компоненты — простые строки, не `translate` |
+| l2/l4 | `/gamemode <режим>` у актора | `player_abilities` (9) → `game_event` (5) → `player_abilities` (9) → `player_info_update` (19) → `system_chat` `commands.gamemode.success.self` |
+| l2/l4 | наблюдатель | `player_info_update`; spectator → `remove_entities`, возврат в survival/creative → `add_entity` |
+| l2/l4 | `/tp x y z` | `player_position` с точными координатами |
+| l2/l4 | `/tp <ник>` | телепорт к игроку (координаты цели) |
+| l2/l4 | `/say` | `system_chat` с текстом сообщения |
+| l2/l4 | `/op CmdB` | `commands.op.success` + `chat.type.admin`; после этого B сам может `/gamemode creative` |
+| l2/l4 | ошибка аргумента | `argument.gamemode.invalid` + `command.context.here` |
+| l2/l4 | `/time set day` | `set_time` (115), **21** байт |
+
+Hex-факты (побайтно подтверждены):
+
+| пакет | hex | смысл |
+|---|---|---|
+| `player_abilities` (65), creative | `0d 3d 4c cc cd 3d cc cc cd` | flags `0x0d`, flying 0.05, walking 0.1 |
+| `player_abilities`, spectator | `07 3d 4c cc cd 3d cc cc cd` | flags `0x07` |
+| `player_abilities`, survival/adventure | `00 3d 4c cc cd 3d cc cc cd` | flags `0x00` |
+| `game_event` (39) | `03 3f 80 00 00` | событие 3 (смена режима), f32 `1.0` |
+| `player_info_update` (71) | `04 01 <uuid 16> 01` | только действие gamemode |
+| `set_time` (115) join | `00 00 00 00 00 00 0b b5 02 01 b5 17 00 00 00 00 3f 80 00 00 00 b5 17 00 00 00 00 3f 80 00 00` | `game_time`, 2 clock (id 1 и 0), 2997 тиков |
+| `set_time` обычный тик | `00 00 00 00 00 00 0b b6 00` | `game_time` + 0 clock |
+| `set_time` после `/time set day` | `00 00 00 00 00 00 13 41 01 00 a8 c3 01 00 00 00 00 3f 80 00 00` | 1 clock, 25000 тиков |
+
+`update_attributes` при смене режима **не приходит** (ни актору, ни
+наблюдателю) — переотправка собственных атрибутов в ванили к смене режима
+не относится. Наш join уже шлёт свои `update_attributes`, и этого достаточно.
+
+### 25a: чат и сообщения входа/выхода — реализация
+
+- `protocol::ChatMessage` (9) читает только текст; `protocol::PlayerChat` (66)
+  и `protocol::SystemChat` (124) пишут раскладку выше. Компонент имени —
+  `PlayerChat::name_component`, строка входа/выхода — `SystemChat::join_leave`.
+- `ToGame::Chat` → `game::chat::broadcast`: `player_chat` **всем**, включая
+  автора; `global_index` — счётчик сервера (`Scheduler::next_chat_index`).
+- `ToGame::Join` → `chat::announce_join`, `ToGame::Quit` (и кик по
+  duplicate login) → `chat::announce_leave`: `system_chat` остальным, до
+  tab-записи и спавна/удаления — порядок S20. Своего сообщения о входе нет.
+- Кик по duplicate login шлёт строку выхода один раз (её отправляет то
+  удаление, которое реально находит игрока); отдельного трейса ванили на этот
+  путь нет — гипотеза, помечена в коде.
+- Побайтные тесты: `chat_tests` в `crates/protocol/src/packets/play.rs`
+  (39, 258, 270, 9, 21 и 31 байт из трасс), `game::chat::tests`.
+
 ## Общие ограничения серверной части (обновлено 18.11.2026)
 
 - **Путь изменения блока есть, и с Шага 22b он сохраняется.** Шаг 13a добавил
