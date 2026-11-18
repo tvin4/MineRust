@@ -3278,7 +3278,7 @@ V4 (`2026-11-17_s15-v4-ours-r1`) — расхождение: оба соедин
   A и поздний B видят удалённые dirt/short_grass/seagrass/kelp, SHA-256 template
   v3 (55 файлов) и `vanilla\world` (64) без изменений, каждый `.mrchunk` валиден
   по CRC, `.tmp` нет.
-- **S16b** `2026-11-18_s16b-ours-step23-r2` — **15/15 PASS**, failed=False:
+- **S16b** `2026-11-18_s16b-ours-step23-r2` — **14/14 PASS**, failed=False:
   правка до автосейва durable (CRC-valid `<chunk>.mrchunk` новее момента
   ломания; `world autosave queued` сигналом не считается), жёсткое завершение
   точного PID без flush, restart тем же config, durable-блок сохранён, поздняя

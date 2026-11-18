@@ -157,7 +157,7 @@ Update Tags, а состав тегов проверяется парити-те
 | `AttributeModifier`: identifier String + f64 + u8; creative reach +2.0/+0.5 | **парити**: полный C6 `update_attributes` payload | проверено побайтно; survival без modifiers |
 | Периодический `entity_position_sync` C2/C4 | **парити**: 8 + 4 события | **не установлено**: интервалы/позиция/tail не дают одного trigger; код намеренно не добавлен |
 | Kelp выше сломанного блока исчезает по одному блоку за тик | наблюдение владельца живого клиента + регрессионный тест | реализовано очередью потери опоры; отдельный повторный parity-трейс не снимался |
-| `.mrchunk`/`world.json`, autosave и crash-durability | решение владельца Шага 22b; generated block ids + v3 template; наши format/integration/process-kill tests; **живые S16a/S16b (Шаг 23b)** | это наш формат, не механика ванили; SHA-256/DataVersion pin, CRC, fsync, process-kill после ack проверены; GUI-S16 выполнен живьём (S16a 18/18, S16b 15/15) |
+| `.mrchunk`/`world.json`, autosave и crash-durability | решение владельца Шага 22b; generated block ids + v3 template; наши format/integration/process-kill tests; **живые S16a/S16b (Шаг 23b)** | это наш формат, не механика ванили; SHA-256/DataVersion pin, CRC, fsync, process-kill после ack проверены; GUI-S16 выполнен живьём (S16a 18/18, S16b 14/14) |
 
 ## Таблица 6 — механики Шага 23
 

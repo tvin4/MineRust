@@ -17,7 +17,7 @@
   `Stop-Process -Force`. **S16a** `2026-11-18_s16a-ours-step23-r4` — 18/18 PASS
   (graceful `exitCode=0` + три flush-строки, restart тем же config, A/B видят
   отсутствие, SHA template v3 и `vanilla\world` без изменений, CRC/tmp чисто);
-  **S16b** `2026-11-18_s16b-ours-step23-r2` — 15/15 PASS (durable pre-kill, kill
+  **S16b** `2026-11-18_s16b-ours-step23-r2` — 14/14 PASS (durable pre-kill, kill
   без flush, durable сохранён, late consistent, SHA без изменений). Строки
   `server.toml` и команда — `tools/testclient/README.md` §«S16».
 - **23c:** гипотеза владельца «`tail` = `on_ground`, sync при смене

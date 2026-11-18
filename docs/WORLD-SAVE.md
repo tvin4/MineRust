@@ -360,7 +360,7 @@ graceful-командой console `stop` (пишется в stdin, как ван
   stopped` → `player saves flushed`; restart с тем же конфигом (SHA-256 до =
   после); A и поздний B видят отсутствие; каждый дифф валиден по CRC и без
   `.tmp`; SHA-256 шаблона v3 (55 файлов) и `vanilla\world` (64) — 0 изменений.
-- **S16b** `2026-11-18_s16b-ours-step23-r2` — 15/15 PASS: правка до автосейва
+- **S16b** `2026-11-18_s16b-ours-step23-r2` — 14/14 PASS: правка до автосейва
   durable (CRC-valid `<chunk>.mrchunk` новее момента ломания, `world autosave
   queued` сигналом не считается), затем hard kill **без** shutdown flush
   (`exit=-1`, строки `final world save flushed` нет); после kill нет битых и
