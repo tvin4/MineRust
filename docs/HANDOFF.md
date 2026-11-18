@@ -1,8 +1,40 @@
 # HANDOFF (state for the next session)
 
-**Текущий этап: Шаг 22 (18.11.2026), код 22a/22b готов; живой S16 —
-блокер приёмки.** Не переходить к следующему milestone до решения владельца
-по S16. Полная запись — `docs/PROGRESS.md` «Шаг 22».
+**Текущий этап: Шаг 23 (18.11.2026) закрыт; приёмка Шага 22 (живой S16)
+снята 23b.** Ждём решения владельца по §8 `docs/BLOCK-PLACING.md` (нужен ли
+инвентарь/хотбар и порядок стадий 1–5) до написания серверного `use_item_on`.
+Полная запись — `docs/PROGRESS.md` «Шаг 23».
+
+- **23a (коммит `5b62ea3`):** поздний дубль UUID отклоняется **в
+  configuration** тем же NBT-`disconnect` (play id `32` → configuration id `2`,
+  payload побайтно равен V4). `ConfigurationClaims` — `Mutex<HashSet<Uuid>>` на
+  accept-loop, RAII-claim, не в тике. Живой V4
+  `2026-11-18_s15-v4-ours-step23-r2` — 6/6 PASS; V1/V2 — 0 failed.
+- **23b (закрывает приёмку Шага 22):** раннер получил `Start-OursServer`/
+  `Stop-OursServer`/`Restart-OursServer` + сценарии `s16a`/`s16b`. Graceful stop
+  — ванильная console-команда `stop` в stdin (`crates/net/src/connection.rs`,
+  `watch_console`/`is_stop_command`, 3 теста `console_tests`); hard kill —
+  `Stop-Process -Force`. **S16a** `2026-11-18_s16a-ours-step23-r4` — 18/18 PASS
+  (graceful `exitCode=0` + три flush-строки, restart тем же config, A/B видят
+  отсутствие, SHA template v3 и `vanilla\world` без изменений, CRC/tmp чисто);
+  **S16b** `2026-11-18_s16b-ours-step23-r2` — 15/15 PASS (durable pre-kill, kill
+  без flush, durable сохранён, late consistent, SHA без изменений). Строки
+  `server.toml` и команда — `tools/testclient/README.md` §«S16».
+- **23c:** гипотеза владельца «`tail` = `on_ground`, sync при смене
+  `on_ground`» **опровергнута** (таблица 12 sync в `docs/MECHANICS.md` «23c»):
+  все 300 movement имеют `on_ground=true`, 6 sync при `tail=0`. Кода нет, тест
+  (в) не менялся и по этому пункту не запускался.
+- **23d (только данные, кода сервера нет):** ванильный S17 r3
+  `2026-11-18_s17-vanilla-step23-r3` — **0 failed**. Полный разбор и план
+  (поток serverbound, «блок → state id → из чего», замена блока, инвентарь и
+  `.dat`, связь с `ChunkStore`/dirty/свет, стадии 1–5, вопросы) —
+  `docs/BLOCK-PLACING.md`; краткая таблица — `docs/MECHANICS.md` «23d». Факт:
+  `set_creative_mode_slot` в pick-флоу 26.3 не участвует; блок ставится
+  `use_item_on`; замена — одним `use_item_on`. У нас `use_item_on` и модели
+  инвентаря нет.
+
+**Шаг 22 (закрыто): S16 живым стендом выполнен в Шаге 23b (S16a/S16b).** Ниже —
+запись Шага 22.
 
 - **22a.1:** spawn `entity_position_sync` после metadata #2 и перед
   attributes, только `game_mode != 3`; C5/C6 закрыты (`c9a95e2`).

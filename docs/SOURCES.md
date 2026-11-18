@@ -157,7 +157,18 @@ Update Tags, а состав тегов проверяется парити-те
 | `AttributeModifier`: identifier String + f64 + u8; creative reach +2.0/+0.5 | **парити**: полный C6 `update_attributes` payload | проверено побайтно; survival без modifiers |
 | Периодический `entity_position_sync` C2/C4 | **парити**: 8 + 4 события | **не установлено**: интервалы/позиция/tail не дают одного trigger; код намеренно не добавлен |
 | Kelp выше сломанного блока исчезает по одному блоку за тик | наблюдение владельца живого клиента + регрессионный тест | реализовано очередью потери опоры; отдельный повторный parity-трейс не снимался |
-| `.mrchunk`/`world.json`, autosave и crash-durability | решение владельца Шага 22b; generated block ids + v3 template; наши format/integration/process-kill tests | это наш формат, не механика ванили; SHA-256/DataVersion pin, CRC, fsync, process-kill после ack проверены; GUI-S16 ещё не выполнен |
+| `.mrchunk`/`world.json`, autosave и crash-durability | решение владельца Шага 22b; generated block ids + v3 template; наши format/integration/process-kill tests; **живые S16a/S16b (Шаг 23b)** | это наш формат, не механика ванили; SHA-256/DataVersion pin, CRC, fsync, process-kill после ack проверены; GUI-S16 выполнен живьём (S16a 18/18, S16b 15/15) |
+
+## Таблица 6 — механики Шага 23
+
+| Что | Источник | Статус |
+|---|---|---|
+| Поздний дубль UUID отклоняется в configuration | generated `reports/packets.json` (id `2`) + V4-трейс ванили (54-байтный NBT reason) | отклонение по решению владельца; payload побайтно равен V4; живой V4 6/6 PASS |
+| Graceful stop console-командой `stop` в stdin | поведение ванильной консоли; `docs/DECISIONS.md` «Шаг 23b» | проверено юнит-тестами `net::console_tests` и живыми S16a (flush-строки, `exitCode=0`) |
+| Гипотеза «`tail` = `on_ground`, sync при смене `on_ground`» | **парити**: 12 periodic sync C2/C4, окно 300 мс до каждого | **опровергнуто**: все 300 movement `on_ground=true`, 6 sync при `tail=0`; кода нет |
+| Постановка блока в творческом режиме: поток, «блок → state id», замена | **ванильные живые трейсы S17** r1/r3 + generated `blocks.json`/`registries.json` | проверено для 14 кейсов (`docs/BLOCK-PLACING.md`); `use_item_on`/инвентаря у нас нет — реализации нет |
+| `set_creative_mode_slot` в 26.3 в pick-флоу | **ванильный трейс S17** | 0 пакетов; pick шлёт `pick_item_from_block`, предмет кладёт сервер |
+| `stairs.shape`/`waterlogged`, `light_update`, `heightmaps` при постановке | **ванильный трейс S17** | **не установлено**: соседи/вода/свет не варьировались; отдельный вопрос (§6/§8 `BLOCK-PLACING.md`) |
 
 ## Как проверить (команды)
 

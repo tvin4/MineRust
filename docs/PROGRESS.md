@@ -3246,3 +3246,101 @@ V4 (`2026-11-17_s15-v4-ours-r1`) — расхождение: оба соедин
 **Следующий шаг:** владелец запускает/разрешает ручной S16 либо нужно отдельно
 расширить GUI-харнесс restart-фазой; после этого закрыть
 приёмку Шага 22. Не переходить к block entities/light/items/Anvil до решения.
+
+## Шаг 23: V4 duplicate-login, автоматизация S16, гипотеза periodic sync, ванильный S17 (18.11.2026)
+
+### 23a — поздний дубль UUID отклоняется в configuration (коммит `5b62ea3`)
+
+- По решению владельца отказ перенесён из play в configuration: соединение,
+  чей UUID уже заявлен в configuration или находится в игре, отклоняется тем же
+  NBT-`disconnect` **до** play-входа. V4-трейс ванили
+  `2026-11-17_s15-v4-vanilla-r1` несёт 54-байтный NBT-reason в **play** id `32`;
+  для configuration взят id `2` из `reports/packets.json`, NBT-payload оставлен
+  побайтно равным V4.
+- `ConfigurationClaims` — один `Mutex<HashSet<Uuid>>` на accept-loop, RAII-claim;
+  не в горячем пути тика.
+- Тесты: побайтный тест configuration-`disconnect`; живой V4
+  `2026-11-18_s15-v4-ours-step23-r2` — 6/6 PASS; V1/V2 — 0 failed.
+
+### 23b — автоматизация S16 (graceful restart и hard kill)
+
+- Раннер `tools/testclient/run-scenario.ps1` получил `Start-OursServer`/
+  `Stop-OursServer`/`Restart-OursServer` и сценарии `s16a`/`s16b`;
+  `block {x,y,z}` и `digpacket {x,y,z,k}` добавлены в тест-мод.
+- Graceful stop: `taskkill` без `/F` не завершал процесс без console-окна
+  (`System.Diagnostics.Process` не получает WM_CLOSE). Решение — ванильная
+  console-команда `stop` в stdin: `crates/net/src/connection.rs`
+  (`shutdown_signal` + `watch_console`/`is_stop_command`, 3 unit-теста
+  `console_tests`); `server.exe --release` пересобран.
+- **S16a** `2026-11-18_s16a-ours-step23-r4` — **18/18 PASS**, failed=False:
+  graceful stop (`exited=True exitCode=0` + `final world save flushed` →
+  `world-save writer stopped` → `player saves flushed`), restart тем же config,
+  A и поздний B видят удалённые dirt/short_grass/seagrass/kelp, SHA-256 template
+  v3 (55 файлов) и `vanilla\world` (64) без изменений, каждый `.mrchunk` валиден
+  по CRC, `.tmp` нет.
+- **S16b** `2026-11-18_s16b-ours-step23-r2` — **15/15 PASS**, failed=False:
+  правка до автосейва durable (CRC-valid `<chunk>.mrchunk` новее момента
+  ломания; `world autosave queued` сигналом не считается), жёсткое завершение
+  точного PID без flush, restart тем же config, durable-блок сохранён, поздняя
+  правка согласована у A и B, SHA без изменений.
+- Тесты харнесса `tools/testclient/tests/s16-runner.Tests.ps1` и
+  `world-protection.Tests.ps1` зелёные; mod-jar пересобран.
+- Готовые строки `server.toml` владельцу и команда прогона —
+  `tools/testclient/README.md` §«S16».
+
+### 23c — гипотеза `tail = on_ground` / sync при смене `on_ground` — опровергнута
+
+Таблица 12 sync — `docs/MECHANICS.md` «23c». Для независимых часов A/B
+использован общий `player_info_update`; окно serverbound movement наблюдаемого
+игрока — последние 300 мс перед каждым sync. Все 300 movement в окнах имеют
+`on_ground=true`; 6 sync приходят при `tail=0`. Значит, `tail` — не копия
+`on_ground`, и смена `on_ground` не обязательный trigger. Гипотеза
+**опровергнута**, 23c-кода нет, тест (в) `entity_stream_parity` не менялся и по
+этому пункту не запускался.
+
+### 23d — ванильный S17: постановка блоков в творческом режиме (только данные)
+
+Код сервера не писался. Полный разбор и план — `docs/BLOCK-PLACING.md`; краткая
+таблица «блок → state id → из чего» и стадии — `docs/MECHANICS.md` «23d».
+
+- Ванильные прогоны: r1 (данные на диске годны, движок подвис на чтении
+  трейсов), r2 (14/14 per-case PASS, но пост-обработка двух больших трейсов
+  вернула 0 строк), r3 — **0 failed** после перехода харнесса на
+  `Read-TraceMatches` (построчный стриминг): serverbound pick 14, `use_item_on`
+  12, `use_item` 2, `set_carried_item` 8, `set_creative_mode_slot` **0**;
+  clientbound `set_held_slot` 16, `container_set_slot` 7 (слоты `36..42`),
+  `container_set_content` 2.
+- Ключевой факт: `set_creative_mode_slot` в 26.3 в pick-флоу **не участвует**
+  (pick → сервер сам кладёт предмет в хотбар); блок ставится `use_item_on`;
+  замена существующего блока (`short_grass`/`snow`/`water`) — одним
+  `use_item_on` без отдельного ломания.
+- State id: `stone`=1, `dirt`=10, `oak_planks`=15, `glass`=661, `oak_log`
+  `axis=z`=141, `oak_slab` `top`=15178/`bottom`=15180, `oak_stairs`
+  `south/bottom/straight`=5494, `west/...`=5514.
+- План стадий 1–5 (инвентарь/хотбар — L; `pick_item_from_block` — M;
+  `use_item_on` — M; резолв+запись — M; живой S17 + parity + `.dat` — M) с
+  рисками; свет/высотные карты/коллизии — отдельный вопрос.
+- Вопросы владельцу — `docs/BLOCK-PLACING.md` §8 (5 пунктов).
+
+### Проверка и замеры
+
+- Gate строго последовательно: `cargo fmt --all` — exit 0;
+  `cargo clippy --workspace --all-targets -- -D warnings` — exit 0;
+  `cargo test --workspace` — exit 0 (net 235 passed/4 ignored, server 51,
+  protocol 145, world 42, parity 35, playerdata 18, worldsave 21 + integration;
+  ignored measurements/parity/kill компилируются).
+- Харнесс: `s16-runner.Tests.ps1` (в т.ч. новый `Read-TraceMatches`) и
+  `world-protection.Tests.ps1` — exit 0.
+
+### Блокеры / что не установлено
+
+- Живой S17 на нашем сервере **не запускался**: у нас нет `use_item_on` и
+  модели инвентаря — это стадии 1–5 плана 23d.
+- `light_update` при постановке не наблюдался; `heightmaps`, коллизии и поза
+  динамически не обновляются — отдельный вопрос (§6/§8 `BLOCK-PLACING.md`).
+- Геометрия лестниц (`shape`, `waterlogged`) и `stairs`-соседи не
+  варьировались — правило не установлено.
+
+**Следующий шаг:** решение владельца по §8 `docs/BLOCK-PLACING.md` (нужен ли
+инвентарь/хотбар и в каком порядке стадии 1–5) до написания серверного
+`use_item_on`.
