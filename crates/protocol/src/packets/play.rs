@@ -3065,6 +3065,38 @@ mod chat_tests {
     }
 
     #[test]
+    fn player_info_game_mode_is_the_nineteen_byte_mode_update() {
+        // SOURCE: 2026-11-18_s21-l2-vanilla-step25-r2, conn-1 seq 78586:
+        // `04 01 <uuid16> <mode>`.
+        let uuid = [
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
+            0xff, 0x00,
+        ];
+        let bytes = PlayerInfoGameMode { uuid, game_mode: 3 }.encode_payload();
+        assert_eq!(
+            bytes,
+            hex("04 01 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff 00 03")
+        );
+        assert_eq!(bytes.len(), 19);
+    }
+
+    #[test]
+    fn the_game_mode_game_event_is_event_three_with_the_mode_float() {
+        // SOURCE: 2026-11-18_s21-l2-vanilla-step25-r2: creative `03 3f800000`,
+        // spectator `03 40400000`.
+        let creative = GameEvent {
+            event: 3,
+            value: 1.0,
+        };
+        assert_eq!(creative.encode_payload(), hex("03 3f 80 00 00"));
+        let spectator = GameEvent {
+            event: 3,
+            value: 3.0,
+        };
+        assert_eq!(spectator.encode_payload(), hex("03 40 40 00 00"));
+    }
+
+    #[test]
     fn set_time_decodes_the_join_and_the_time_set_packets() {
         // SOURCE: 2026-11-18_s21-l2-vanilla-step25-r2, conn-1 seq 60 (join,
         // two clocks) and seq 106749 (`/time set day`, one clock).

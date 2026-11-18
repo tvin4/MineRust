@@ -14,7 +14,7 @@ use protocol::{
     ClientInformation, ConfirmTeleportation, FinishAck, FinishConfiguration, GameEvent, Handshake,
     LoginAcknowledged, LoginPlay, LoginStart, LoginSuccess, NextState, PacketReader,
     PlayerInfoUpdate, RegistryData, SetCenterChunk, SetDefaultSpawnPosition, SetHealth,
-    SynchronizePlayerPosition, UpdateAttributes, UpdateTags,
+    SynchronizePlayerPosition, UpdateAttributes, UpdateTags, COMMANDS_TREE,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -235,6 +235,17 @@ async fn full_join_handshake_reaches_play_with_registry_data() {
     let center = SetCenterChunk::decode_payload(&mut reader).expect("decodable");
     reader.ensure_empty().expect("no trailing bytes");
     assert_eq!((center.chunk_x, center.chunk_z), (0, 0));
+
+    // The command tree (Шаг 25b) arrives before the loading screen closes.
+    let (id, payload) = recv(&mut stream).await;
+    assert_eq!(
+        COMMANDS_TREE.default_id, id,
+        "expected the command tree before the game event"
+    );
+    assert!(
+        payload.len() > 10,
+        "a non-operator still gets /help in the tree"
+    );
 
     let (id, payload) = recv(&mut stream).await;
     assert_eq!(id, GameEvent::ID, "expected game event");

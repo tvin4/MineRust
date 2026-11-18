@@ -51,6 +51,7 @@ pub fn join_view(
         },
         game_mode: 0,
         // The spawn entry with fresh vitals (Шаг 18a); no save is involved.
+        op_level: 0,
         pose: None,
         health: 20.0,
         food: 20,

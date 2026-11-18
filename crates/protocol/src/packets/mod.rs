@@ -12,6 +12,7 @@
 
 mod chunk;
 mod chunk_payload;
+mod commands;
 mod configuration;
 mod entity;
 mod entity_meta;
@@ -29,6 +30,7 @@ pub use chunk_payload::{
     set_bits, BlockEntity, ChunkSection, HeightmapRecord, LightData, PaletteContainer, BIOME_CELLS,
     BLOCK_CELLS, LIGHT_ARRAY_BYTES,
 };
+pub use commands::{ArgumentParser, CommandNode, CommandNodeKind, CommandTree, StringKind};
 pub use configuration::{
     ClientInformation, DisconnectConfiguration, FinishAck, FinishConfiguration, RegistryData,
     RegistryEntry, RegistryTag, TagRegistry, UpdateTags, CONFIGURATION_CLIENTBOUND_PLUGIN_MESSAGE,

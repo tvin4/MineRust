@@ -100,6 +100,11 @@ pub enum CodecError {
     /// from the vanilla payloads, not from a specification.
     #[error("invalid chunk payload: {0}")]
     InvalidChunk(&'static str),
+    /// A command tree could not be encoded (Step 25b): a non-root first node,
+    /// an index outside the list, or a node that both redirects and has
+    /// children.
+    #[error("invalid command tree: {0}")]
+    InvalidCommandTree(String),
 }
 
 /// Encodes `value` into `out` using the Minecraft VarInt encoding.

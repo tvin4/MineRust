@@ -167,6 +167,11 @@ client_jar = "path/to/client.jar"
 # against one palette would silently produce a wrong world in another.
 # save_ignore_world_mismatch = false
 
+# Operators (Шаг 25b): player names or UUIDs that join with operator level 2.
+# Empty by default, so nobody is an operator. Commands above the level are
+# unknown to the client, like vanilla hides them from the command tree.
+# ops = ["Alice", "11111111-2222-3333-4444-555555555555"]
+
 # Placeholders — replace with the real values from your game installation.
 protocol_version = 0
 version_name = "unknown"

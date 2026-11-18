@@ -14,6 +14,7 @@
 mod block_action;
 mod break_block;
 mod chat;
+pub(crate) mod commands;
 mod dig;
 mod entities;
 mod grid;
@@ -232,7 +233,21 @@ pub struct GameConfig {
     /// creative inventory and the block→item name rule of a pick. `None`
     /// leaves the inventory empty of items and saves no hotbar.
     pub registries: Option<Arc<data::RegistryIds>>,
+    /// Operator UUIDs (Шаг 25b): every listed player joins with operator
+    /// level [`OP_LEVEL`], the other connections with 0. The server resolves
+    /// the configured names to offline UUIDs at startup; the level itself is
+    /// the traced one (S21 l2 has the full command set, `docs/MECHANICS.md`
+    /// 25.0c). Empty by default, so no player is an operator.
+    pub ops: Vec<protocol::Uuid>,
 }
+
+/// Operator level an operator joins with.
+///
+/// SOURCE: 2026-11-18_s21-l2-vanilla-step25-r2 — the l2 stand accepts
+/// `/gamemode`, `/tp`, `/time set` and `/say`, while `/op` (level 3) is
+/// reported as an unknown command. Only level 2 is used for now; higher
+/// levels are not distinguished (debt in `docs/PROGRESS.md`).
+pub const OP_LEVEL: i32 = 2;
 
 impl Default for GameConfig {
     fn default() -> Self {
@@ -253,6 +268,7 @@ impl Default for GameConfig {
             worldsave: None,
             world_autosave_ticks: 0,
             registries: None,
+            ops: Vec::new(),
         }
     }
 }
@@ -347,6 +363,8 @@ pub struct GameHandle {
     /// Player save runtime (Шаг 18a): read at join, kept so the connection
     /// sees the same store the writer thread was started with.
     playerdata: Option<Arc<PlayerdataRuntime>>,
+    /// Operator UUIDs of the configuration (Шаг 25b).
+    ops: Arc<[protocol::Uuid]>,
 }
 
 impl GameHandle {
@@ -387,6 +405,7 @@ impl GameHandle {
         // the fields the handle needs are read before it moves into the loop.
         let default_game_mode = config.default_game_mode;
         let playerdata = config.playerdata.clone();
+        let ops: Arc<[protocol::Uuid]> = config.ops.as_slice().into();
         let join = std::thread::Builder::new()
             .name("minecraft-game".to_owned())
             .spawn(move || {
@@ -403,6 +422,7 @@ impl GameHandle {
             stop: Arc::clone(&stop),
             default_game_mode,
             playerdata,
+            ops,
         };
         Ok((
             GameThread {
@@ -427,6 +447,18 @@ impl GameHandle {
     /// (Шаг 18a): the connection reads a player file from it at join.
     pub fn playerdata(&self) -> Option<&Arc<PlayerdataRuntime>> {
         self.playerdata.as_ref()
+    }
+
+    /// Operator level the named player joins with (Шаг 25b): [`OP_LEVEL`] for
+    /// a configured name/UUID, 0 otherwise. The offline UUID is the same one
+    /// the login and the player file use.
+    pub fn op_level(&self, name: &str) -> i32 {
+        let uuid = protocol::offline_uuid(name);
+        if self.ops.contains(&uuid) {
+            OP_LEVEL
+        } else {
+            0
+        }
     }
 
     /// The last published tick metrics.
@@ -909,6 +941,24 @@ fn apply<W: std::io::Write>(
                 serde_json::json!({ "chars": message.chars().count() }),
             );
             chat::broadcast(scheduler, id, &message);
+        }
+        ToGame::Command { id, command } => {
+            // The command text stays out of the journal for the same reason
+            // as chat; the command name is enough to identify the event.
+            let name = command
+                .trim_start_matches('/')
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+            replay.record(
+                tick,
+                scheduler.region_of(id),
+                id,
+                "command",
+                serde_json::json!({ "name": name }),
+            );
+            commands::apply(scheduler, tick, id, &command);
         }
     }
 }

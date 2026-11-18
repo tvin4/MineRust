@@ -60,6 +60,10 @@ pub struct Scheduler {
     /// The S19 trace numbers every message of the run, not per sender, and the
     /// counter lives as long as the world.
     chat_index: i32,
+    /// Last teleport id handed out by `/tp` (Шаг 25b). The join uses its own
+    /// constant; later teleports count up so a late confirmation of an old
+    /// teleport cannot match a new one.
+    teleport_seq: i32,
     /// Tests measure the dispatch on a single region; production always
     /// ticks one region inline (the transfer costs more than it saves).
     #[cfg(test)]
@@ -113,6 +117,7 @@ impl Scheduler {
             pending_breaks: Vec::new(),
             current_tick: 0,
             chat_index: 0,
+            teleport_seq: 0,
             #[cfg(test)]
             force_dispatch: false,
         }
@@ -248,6 +253,16 @@ impl Scheduler {
         }
         self.owners.insert(id, region_id);
         region_id
+    }
+
+    /// The next teleport id for `/tp` (Шаг 25b).
+    ///
+    /// The counter starts above the join teleport
+    /// ([`crate::connection::play::JOIN_TELEPORT_ID`] is private to the
+    /// connection, so only "not 1" matters here) and grows per command.
+    pub fn next_teleport_id(&mut self) -> i32 {
+        self.teleport_seq = self.teleport_seq.saturating_add(1);
+        self.teleport_seq + 1
     }
 
     /// Marks a player's entry teleport as confirmed; returns its region.

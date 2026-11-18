@@ -254,12 +254,13 @@ fn test_status() -> StatusInfo {
 }
 
 /// The join sequence every play connection sends first.
-fn join_keys() -> [PacketKey; 8] {
+fn join_keys() -> [PacketKey; 9] {
     [
         LoginPlay::KEY,
         SetDefaultSpawnPosition::KEY,
         PlayerInfoUpdate::KEY,
         SetCenterChunk::KEY,
+        protocol::COMMANDS_TREE,
         GameEvent::KEY,
         SynchronizePlayerPosition::KEY,
         SetHealth::KEY,
@@ -504,6 +505,7 @@ async fn the_join_teleports_to_the_entry_pose_then_sets_health() {
         "Alice",
         7,
         0,
+        0,
         entry,
         &ids,
         &info,
@@ -512,12 +514,15 @@ async fn the_join_teleports_to_the_entry_pose_then_sets_health() {
     .expect("join sequence");
 
     let mut client = BufReader::new(client);
-    // The first five join packets, then the teleport and Set Health are
+    // Login through the command tree, then the teleport and Set Health are
     // decoded from the wire (not from the arguments).
     for key in &join_keys()[..5] {
         let (id, _) = next_packet(&mut client).await;
         assert_eq!(id, ids.id(*key), "join sequence packet");
     }
+    // The start-waiting event, then the teleport.
+    let (id, _) = next_packet(&mut client).await;
+    assert_eq!(id, ids.id(GameEvent::KEY), "game event 13");
 
     // Set Health is the last join packet; the teleport before it carries the
     // entry pose.

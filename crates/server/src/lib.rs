@@ -52,6 +52,10 @@ pub enum RunError {
     /// The configured world does not have the shape a save has.
     #[error("invalid world_dir: {0}")]
     InvalidWorld(String),
+    /// A configuration value is invalid after parsing (Шаг 25b: the `ops`
+    /// list).
+    #[error(transparent)]
+    Config(#[from] ConfigError),
     /// A chunk-serving path is missing from `server.toml`. The startup
     /// refuses to run without it — a server that starts silently and then
     /// sends no chunks leaves vanilla clients waiting for terrain until
@@ -220,6 +224,31 @@ fn load_hardness(config: &ServerConfig) -> Result<Option<Arc<BlockHardness>>, Ru
     let hardness = BlockHardness::load(path)?;
     tracing::info!(path, states = hardness.len(), "hardness report loaded");
     Ok(Some(Arc::new(hardness)))
+}
+
+/// Resolves the configured operators to UUIDs (Шаг 25b).
+///
+/// A UUID is taken as written; anything else is a player name and maps to
+/// the offline UUID the login and the player file use. An empty entry and a
+/// name longer than 16 characters are refused at startup.
+fn load_ops(config: &ServerConfig) -> Result<Vec<protocol::Uuid>, RunError> {
+    let mut ops = Vec::with_capacity(config.ops.len());
+    for entry in &config.ops {
+        let entry = entry.trim();
+        let uuid = match config::parse_uuid(entry) {
+            Some(uuid) => uuid,
+            None => {
+                if entry.is_empty() || entry.chars().count() > 16 {
+                    return Err(RunError::Config(ConfigError::Invalid(format!(
+                        "ops entry {entry:?} is neither a UUID nor a player name of at most 16 characters"
+                    ))));
+                }
+                protocol::offline_uuid(entry)
+            }
+        };
+        ops.push(uuid);
+    }
+    Ok(ops)
 }
 
 /// Builds the chunk loader pool and the join values (`net::WorldInfo`) of
@@ -550,6 +579,7 @@ pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> Result<(), R
             .map(|runtime| Arc::clone(runtime) as Arc<dyn net::game::WorldSave>),
         world_autosave_ticks: config.world_autosave_ticks,
         registries: load_registries(&config)?,
+        ops: load_ops(&config)?,
         ..net::game::GameConfig::default()
     };
     let serve_exit = net::serve_with_shutdown_status(
@@ -728,6 +758,7 @@ mod tests {
             autosave_interval_ticks: config::DEFAULT_AUTOSAVE_TICKS,
             world_autosave_ticks: config::DEFAULT_AUTOSAVE_TICKS,
             save_ignore_world_mismatch: false,
+            ops: Vec::new(),
         }
     }
 

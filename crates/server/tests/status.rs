@@ -251,6 +251,10 @@ async fn offline_login_joins_the_play_state() {
     reader.ensure_empty().expect("no trailing bytes");
     assert_eq!((center.chunk_x, center.chunk_z), (0, 0));
 
+    // The command tree (Шаг 25b), before the loading screen closes.
+    let (id, _payload) = recv(&mut stream).await;
+    assert_eq!(id, protocol::COMMANDS_TREE.default_id, "expected commands");
+
     let (id, payload) = recv(&mut stream).await;
     assert_eq!(id, GameEvent::ID, "expected game event");
     let mut reader = protocol::PacketReader::new(&payload);

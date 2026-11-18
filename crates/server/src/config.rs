@@ -285,6 +285,15 @@ pub struct ServerConfig {
     /// the operator's explicit choice (Шаг 22b, `docs/WORLD-SAVE.md` §6).
     #[serde(default)]
     pub save_ignore_world_mismatch: bool,
+    /// Operators (Шаг 25b): player names or UUIDs that join with operator
+    /// level 2. Empty by default, so nobody is an operator.
+    ///
+    /// A name is resolved to the offline UUID the login and the player file
+    /// use; a UUID is taken as written. An entry that is neither a known
+    /// name nor a UUID stops the startup (a typo must not silently grant or
+    /// withhold rights).
+    #[serde(default)]
+    pub ops: Vec<String>,
 }
 
 impl ServerConfig {
@@ -402,8 +411,51 @@ impl ServerConfig {
         {
             return Err(ConfigError::Invalid("dev_geometry is empty".to_owned()));
         }
+        for entry in &self.ops {
+            let entry = entry.trim();
+            if entry.is_empty() {
+                return Err(ConfigError::Invalid(
+                    "ops contains an empty entry (a name or a UUID)".to_owned(),
+                ));
+            }
+            if entry.contains('-') && parse_uuid(entry).is_none() {
+                return Err(ConfigError::Invalid(format!(
+                    "ops entry {entry:?} looks like a UUID but does not parse"
+                )));
+            }
+            if parse_uuid(entry).is_none() && entry.chars().count() > 16 {
+                return Err(ConfigError::Invalid(format!(
+                    "ops entry {entry:?} is neither a UUID nor a player name of at most 16 characters"
+                )));
+            }
+        }
         Ok(())
     }
+}
+
+/// Parses a UUID written as 32 hex digits, with or without hyphens, into the
+/// 16 bytes the protocol uses (Шаг 25b, the `ops` list).
+///
+/// Only the canonical layout is accepted: 8-4-4-4-12 with hyphens or the
+/// same digits without them.
+pub(crate) fn parse_uuid(text: &str) -> Option<protocol::Uuid> {
+    let text = text.trim();
+    let hex: String = text.chars().filter(|c| *c != '-').collect();
+    if hex.len() != 32 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    if text.contains('-') {
+        let groups: Vec<&str> = text.split('-').collect();
+        let lengths: Vec<usize> = groups.iter().map(|group| group.len()).collect();
+        if lengths != [8, 4, 4, 4, 12] {
+            return None;
+        }
+    }
+    let mut uuid = [0u8; 16];
+    for (index, byte) in uuid.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16).ok()?;
+    }
+    Some(uuid)
 }
 
 /// Parses the development-only integer `x,y,z` spawn tuple.
@@ -839,6 +891,42 @@ vanilla_server_dir = "C:/data/vanilla"
             let config: ServerConfig = toml::from_str(&text).expect("valid toml");
             assert!(matches!(config.validate(), Err(ConfigError::Invalid(_))));
         }
+    }
+
+    #[test]
+    fn ops_accept_names_and_uuids_and_refuse_a_broken_entry() {
+        let config: ServerConfig = toml::from_str(&example_toml()).expect("valid toml");
+        assert!(config.ops.is_empty(), "nobody is an operator by default");
+        config.validate().expect("valid");
+
+        let text = example_toml() + "ops = [\"Alice\", \"11111111-2222-3333-4444-555555555555\"]\n";
+        let config: ServerConfig = toml::from_str(&text).expect("valid toml");
+        config
+            .validate()
+            .expect("a name and a UUID are both accepted");
+        assert_eq!(config.ops.len(), 2);
+
+        let broken = example_toml() + "ops = [\"1111-2222\"]\n";
+        let config: ServerConfig = toml::from_str(&broken).expect("valid toml");
+        assert!(matches!(config.validate(), Err(ConfigError::Invalid(_))));
+
+        let empty = example_toml() + "ops = [\"\"]\n";
+        let config: ServerConfig = toml::from_str(&empty).expect("valid toml");
+        assert!(matches!(config.validate(), Err(ConfigError::Invalid(_))));
+    }
+
+    #[test]
+    fn a_uuid_parses_with_and_without_hyphens() {
+        let canonical = "11111111-2222-3333-4444-555555555555";
+        let expected = parse_uuid(canonical).expect("canonical");
+        assert_eq!(expected[0], 0x11);
+        assert_eq!(expected[15], 0x55);
+        assert_eq!(
+            parse_uuid("11111111222233334444555555555555"),
+            Some(expected)
+        );
+        assert_eq!(parse_uuid("11111111-2222-3333-4444-5555"), None);
+        assert_eq!(parse_uuid("not-a-uuid"), None);
     }
 
     #[test]

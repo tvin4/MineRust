@@ -17,13 +17,14 @@ use chunk_pace::ChunkPace;
 
 use data::{GameData, PacketIds};
 use protocol::{
-    decode_frame, BlockChangedAck, BlockDestruction, BlockUpdate, ChatMessage, ChunkBatchReceived,
-    ClientInformation, ConfirmTeleportation, ContainerSetContent, ContainerSetSlot, DisconnectPlay,
-    ItemStack, KeepAlive, LevelEvent, PacketReader, PickItemFromBlock, PlayerAction, PlayerChat,
-    PlayerCommand, PlayerInput, Position, ProtocolState, Punch, SetCarriedItem,
-    SetCreativeModeSlot, SetHeldSlot, StatusInfo, SystemChat, UseItemOn, MAX_STRING_CHARS,
-    MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT, MOVE_PLAYER_STATUS_ONLY,
-    PLAY_PLUGIN_MESSAGE,
+    decode_frame, BlockChangedAck, BlockDestruction, BlockUpdate, ChatCommand, ChatCommandSigned,
+    ChatMessage, ChunkBatchReceived, ClientInformation, ConfirmTeleportation, ContainerSetContent,
+    ContainerSetSlot, DisconnectPlay, GameEvent, ItemStack, KeepAlive, LevelEvent, PacketReader,
+    PickItemFromBlock, PlayerAbilities, PlayerAction, PlayerChat, PlayerCommand,
+    PlayerInfoGameMode, PlayerInput, Position, ProtocolState, Punch, SetCarriedItem,
+    SetCreativeModeSlot, SetHeldSlot, SetTime, StatusInfo, SynchronizePlayerPosition, SystemChat,
+    UseItemOn, MAX_STRING_CHARS, MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT,
+    MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
 };
 use std::sync::Arc;
 
@@ -308,6 +309,9 @@ where
     // Game mode: the configuration wins unless `force_gamemode` is off and
     // the file carries a usable `playerGameType` (Шаг 18a).
     let game_mode = resolve_game_mode(&game, saved.as_ref());
+    // Operator level of the session (Шаг 25b): selects the command tree the
+    // join declares and what the game thread accepts from this connection.
+    let op_level = game.op_level(player_name);
     // Where this player enters and with which vitals.
     let entry = resolve_entry(&world.info, saved.as_ref());
     join::send_join(
@@ -317,6 +321,7 @@ where
         player_name,
         player_id,
         game_mode,
+        op_level,
         entry,
         ids,
         &world.info,
@@ -334,6 +339,7 @@ where
         view_distance: radius,
         spawn: world.info.player_spawn_override.unwrap_or(world.info.spawn),
         game_mode,
+        op_level,
         pose: Some(entry.pose),
         health: entry.health,
         food: entry.food,
@@ -694,6 +700,75 @@ where
                         )
                         .await?;
                     }
+                    // The abilities of the player (Шаг 25b/25c).
+                    Some(ServerMessage::PlayerAbilities(abilities)) => {
+                        write_tracked(
+                            &mut writer,
+                            ProtocolState::Play,
+                            ids.id(PlayerAbilities::KEY),
+                            &abilities.encode_payload(),
+                        )
+                        .await?;
+                    }
+                    // The tab-list game mode of one player (Шаг 25b).
+                    Some(ServerMessage::PlayerInfoGameMode(update)) => {
+                        write_tracked(
+                            &mut writer,
+                            ProtocolState::Play,
+                            ids.id(PlayerInfoGameMode::KEY),
+                            &update.encode_payload(),
+                        )
+                        .await?;
+                    }
+                    // A game event of the mode change (Шаг 25c).
+                    Some(ServerMessage::GameEvent(event)) => {
+                        write_tracked(
+                            &mut writer,
+                            ProtocolState::Play,
+                            ids.id(GameEvent::KEY),
+                            &event.encode_payload(),
+                        )
+                        .await?;
+                    }
+                    // A world clock update (Шаг 25b `/time set`).
+                    Some(ServerMessage::SetTime(packet)) => {
+                        write_tracked(
+                            &mut writer,
+                            ProtocolState::Play,
+                            ids.id(SetTime::KEY),
+                            &packet.encode_payload(),
+                        )
+                        .await?;
+                    }
+                    // A server teleport (Шаг 25b `/tp`).
+                    Some(ServerMessage::PlayerPosition {
+                        teleport_id,
+                        x,
+                        y,
+                        z,
+                        yaw,
+                        pitch,
+                    }) => {
+                        let packet = SynchronizePlayerPosition {
+                            teleport_id,
+                            x,
+                            y,
+                            z,
+                            velocity_x: 0.0,
+                            velocity_y: 0.0,
+                            velocity_z: 0.0,
+                            yaw,
+                            pitch,
+                            flags: 0,
+                        };
+                        write_tracked(
+                            &mut writer,
+                            ProtocolState::Play,
+                            ids.id(SynchronizePlayerPosition::KEY),
+                            &packet.encode_payload(),
+                        )
+                        .await?;
+                    }
                     // The game thread dropped this player (quit); the
                     // connection closes. The kick reason is read in M4.1's
                     // kick policy (see the game module).
@@ -928,6 +1003,33 @@ where
                             .await
                         {
                             warn!(%err, "the game thread is gone, chat dropped");
+                        }
+                    }
+                    // Commands (Шаг 25b): both the unsigned and the signed
+                    // variants carry the text first; the game thread decides
+                    // what it means.
+                    id if id == ids.id(ChatCommand::KEY) => {
+                        let command = ChatCommand::decode_payload(&mut payload)?;
+                        if let Err(err) = game
+                            .send(ToGame::Command {
+                                id: player_id,
+                                command: command.command,
+                            })
+                            .await
+                        {
+                            warn!(%err, "the game thread is gone, command dropped");
+                        }
+                    }
+                    id if id == ids.id(ChatCommandSigned::KEY) => {
+                        let command = ChatCommandSigned::decode_payload(&mut payload)?;
+                        if let Err(err) = game
+                            .send(ToGame::Command {
+                                id: player_id,
+                                command: command.command,
+                            })
+                            .await
+                        {
+                            warn!(%err, "the game thread is gone, command dropped");
                         }
                     }
                     // M2 has no gameplay: unknown or not-yet-handled

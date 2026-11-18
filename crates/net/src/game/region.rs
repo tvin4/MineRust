@@ -164,6 +164,10 @@ pub struct Player {
     /// Game mode of this player (M4.5 Шаг 7.3): the login `game_mode`, the
     /// tab-list entry and the mode-dependent metadata bytes all come from it.
     game_mode: i32,
+    /// Operator level of the session (Шаг 25b): 0 or [`super::OP_LEVEL`].
+    /// Commands above the level are unknown to the client, like vanilla hides
+    /// them from the tree.
+    op_level: i32,
     teleport_confirmed: bool,
     spawn: protocol::Position,
     position: PlayerPos,
@@ -268,6 +272,7 @@ impl Player {
             name: join.name,
             view_distance: join.view_distance,
             game_mode: join.game_mode,
+            op_level: join.op_level,
             teleport_confirmed: false,
             spawn: join.spawn,
             previous_yaw: position.yaw,
@@ -321,6 +326,33 @@ impl Player {
     /// Game mode of this player (M4.5 Шаг 7.3).
     pub fn game_mode(&self) -> i32 {
         self.game_mode
+    }
+
+    /// Changes the game mode of this player (Шаг 25b/25c), returning whether
+    /// it actually changed. The tab list, the ability packets and the
+    /// spectator visibility rule are the caller's business; this keeps the
+    /// state the tick reads.
+    pub fn set_game_mode(&mut self, game_mode: i32) -> bool {
+        let changed = self.game_mode != game_mode;
+        self.game_mode = game_mode;
+        changed
+    }
+
+    /// Operator level of the session (Шаг 25b).
+    pub fn op_level(&self) -> i32 {
+        self.op_level
+    }
+
+    /// Teleports the player to an absolute position (Шаг 25b `/tp`): the
+    /// pose and the chunk-cache centre move, and the next visibility pass is
+    /// forced to broadcast the new position (a large jump becomes
+    /// `entity_position_sync`).
+    pub fn teleport(&mut self, x: f64, y: f64, z: f64) {
+        self.position.x = x;
+        self.position.y = y;
+        self.position.z = z;
+        self.window_center = chunk_of_position(x, z);
+        self.ticks_since_broadcast = super::entities::UPDATE_INTERVAL;
     }
 
     /// The player's inventory (Шаг 24a).

@@ -27,7 +27,7 @@
 use data::{GameData, PacketIds};
 use protocol::{
     GameEvent, LoginPlay, PlayerInfoEntry, PlayerInfoUpdate, ProtocolState, SetCenterChunk,
-    SetDefaultSpawnPosition, SetHealth, StatusInfo, SynchronizePlayerPosition,
+    SetDefaultSpawnPosition, SetHealth, StatusInfo, SynchronizePlayerPosition, COMMANDS_TREE,
 };
 use tokio::io::AsyncWrite;
 use tracing::{info, warn};
@@ -55,6 +55,7 @@ pub(super) async fn send_join<W>(
     player_name: &str,
     entity_id: i32,
     game_mode: i32,
+    op_level: i32,
     entry: Entry,
     ids: &PacketIds,
     info: &WorldInfo,
@@ -174,6 +175,18 @@ where
         view_distance = info.view_distance,
         "chunk cache centre sent"
     );
+
+    // The command tree (Шаг 25b): what the client may parse, complete and
+    // send. Only the implemented subset is declared, trimmed by the operator
+    // level — the vanilla tree is not reproduced (`game::commands`).
+    let tree = crate::game::commands::tree(op_level);
+    write_tracked(
+        writer,
+        ProtocolState::Play,
+        ids.id(COMMANDS_TREE),
+        &tree.encode_payload()?,
+    )
+    .await?;
 
     // Without event 13 the client stays on its loading screen.
     // SOURCE: wiki, unverified: the event id and the "close the loading

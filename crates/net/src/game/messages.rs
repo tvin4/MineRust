@@ -83,6 +83,17 @@ pub enum ToGame {
         /// The line, already capped to the protocol's 256 characters.
         message: String,
     },
+    /// A player sent a command (Шаг 25b): `chat_command` or
+    /// `chat_command_signed`, the leading `/` already removed.
+    ///
+    /// The game thread owns what the command means; the connection only
+    /// decodes the text.
+    Command {
+        /// Player that sent it.
+        id: PlayerId,
+        /// Command text without the slash, capped to 256 characters.
+        command: String,
+    },
 }
 
 /// One `use_item_on` (66) as the game thread receives it (Шаг 24b).
@@ -141,6 +152,9 @@ pub struct PlayerJoin {
     /// [`GameConfig::default_game_mode`](super::GameConfig), or the saved
     /// `playerGameType` when `force_gamemode` is off (Шаг 18a).
     pub game_mode: i32,
+    /// Operator level of the joining player (Шаг 25b): 0 or
+    /// [`super::OP_LEVEL`], from the configured ops list.
+    pub op_level: i32,
     /// Where the player enters the world (Шаг 18a): the saved pose of a
     /// returning player, already resolved against the spawn override and the
     /// dimension check, or `None` for a fresh player (the spawn block's
@@ -290,6 +304,37 @@ pub enum ServerMessage {
     /// One system line (Шаг 25a): the connection writes `system_chat` for the
     /// join/leave lines and the command replies.
     SystemChat(protocol::SystemChat),
+    /// The abilities of one player (Шаг 25b/25c): the connection writes
+    /// `player_abilities`. A game-mode change sends it twice around the
+    /// `game_event`, exactly as the S21 l2 trace does.
+    PlayerAbilities(protocol::PlayerAbilities),
+    /// The tab-list game mode of one player (Шаг 25b): `player_info_update`
+    /// carrying only the game-mode action (19 bytes in the trace). Sent to
+    /// every client on a `/gamemode` change.
+    PlayerInfoGameMode(protocol::PlayerInfoGameMode),
+    /// A game event (Шаг 25c): `game_event`. The mode change is event 3 with
+    /// the new mode as its float value.
+    GameEvent(protocol::GameEvent),
+    /// A world clock update (Шаг 25b `/time set`): `set_time`, sent to every
+    /// client of the world.
+    SetTime(protocol::SetTime),
+    /// A server teleport (Шаг 25b `/tp`): `player_position` with a fresh
+    /// teleport id the client confirms. The entity stream moves the
+    /// observers.
+    PlayerPosition {
+        /// Teleport id the client must echo.
+        teleport_id: i32,
+        /// Target X position.
+        x: f64,
+        /// Target Y position.
+        y: f64,
+        /// Target Z position.
+        z: f64,
+        /// Target yaw in degrees.
+        yaw: f32,
+        /// Target pitch in degrees.
+        pitch: f32,
+    },
 }
 
 /// Why the game thread closes a connection.
