@@ -329,6 +329,7 @@ fn saved_player_in(dimension: &str, on_ground: bool) -> SavedPlayer {
         on_ground,
         game_mode: Some(1),
         dimension: dimension.to_owned(),
+        inventory: Vec::new(),
     }
 }
 

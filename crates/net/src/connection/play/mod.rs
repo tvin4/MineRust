@@ -18,9 +18,10 @@ use chunk_pace::ChunkPace;
 use data::{GameData, PacketIds};
 use protocol::{
     decode_frame, BlockChangedAck, BlockDestruction, BlockUpdate, ChunkBatchReceived,
-    ClientInformation, ConfirmTeleportation, DisconnectPlay, KeepAlive, LevelEvent, PacketReader,
-    PlayerAction, PlayerCommand, PlayerInput, Position, ProtocolState, Punch, StatusInfo,
-    MAX_STRING_CHARS, MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT,
+    ClientInformation, ConfirmTeleportation, ContainerSetContent, ContainerSetSlot, DisconnectPlay,
+    ItemStack, KeepAlive, LevelEvent, PacketReader, PickItemFromBlock, PlayerAction, PlayerCommand,
+    PlayerInput, Position, ProtocolState, Punch, SetCarriedItem, SetCreativeModeSlot, SetHeldSlot,
+    StatusInfo, UseItemOn, MAX_STRING_CHARS, MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT,
     MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
 };
 use std::sync::Arc;
@@ -33,9 +34,9 @@ use tracing::{debug, info, trace, warn};
 use crate::error::ConnectionError;
 use crate::frame::{read_tracked, write_tracked};
 use crate::game::{
-    chunk_of_position, BlockAction, GameHandle, KickFlag, KickReason, MoveKind, MoveSlot,
-    MoveState, MoveUpdate, PlayerConnection, PlayerId, PlayerJoin, PlayerPos, PlayerdataRuntime,
-    ServerMessage, ToGame, OUTBOUND_CAPACITY,
+    chunk_of_position, BlockAction, BlockPlacement, GameHandle, KickFlag, KickReason, MoveKind,
+    MoveSlot, MoveState, MoveUpdate, PlayerConnection, PlayerId, PlayerJoin, PlayerPos,
+    PlayerdataRuntime, ServerMessage, ToGame, OUTBOUND_CAPACITY,
 };
 use crate::loader::{LoadError, Loader};
 use crate::store::ChunkStore;
@@ -336,6 +337,10 @@ where
         health: entry.health,
         food: entry.food,
         saturation: entry.saturation,
+        saved_inventory: saved
+            .as_ref()
+            .map(|saved| saved.inventory.clone())
+            .unwrap_or_default(),
         connection: PlayerConnection {
             outbound,
             kick: Arc::clone(&kick),
@@ -499,6 +504,56 @@ where
                             &mut writer,
                             ProtocolState::Play,
                             ids.id(BlockChangedAck::KEY),
+                            &packet.encode_payload(),
+                        )
+                        .await?;
+                    }
+                    // The selected hotbar slot (Шаг 24a): `set_held_slot`. The join sends
+                    // it before the inventory content.
+                    Some(ServerMessage::SetHeldSlot { slot }) => {
+                        let packet = SetHeldSlot { slot };
+                        write_tracked(
+                            &mut writer,
+                            ProtocolState::Play,
+                            ids.id(SetHeldSlot::KEY),
+                            &packet.encode_payload(),
+                        )
+                        .await?;
+                    }
+                    // The whole player inventory (Шаг 24a): window 0, the
+                    // 46-slot menu and an empty cursor.
+                    Some(ServerMessage::ContainerSetContent { state_id, items }) => {
+                        let packet = ContainerSetContent {
+                            window: 0,
+                            state_id,
+                            items,
+                            carried: ItemStack::empty(),
+                        };
+                        write_tracked(
+                            &mut writer,
+                            ProtocolState::Play,
+                            ids.id(ContainerSetContent::KEY),
+                            &packet.encode_payload(),
+                        )
+                        .await?;
+                    }
+                    // One player-inventory slot changed (Шаг 24a): the answer
+                    // to a creative pick that added an item.
+                    Some(ServerMessage::ContainerSetSlot {
+                        state_id,
+                        slot,
+                        item,
+                    }) => {
+                        let packet = ContainerSetSlot {
+                            window: 0,
+                            state_id,
+                            slot,
+                            item,
+                        };
+                        write_tracked(
+                            &mut writer,
+                            ProtocolState::Play,
+                            ids.id(ContainerSetSlot::KEY),
                             &packet.encode_payload(),
                         )
                         .await?;
@@ -773,6 +828,68 @@ where
                             .await
                         {
                             warn!(%err, "the game thread is gone, block action dropped");
+                        }
+                    }
+                    // The creative inventory (Шаг 24a): a slot write, a hotbar
+                    // selection or a pick. The game thread owns the model and
+                    // the answers.
+                    id if id == ids.id(SetCreativeModeSlot::KEY) => {
+                        let packet = SetCreativeModeSlot::decode_payload(&mut payload)?;
+                        payload.ensure_empty()?;
+                        if let Err(err) = game
+                            .send(ToGame::SetCreativeSlot {
+                                id: player_id,
+                                slot: packet.slot,
+                                item: packet.item,
+                            })
+                            .await
+                        {
+                            warn!(%err, "the game thread is gone, creative slot dropped");
+                        }
+                    }
+                    id if id == ids.id(SetCarriedItem::KEY) => {
+                        let packet = SetCarriedItem::decode_payload(&mut payload)?;
+                        payload.ensure_empty()?;
+                        if let Err(err) = game
+                            .send(ToGame::SelectSlot {
+                                id: player_id,
+                                slot: packet.slot,
+                            })
+                            .await
+                        {
+                            warn!(%err, "the game thread is gone, hotbar selection dropped");
+                        }
+                    }
+                    id if id == ids.id(PickItemFromBlock::KEY) => {
+                        let packet = PickItemFromBlock::decode_payload(&mut payload)?;
+                        payload.ensure_empty()?;
+                        if let Err(err) = game
+                            .send(ToGame::PickItem {
+                                id: player_id,
+                                position: packet.position,
+                            })
+                            .await
+                        {
+                            warn!(%err, "the game thread is gone, pick dropped");
+                        }
+                    }
+                    // Block placing (Шаг 24b): the connection decodes every
+                    // field of `use_item_on`; the tick decides what happens.
+                    id if id == ids.id(UseItemOn::KEY) => {
+                        let packet = UseItemOn::decode_payload(&mut payload)?;
+                        payload.ensure_empty()?;
+                        let action = BlockPlacement {
+                            id: player_id,
+                            hand: packet.hand,
+                            position: packet.position,
+                            face: packet.face,
+                            cursor: (packet.cursor_x, packet.cursor_y, packet.cursor_z),
+                            inside_block: packet.inside_block,
+                            world_border: packet.world_border,
+                            sequence: packet.sequence,
+                        };
+                        if let Err(err) = game.send(ToGame::UseItemOn(action)).await {
+                            warn!(%err, "the game thread is gone, placement dropped");
                         }
                     }
                     // M2 has no gameplay: unknown or not-yet-handled

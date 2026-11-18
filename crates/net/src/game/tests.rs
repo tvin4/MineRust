@@ -32,6 +32,7 @@ fn join_fixture_with(
         health: 20.0,
         food: 20,
         saturation: 5.0,
+        saved_inventory: Vec::new(),
         connection: PlayerConnection {
             outbound,
             kick: Arc::clone(&kick),
@@ -357,6 +358,7 @@ fn named_join(id: PlayerId, name: &str) -> (PlayerJoin, mpsc::Receiver<ServerMes
         health: 20.0,
         food: 20,
         saturation: 5.0,
+        saved_inventory: Vec::new(),
         connection: PlayerConnection {
             outbound,
             kick: Arc::new(KickFlag::default()),

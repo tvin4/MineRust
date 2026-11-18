@@ -128,6 +128,7 @@ fn bench_player_at(index: usize, x: i32, y: i32, z: i32) -> BenchPlayer {
             health: 20.0,
             food: 20,
             saturation: 5.0,
+            saved_inventory: Vec::new(),
             connection: PlayerConnection {
                 outbound,
                 kick: Arc::new(KickFlag::default()),

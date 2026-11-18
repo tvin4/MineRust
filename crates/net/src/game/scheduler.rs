@@ -188,6 +188,14 @@ impl Scheduler {
         self.region(region_id)?.get(id)
     }
 
+    /// Looks a player up, mutable (Шаг 24a: inventory writes and the selected
+    /// hotbar slot). The game thread still owns the region exclusively, so this
+    /// is the same single-owner access as the immutable lookup.
+    pub fn player_mut(&mut self, id: PlayerId) -> Option<&mut Player> {
+        let region_id = self.region_of(id)?;
+        self.region_mut(region_id)?.get_mut(id)
+    }
+
     /// Every online player across all regions, in region then id order
     /// (autosave, diagnostics).
     pub fn players(&self) -> impl Iterator<Item = &Player> {
@@ -207,6 +215,19 @@ impl Scheduler {
         if self.region_or_create(region_id).insert(join).is_some() {
             // The replaced player kept the same id, so the index entry below
             // is still correct for the new one.
+            warn!(player = id, "a join reused an id that was still online");
+        }
+        self.owners.insert(id, region_id);
+        region_id
+    }
+
+    /// Registers an already built player in the region of its spawn chunk
+    /// (Шаг 24a: the join restores the saved hotbar before registration).
+    pub fn insert_built(&mut self, player: Player) -> RegionId {
+        let id = player.id();
+        let spawn = player.spawn();
+        let region_id = self.grid.region_of_block(spawn.x, spawn.z);
+        if self.region_or_create(region_id).put(player).is_some() {
             warn!(player = id, "a join reused an id that was still online");
         }
         self.owners.insert(id, region_id);

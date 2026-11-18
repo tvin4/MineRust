@@ -14,6 +14,7 @@ use tracing::warn;
 
 use super::entities::{Forced, StreamEntities};
 use super::grid::{chunk_of_position, RegionGrid};
+use super::inventory::Inventory;
 use super::messages::{
     KickFlag, KickReason, MoveState, PlayerConnection, PlayerId, PlayerJoin, ServerMessage,
 };
@@ -245,6 +246,8 @@ pub struct Player {
     /// The survival dig this player is timing (Шаг 16a.3), if any. Creative
     /// and instant (`hardness = 0`) breaks never set it.
     dig: Option<DigState>,
+    /// The 46-slot player inventory and the selected hotbar slot (Шаг 24a).
+    inventory: Inventory,
     connection: PlayerConnection,
 }
 
@@ -285,6 +288,7 @@ impl Player {
             swing_time: 0,
             pending_swings: 0,
             dig: None,
+            inventory: Inventory::empty(),
             connection: join.connection,
         }
     }
@@ -317,6 +321,22 @@ impl Player {
     /// Game mode of this player (M4.5 Шаг 7.3).
     pub fn game_mode(&self) -> i32 {
         self.game_mode
+    }
+
+    /// The player's inventory (Шаг 24a).
+    pub fn inventory(&self) -> &Inventory {
+        &self.inventory
+    }
+
+    /// The player's inventory, mutable (creative writes, pick, placement).
+    pub fn inventory_mut(&mut self) -> &mut Inventory {
+        &mut self.inventory
+    }
+
+    /// Replaces the inventory, used once at join to restore the saved hotbar
+    /// (Шаг 24d).
+    pub fn set_inventory(&mut self, inventory: Inventory) {
+        self.inventory = inventory;
     }
 
     /// The survival dig this player is timing (Шаг 16a.3), if any.

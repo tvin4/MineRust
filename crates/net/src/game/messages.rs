@@ -10,11 +10,12 @@
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
-use protocol::Position;
+use protocol::{ItemStack, Position};
 use tokio::sync::mpsc;
 
 use super::entities::{EntityMove, EntityRemove, EntitySpawn, EntityStateUpdate};
 use super::region::PlayerPos;
+use playerdata::SavedItem;
 
 /// Position of a player inside the game thread.
 ///
@@ -49,6 +50,57 @@ pub enum ToGame {
     /// fields verbatim; the tick decides what the action means (which is game
     /// state, `apply` in `mod.rs` + `block_action.rs`).
     BlockAction(BlockAction),
+    /// A creative-mode client wrote one player-inventory slot (Шаг 24a).
+    SetCreativeSlot {
+        /// Player that wrote the slot.
+        id: PlayerId,
+        /// Player-inventory menu slot (`0..=45`).
+        slot: i16,
+        /// The new stack (possibly empty).
+        item: ItemStack,
+    },
+    /// The client selected a hotbar slot (Шаг 24a); no answer is sent.
+    SelectSlot {
+        /// Player that selected.
+        id: PlayerId,
+        /// Hotbar slot (`0..=8`).
+        slot: i16,
+    },
+    /// Creative "pick block" (Шаг 24a): the block, not its state.
+    PickItem {
+        /// Player that picked.
+        id: PlayerId,
+        /// Clicked block.
+        position: Position,
+    },
+    /// Right click on a block (Шаг 24b): the placement request.
+    UseItemOn(BlockPlacement),
+}
+
+/// One `use_item_on` (66) as the game thread receives it (Шаг 24b).
+///
+/// The connection only decodes the fields; the tick decides whether the
+/// placement is allowed, which block and which state it leaves behind, and
+/// what the actor and the observers see back.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BlockPlacement {
+    /// Player that clicked.
+    pub id: PlayerId,
+    /// Hand: `0` main, `1` off hand.
+    pub hand: i32,
+    /// Clicked block.
+    pub position: Position,
+    /// Clicked face (`0` down, `1` up, `2` north, `3` south, `4` west,
+    /// `5` east; [`protocol::UseItemOn`] constants).
+    pub face: i32,
+    /// Hit point inside the clicked block, `0.0..=1.0` per axis.
+    pub cursor: (f32, f32, f32),
+    /// Whether the player's own box intersects the clicked block.
+    pub inside_block: bool,
+    /// Whether the interaction crosses the world border.
+    pub world_border: bool,
+    /// The client's own counter, echoed in `block_changed_ack`.
+    pub sequence: i32,
 }
 
 /// The fields of one `player_action` (41) as the game thread receives them
@@ -92,6 +144,10 @@ pub struct PlayerJoin {
     pub food: i32,
     /// Food saturation the join announces (Шаг 18a); a fresh player's is 5.
     pub saturation: f32,
+    /// Hotbar the player file carried (Шаг 24d), in the player-file slot
+    /// space. The game thread turns it into the inventory model; the
+    /// connection has no item registry.
+    pub saved_inventory: Vec<SavedItem>,
     /// How the game thread reaches this connection.
     pub connection: PlayerConnection,
 }
@@ -163,6 +219,30 @@ pub enum ServerMessage {
     BlockChangedAck {
         /// Sequence echoed back from the action.
         sequence: i32,
+    },
+    /// The selected hotbar slot (Шаг 24a): `set_held_slot`. The join sends it
+    /// before the inventory content, as the vanilla S24a trace does.
+    SetHeldSlot {
+        /// Hotbar slot (`0..=8`).
+        slot: i32,
+    },
+    /// The whole player-inventory window (Шаг 24a): `container_set_content`
+    /// with window `0`, 46 slots and the empty cursor.
+    ContainerSetContent {
+        /// Window state id (the join carries `1`).
+        state_id: i32,
+        /// Every menu slot, in menu order.
+        items: Vec<ItemStack>,
+    },
+    /// One player-inventory slot changed (Шаг 24a): `container_set_slot`,
+    /// the answer to a creative pick that added an item.
+    ContainerSetSlot {
+        /// Window state id after the change.
+        state_id: i32,
+        /// Player-inventory menu slot.
+        slot: i16,
+        /// New stack of the slot.
+        item: ItemStack,
     },
     /// A block broke (Шаг 14c): the connection writes `level_event` with the
     /// block-break effect (`LevelEvent::EVENT_BLOCK_BREAK`) and `data` =

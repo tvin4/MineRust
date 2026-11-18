@@ -21,6 +21,7 @@ fn player(slot: &Arc<MoveSlot>) -> Player {
         health: 20.0,
         food: 20,
         saturation: 5.0,
+        saved_inventory: Vec::new(),
         connection: PlayerConnection {
             outbound,
             kick: Arc::new(KickFlag::default()),
@@ -164,6 +165,7 @@ fn the_tick_applies_input_without_movement() {
         health: 20.0,
         food: 20,
         saturation: 5.0,
+        saved_inventory: Vec::new(),
         connection: PlayerConnection {
             outbound,
             kick: Arc::new(KickFlag::default()),

@@ -175,6 +175,27 @@ fn load_collisions(config: &ServerConfig) -> Result<CollisionShapes, RunError> {
     Ok(collisions)
 }
 
+/// Loads the registries report a second time for the game thread (Шаг 24a/24d).
+///
+/// The world template already reads it for its own id lookups (`WireTables`),
+/// but the game thread needs the item ids for the creative inventory and the
+/// item names for the player file. The file is small and read once at
+/// start-up, so a separate copy is cheaper than threading the template's into
+/// the game thread. A configured but broken report fails the start, like the
+/// template's own read.
+fn load_registries(config: &ServerConfig) -> Result<Option<Arc<data::RegistryIds>>, RunError> {
+    let Some(path) = config.registries_report.as_deref() else {
+        return Ok(None);
+    };
+    let ids = data::load_registries_report(path)?;
+    tracing::info!(
+        path,
+        registries = ids.len(),
+        "registries report loaded for the inventory"
+    );
+    Ok(Some(Arc::new(ids)))
+}
+
 /// Loads the hardness report the server-side mining timer reads (Шаг 16a).
 ///
 /// The setting is **optional**: without `hardness_report` the timer has no
@@ -528,6 +549,7 @@ pub async fn run(config: ServerConfig, game_data: Arc<GameData>) -> Result<(), R
             .as_ref()
             .map(|runtime| Arc::clone(runtime) as Arc<dyn net::game::WorldSave>),
         world_autosave_ticks: config.world_autosave_ticks,
+        registries: load_registries(&config)?,
         ..net::game::GameConfig::default()
     };
     let serve_exit = net::serve_with_shutdown_status(

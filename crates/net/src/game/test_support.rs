@@ -55,6 +55,7 @@ pub fn join_view(
         health: 20.0,
         food: 20,
         saturation: 5.0,
+        saved_inventory: Vec::new(),
         connection: PlayerConnection {
             outbound,
             kick: Arc::new(KickFlag::default()),

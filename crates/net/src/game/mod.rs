@@ -16,9 +16,11 @@ mod break_block;
 mod dig;
 mod entities;
 mod grid;
+mod inventory;
 mod messages;
 mod metrics;
 mod movement;
+mod placing;
 mod playerdata;
 mod pool;
 mod region;
@@ -64,9 +66,10 @@ pub use entities::{
     STANDING_HEIGHT,
 };
 pub use grid::{chunk_of_position, RegionGrid, CHUNK_SIZE};
+pub use inventory::Inventory;
 pub use messages::{
-    BlockAction, KickFlag, KickReason, MoveKind, MoveSlot, MoveState, PlayerConnection, PlayerId,
-    PlayerJoin, ServerMessage, ToGame,
+    BlockAction, BlockPlacement, KickFlag, KickReason, MoveKind, MoveSlot, MoveState,
+    PlayerConnection, PlayerId, PlayerJoin, ServerMessage, ToGame,
 };
 pub use metrics::{TickMetrics, TickMetricsHandle};
 pub use movement::MoveUpdate;
@@ -224,6 +227,10 @@ pub struct GameConfig {
     /// Autosave period of the world in ticks (Шаг 22b); `0` disables the
     /// periodic pass. The shutdown save still runs.
     pub world_autosave_ticks: u64,
+    /// Static registries of the game data (Шаг 24a/24d): item ids for the
+    /// creative inventory and the block→item name rule of a pick. `None`
+    /// leaves the inventory empty of items and saves no hotbar.
+    pub registries: Option<Arc<data::RegistryIds>>,
 }
 
 impl Default for GameConfig {
@@ -244,6 +251,7 @@ impl Default for GameConfig {
             playerdata: None,
             worldsave: None,
             world_autosave_ticks: 0,
+            registries: None,
         }
     }
 }
@@ -568,7 +576,7 @@ fn game_loop(
                 // tick budget; `players` proves the snapshot covered the
                 // connected players.
                 let started = Instant::now();
-                save_all(&scheduler, runtime);
+                save_all(&scheduler, runtime, config.registries.as_deref());
                 info!(
                     tick,
                     save_us = phase_us(started.elapsed()),
@@ -647,7 +655,7 @@ fn game_loop(
     // disk work. The server first makes the final world durable, then queues
     // these staged snapshots and drains the player writer (Шаг 18a/22b).
     if let Some(runtime) = config.playerdata.as_deref() {
-        stage_all(&scheduler, runtime);
+        stage_all(&scheduler, runtime, config.registries.as_deref());
     }
     if let Err(err) = replay.flush() {
         warn!(%err, "could not flush the replay journal");
@@ -751,7 +759,7 @@ fn apply<W: std::io::Write>(
                 // The kicked session still writes its state, like a quit; the
                 // new connection has already read the file before this Join.
                 if let Some(runtime) = config.playerdata.as_deref() {
-                    save_player(scheduler, runtime, old);
+                    save_player(scheduler, runtime, old, config.registries.as_deref());
                 }
                 if let Some(dig) = dig::take(scheduler, old) {
                     dig::reset(scheduler, old, dig.position);
@@ -763,9 +771,32 @@ fn apply<W: std::io::Write>(
                 "view_distance": join.view_distance,
                 "spawn": { "x": join.spawn.x, "y": join.spawn.y, "z": join.spawn.z },
             });
+            // Шаг 24d: the saved hotbar travels in the join; the connection had
+            // no item registry to resolve it, the game thread has.
+            let saved = join.saved_inventory.clone();
+            let mut player = Player::new(*join);
+            // Without the registries report there is no name→id mapping, so
+            // the inventory cannot be restored or announced; the empty model
+            // stays and no join packet is sent (the same reasoning the store
+            // follows when it warns about a missing report).
+            let announcement = config.registries.as_deref().map(|items| {
+                player.set_inventory(Inventory::from_saved(&saved, Some(items)));
+                let inventory = player.inventory();
+                (
+                    inventory.selected(),
+                    inventory.state_id(),
+                    inventory.slots().to_vec(),
+                )
+            });
             // The region is the chunk of the spawn; the scheduler creates it
             // if this is the first player there (region_side > 0).
-            let region_id = scheduler.insert_player(*join);
+            let region_id = scheduler.insert_built(player);
+            // S24a join order: `set_held_slot` (seq 49) before the 46-slot
+            // `container_set_content` (seq 294).
+            if let Some((held, state_id, items)) = announcement {
+                scheduler.deliver(id, ServerMessage::SetHeldSlot { slot: held });
+                scheduler.deliver(id, ServerMessage::ContainerSetContent { state_id, items });
+            }
             replay.record(tick, Some(region_id), id, "join", payload);
         }
         ToGame::TeleportAck { id, teleport_id } => {
@@ -788,7 +819,7 @@ fn apply<W: std::io::Write>(
             // The player's final state goes to the save queue before the
             // region drops it (Шаг 18a).
             if let Some(runtime) = config.playerdata.as_deref() {
-                save_player(scheduler, runtime, id);
+                save_player(scheduler, runtime, id, config.registries.as_deref());
             }
             // A dig left behind must stop showing cracks to its observers
             // (Шаг 16a.3); the state itself goes away with the player.
@@ -811,6 +842,51 @@ fn apply<W: std::io::Write>(
                 action,
             );
         }
+        ToGame::SetCreativeSlot { id, slot, item } => {
+            replay.record(
+                tick,
+                scheduler.region_of(id),
+                id,
+                "set_creative_slot",
+                serde_json::json!({
+                    "slot": slot,
+                    "count": item.count,
+                    "item": item.item,
+                }),
+            );
+            // The S24a trace has no clientbound answer to this packet, so the
+            // model changes and nothing is sent back.
+            if let Some(player) = scheduler.player_mut(id) {
+                if !player.inventory_mut().set_creative(slot, item) {
+                    warn!(player = id, slot, "creative slot outside the player menu");
+                }
+            }
+        }
+        ToGame::SelectSlot { id, slot } => {
+            if let Some(player) = scheduler.player_mut(id) {
+                if !player.inventory_mut().select(slot) {
+                    warn!(player = id, slot, "hotbar slot outside 0..=8");
+                }
+            }
+        }
+        ToGame::PickItem { id, position } => placing::pick(
+            scheduler,
+            replay,
+            tick,
+            id,
+            position,
+            config.store.as_ref(),
+            config.registries.as_deref(),
+        ),
+        ToGame::UseItemOn(action) => placing::place(
+            scheduler,
+            replay,
+            tick,
+            action,
+            config.store.as_ref(),
+            config.store.as_ref().map(|store| store.blocks()),
+            config.registries.as_deref(),
+        ),
     }
 }
 

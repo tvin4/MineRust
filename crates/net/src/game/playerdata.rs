@@ -94,7 +94,10 @@ impl PlayerdataRuntime {
 }
 
 /// Builds the snapshot of one player for a save.
-pub fn snapshot_of(player: &Player) -> Snapshot {
+///
+/// `items` names the item registry so the hotbar's protocol ids can be written
+/// back as identifiers (Шаг 24d); without it the saved inventory is empty.
+pub fn snapshot_of(player: &Player, items: Option<&data::RegistryIds>) -> Snapshot {
     let position = player.position();
     Snapshot {
         uuid: player.uuid(),
@@ -110,30 +113,44 @@ pub fn snapshot_of(player: &Player) -> Snapshot {
         food: player.food(),
         saturation: player.saturation(),
         game_mode: player.game_mode(),
+        inventory: player.inventory().saved_hotbar(items),
     }
 }
 
 /// Queues one player's snapshot (a quit, Шаг 18a).
-pub fn save_player(scheduler: &Scheduler, runtime: &PlayerdataRuntime, id: PlayerId) {
+pub fn save_player(
+    scheduler: &Scheduler,
+    runtime: &PlayerdataRuntime,
+    id: PlayerId,
+    items: Option<&data::RegistryIds>,
+) {
     let Some(player) = scheduler.player(id) else {
         return;
     };
-    queue(runtime, player.name(), snapshot_of(player));
+    queue(runtime, player.name(), snapshot_of(player, items));
 }
 
 /// Queues every online player's snapshot (autosave and shutdown).
-pub fn save_all(scheduler: &Scheduler, runtime: &PlayerdataRuntime) {
+pub fn save_all(
+    scheduler: &Scheduler,
+    runtime: &PlayerdataRuntime,
+    items: Option<&data::RegistryIds>,
+) {
     for player in scheduler.players() {
-        queue(runtime, player.name(), snapshot_of(player));
+        queue(runtime, player.name(), snapshot_of(player, items));
     }
 }
 
 /// Captures every online player after the final tick, but does not hand the
 /// snapshots to the disk writer yet. The server flushes them after the world.
-pub fn stage_all(scheduler: &Scheduler, runtime: &PlayerdataRuntime) {
+pub fn stage_all(
+    scheduler: &Scheduler,
+    runtime: &PlayerdataRuntime,
+    items: Option<&data::RegistryIds>,
+) {
     let snapshots = scheduler
         .players()
-        .map(|player| (player.name().to_owned(), snapshot_of(player)))
+        .map(|player| (player.name().to_owned(), snapshot_of(player, items)))
         .collect();
     let mut staged = runtime
         .final_snapshots
@@ -211,11 +228,12 @@ mod tests {
             health: 15.5,
             food: 17,
             saturation: 2.5,
+            saved_inventory: Vec::new(),
             ..join
         };
         scheduler.insert_player(join);
 
-        save_player(&scheduler, &runtime, 1);
+        save_player(&scheduler, &runtime, 1, None);
         writer
             .shutdown(Duration::from_secs(10))
             .expect("writer stops");
@@ -247,7 +265,7 @@ mod tests {
         scheduler.insert_player(first);
         scheduler.insert_player(second);
 
-        save_all(&scheduler, &runtime);
+        save_all(&scheduler, &runtime, None);
         writer
             .shutdown(Duration::from_secs(10))
             .expect("writer stops");
@@ -274,7 +292,7 @@ mod tests {
         let uuid = protocol::offline_uuid(&name);
         scheduler.insert_player(first);
 
-        stage_all(&scheduler, &runtime);
+        stage_all(&scheduler, &runtime, None);
         assert!(
             store.read(uuid).expect("read before flush").is_none(),
             "staging alone does not let playerdata overtake the world"
@@ -294,7 +312,7 @@ mod tests {
         let (join, _slot, _rx) = join_at_mode(9, (1, 2, 3), 1);
         let name = join.name.clone();
         let player = Player::new(join);
-        let snapshot = snapshot_of(&player);
+        let snapshot = snapshot_of(&player, None);
 
         assert_eq!(snapshot.uuid, protocol::offline_uuid(&name));
         assert_eq!(
