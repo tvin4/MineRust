@@ -12,7 +12,7 @@ use std::sync::Arc;
 use data::{BlockStates, CollisionShapes};
 use net::chunks::ReadyChunks;
 use net::game::WorldSave as _;
-use net::store::{chunk_cell_state, ChunkStore};
+use net::store::{chunk_cell_state, set_chunk_cell, ChunkStore};
 use protocol::{ChunkSection, HeightmapRecord, LevelChunkWithLight, LightData, PaletteContainer};
 use worldsave::{WorldIdentity, DEFAULT_CAPACITY};
 
@@ -80,25 +80,31 @@ fn template_chunk(chunk_x: i32, chunk_z: i32) -> LevelChunkWithLight {
     }
 }
 
+fn template_chunk_with_stone() -> LevelChunkWithLight {
+    let mut chunk = template_chunk(0, 0);
+    set_chunk_cell(&mut chunk, flat_cell(8, 64, 8), 1, &blocks()).expect("template stone");
+    chunk
+}
+
 fn flat_cell(x: i32, y: i32, z: i32) -> u32 {
     let slot = (y >> 4) + 4;
     let local = ((y & 15) << 8) | ((z & 15) << 4) | (x & 15);
     slot as u32 * 4096 + local as u32
 }
 
-/// A break survives the writer, a new store sees it, and setting the cell
-/// back to air deletes the file.
+/// A break survives the writer and a new store sees it; restoring the
+/// template's stone deletes the now-empty diff file.
 #[test]
-fn a_break_survives_a_restart_and_returning_to_air_deletes_the_file() {
+fn a_break_survives_a_restart_and_restoring_the_template_deletes_the_file() {
     let save_dir = temp_dir("save");
     let store = worldsave::Store::open(&save_dir, &identity(), false).expect("save root");
 
     // The first run: one chunk of the template, one broken block.
     let first = ChunkStore::new(
-        ReadyChunks::new(vec![template_chunk(0, 0), template_chunk(1, 0)]),
+        ReadyChunks::new(vec![template_chunk_with_stone(), template_chunk(1, 0)]),
         blocks(),
     );
-    first.set_block(8, 64, 8, 1).expect("stone");
+    first.set_block(8, 64, 8, 0).expect("break to air");
     let batch = first.autosave_batch(256);
     assert_eq!(batch.len(), 1, "only the touched chunk is dirty");
     let (runtime, writer) = worldsave::spawn(store.clone(), DEFAULT_CAPACITY).expect("spawn");
@@ -108,13 +114,13 @@ fn a_break_survives_a_restart_and_returning_to_air_deletes_the_file() {
         .expect("writer stops");
     assert_eq!(
         store.read_diff(0, 0).expect("read").expect("file").changes,
-        vec![(flat_cell(8, 64, 8), 1)]
+        vec![(flat_cell(8, 64, 8), 0)]
     );
 
     // A new start: the template is read again and the file is laid over it.
     let reopened = worldsave::Store::open(&save_dir, &identity(), false).expect("reopen");
     let mut template = vec![
-        Arc::new(template_chunk(0, 0)),
+        Arc::new(template_chunk_with_stone()),
         Arc::new(template_chunk(1, 0)),
     ];
     let saved = reopened.apply(&mut template, &blocks()).expect("apply");
@@ -127,17 +133,18 @@ fn a_break_survives_a_restart_and_returning_to_air_deletes_the_file() {
     );
     assert_eq!(
         second.block(8, 64, 8),
-        Some(1),
+        Some(0),
         "the broken block is still gone on a new start"
     );
     assert_eq!(second.block(9, 64, 8), Some(0), "the rest is the template");
     assert_eq!(
         chunk_cell_state(&second.snapshot().chunks()[0], flat_cell(8, 64, 8)),
-        Some(1)
+        Some(0)
     );
 
-    // The block comes back: the diff becomes empty and the file is removed.
-    second.set_block(8, 64, 8, 0).expect("air again");
+    // The template block comes back: the diff becomes empty and the file is
+    // removed.
+    second.set_block(8, 64, 8, 1).expect("stone again");
     let batch = second.autosave_batch(256);
     assert!(
         batch[0].changes.is_empty(),
