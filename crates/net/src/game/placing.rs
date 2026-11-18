@@ -177,13 +177,28 @@ pub(super) fn place<W: std::io::Write>(
         ack(scheduler, id, sequence);
         return;
     };
-    let Some(target) = neighbour(position, face) else {
+    // The cell behind the clicked face is what the client's prediction marks;
+    // the actual destination may be the clicked cell itself.
+    let Some(predicted) = neighbour(position, face) else {
         ack(scheduler, id, sequence);
         return;
     };
-    let Some(target_state) = store.block(target.x, target.y, target.z) else {
-        ack(scheduler, id, sequence);
-        return;
+    // A replaceable clicked cell is replaced in place: the S17
+    // `replace-short-grass` click names the grass cell (its outline stops the
+    // crosshair before the support), and vanilla's stone lands in that cell.
+    // SOURCE: 2026-11-18_s17-vanilla-step23-r2: `use_item_on` seq 80534
+    // pos=(104,202,-21) face=2, then the actor's block_update
+    // (104,202,-21)=stone, (104,202,-22)=air, (104,202,-21)=stone and ack;
+    // the observer sees (104,202,-21)=stone once.
+    let clicked_replaceable = is_replaceable(blocks, hit_state);
+    let (target, target_state) = if clicked_replaceable {
+        (position, hit_state)
+    } else {
+        let Some(state) = store.block(predicted.x, predicted.y, predicted.z) else {
+            ack(scheduler, id, sequence);
+            return;
+        };
+        (predicted, state)
     };
     let Some(player) = scheduler.player(id) else {
         ack(scheduler, id, sequence);
@@ -276,9 +291,36 @@ pub(super) fn place<W: std::io::Write>(
         return;
     };
     match store.set_block(target.x, target.y, target.z, new_state) {
-        Ok(_) => announce(
-            scheduler, id, position, hit_state, target, new_state, sequence,
-        ),
+        Ok(_) => {
+            // The S24b answer order: the hit cell, the cell the client's
+            // prediction sized up (the clicked face's neighbour), then the
+            // actual destination, then the ack. When the destination is the
+            // clicked face's neighbour the last two are the same cell and
+            // carry the same state, which is the traced double update.
+            let hit_after = if target == position {
+                new_state
+            } else {
+                hit_state
+            };
+            let predicted_after = if predicted == target {
+                new_state
+            } else {
+                store
+                    .block(predicted.x, predicted.y, predicted.z)
+                    .unwrap_or(hit_state)
+            };
+            announce(
+                scheduler,
+                id,
+                position,
+                hit_after,
+                predicted,
+                predicted_after,
+                target,
+                new_state,
+                sequence,
+            );
+        }
         Err(err) => {
             warn!(
                 x = target.x,
@@ -507,11 +549,23 @@ fn occupied(scheduler: &Scheduler, target: Position) -> bool {
 }
 
 /// A successful placement: the S24b per-connection answer order.
+///
+/// The actor gets the hit cell, the cell its prediction marked (the clicked
+/// face's neighbour), the actual destination, and the ack. For a target behind
+/// the face the middle and last updates are the same cell and state (the S24b
+/// double update); when the clicked replaceable cell is replaced in place they
+/// differ (S17 `replace-short-grass`).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the placement answer is one linear send"
+)]
 fn announce(
     scheduler: &mut Scheduler,
     actor: PlayerId,
     hit: Position,
     hit_state: i32,
+    predicted: Position,
+    predicted_state: i32,
     target: Position,
     new_state: i32,
     sequence: i32,
@@ -524,16 +578,22 @@ fn announce(
             state: hit_state,
         },
     );
-    for _ in 0..2 {
-        deliver(
-            scheduler,
-            actor,
-            ServerMessage::BlockUpdate {
-                position: target,
-                state: new_state,
-            },
-        );
-    }
+    deliver(
+        scheduler,
+        actor,
+        ServerMessage::BlockUpdate {
+            position: predicted,
+            state: predicted_state,
+        },
+    );
+    deliver(
+        scheduler,
+        actor,
+        ServerMessage::BlockUpdate {
+            position: target,
+            state: new_state,
+        },
+    );
     let others: Vec<PlayerId> = scheduler
         .regions()
         .iter()
@@ -861,6 +921,8 @@ mod trace_tests {
     use super::{place, BlockPlacement, CREATIVE};
 
     const STONE: i32 = 1;
+    /// `minecraft:short_grass` in the placement fixture.
+    const SHORT_GRASS: i32 = 98;
 
     /// The registry slice with the item the tests hold.
     fn items() -> data::RegistryIds {
@@ -997,6 +1059,70 @@ mod trace_tests {
             ServerMessage::BlockUpdate { position, state: STONE }
                 if position == protocol::Position { x: 0, y: 65, z: 0 }
         ));
+    }
+
+    /// The S17 `replace-short-grass` click: the crosshair stops on the grass
+    /// outline, so the packet names the grass cell itself with a north face. The
+    /// stone replaces that cell (not the cell behind the face) and the actor's
+    /// three updates name the grass cell, the cell behind the face and the grass
+    /// cell again (2026-11-18_s17-vanilla-step23-r2, A seq 80534/80536-80538).
+    #[test]
+    fn a_click_on_replaceable_grass_replaces_the_clicked_cell() {
+        let blocks = Arc::new(super::tests::blocks());
+        let store = Arc::new(ChunkStore::new(
+            ReadyChunks::new(vec![air_chunk(0, 0), air_chunk(0, -1)]),
+            Arc::clone(&blocks),
+        ));
+        store.set_block(0, 64, 0, SHORT_GRASS).expect("grass cell");
+        let items = items();
+        let (mut scheduler, mut actor_rx, mut observer_rx) = players((0, 64, 3));
+        let mut replay = Replay::<Vec<u8>>::new(None);
+
+        place(
+            &mut scheduler,
+            &mut replay,
+            1,
+            BlockPlacement {
+                id: 1,
+                hand: 0,
+                position: protocol::Position { x: 0, y: 64, z: 0 },
+                face: 2,
+                cursor: (0.5, 0.4934, 0.125),
+                inside_block: false,
+                world_border: false,
+                sequence: 5,
+            },
+            Some(&store),
+            Some(&blocks),
+            Some(&items),
+        );
+
+        assert_eq!(store.block(0, 64, 0), Some(STONE), "the grass was replaced");
+        assert_eq!(store.block(0, 64, -1), Some(0), "the cell behind stays air");
+        let actor = drain(&mut actor_rx);
+        assert!(
+            matches!(
+                actor.as_slice(),
+                [
+                    ServerMessage::BlockUpdate { position: first, state: STONE },
+                    ServerMessage::BlockUpdate { position: behind, state: 0 },
+                    ServerMessage::BlockUpdate { position: again, state: STONE },
+                    ServerMessage::BlockChangedAck { sequence: 5 },
+                ] if *first == protocol::Position { x: 0, y: 64, z: 0 }
+                    && *behind == protocol::Position { x: 0, y: 64, z: -1 }
+                    && *again == *first
+            ),
+            "the grass answer stream: {actor:?}"
+        );
+        let observer = drain(&mut observer_rx);
+        assert!(
+            matches!(
+                observer.as_slice(),
+                [ServerMessage::BlockUpdate { position, state: STONE }]
+                    if *position == protocol::Position { x: 0, y: 64, z: 0 }
+            ),
+            "the observer sees the grass cell once: {observer:?}"
+        );
     }
 
     /// The S24b own-cell refusal: both cells are corrected for the actor, the
