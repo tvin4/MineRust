@@ -12,7 +12,7 @@ use protocol::{
     ClientInformation, ConfirmTeleportation, FinishAck, FinishConfiguration, GameEvent, Handshake,
     LoginAcknowledged, LoginPlay, LoginStart, LoginSuccess, NextState, PingRequest,
     PlayerInfoUpdate, PongResponse, SetCenterChunk, SetDefaultSpawnPosition, SetHealth,
-    StatusRequest, StatusResponse, SynchronizePlayerPosition, UpdateTags,
+    StatusRequest, StatusResponse, SynchronizePlayerPosition, UpdateAttributes, UpdateTags,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -277,6 +277,15 @@ async fn offline_login_joins_the_play_state() {
     assert_eq!(health.health, 20.0);
     assert_eq!(health.food, 20);
     assert_eq!(health.saturation, 5.0);
+
+    // The own attributes close the join (Шаг 24c).
+    let (id, payload) = recv(&mut stream).await;
+    assert_eq!(id, UpdateAttributes::ID, "expected the own attributes");
+    let mut reader = protocol::PacketReader::new(&payload);
+    let attributes = UpdateAttributes::decode_payload(&mut reader).expect("decodable");
+    reader.ensure_empty().expect("no trailing bytes");
+    assert_eq!(attributes.entity_id, 1, "the local player");
+    assert_eq!(attributes.attributes.len(), 3, "survival base attributes");
 
     // Serverbound play packets that carry no gameplay in M2 are accepted:
     // the teleport confirmation, updated settings and a plugin message.

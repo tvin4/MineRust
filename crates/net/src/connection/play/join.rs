@@ -12,13 +12,17 @@
 //! 5. Game Event 13 — "start waiting for chunks" (closes the loading
 //!    screen);
 //! 6. Synchronize Player Position — the join teleport;
-//! 7. Set Health — the player's health, food and saturation (Шаг 18a).
+//! 7. Set Health — the player's health, food and saturation (Шаг 18a);
+//! 8. Update Attributes — the player's own attribute set (Шаг 24c), which
+//!    carries the creative reach modifiers.
 //!
 //! SOURCE: wiki, unverified for this order and these field values; the live
 //! session trace (`MINECRAFT_SESSION_TRACE`) is what will line them up
 //! against the vanilla join recording packet by packet. The Set Health id and
 //! payload follow the S7 vanilla join trace (`docs/PLAYERDATA.md` §1.3): it
-//! arrives right after `player_position`.
+//! arrives right after `player_position`. The own `update_attributes` follows
+//! the S17 vanilla join trace (conn-1 seq 320): there it lands a little later,
+//! among the first chunk batches, so its exact slot is a hypothesis here.
 
 use data::{GameData, PacketIds};
 use protocol::{
@@ -218,6 +222,26 @@ where
         ProtocolState::Play,
         ids.id(SetHealth::KEY),
         &health.encode_payload(),
+    )
+    .await?;
+
+    // The player's own attributes (Шаг 24c). The client's block reach comes
+    // from this packet: without it a creative client keeps the survival
+    // `4.5` and cannot reach a support at 4.5 + pitch, which is exactly why
+    // the first S17 ours run never sent `use_item_on`
+    // (2026-11-18_s17-ours-step24-r1).
+    // SOURCE: 2026-11-18_s17-vanilla-step23-r2, conn-1 seq 320 (3.04 s):
+    // the local player's `update_attributes` (three survival attributes, no
+    // modifiers); on the creative switch the same connection gets seq 62634
+    // with the two reach modifiers. Vanilla sends it later in the join,
+    // among the chunk batches; that exact slot is not pinned, so this one
+    // follows Set Health.
+    let attributes = crate::entity_packets::spawn_attributes(entity_id, game_mode);
+    write_tracked(
+        writer,
+        ProtocolState::Play,
+        ids.id(protocol::UpdateAttributes::KEY),
+        &attributes.encode_payload()?,
     )
     .await?;
 

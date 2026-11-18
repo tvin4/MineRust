@@ -254,7 +254,7 @@ fn test_status() -> StatusInfo {
 }
 
 /// The join sequence every play connection sends first.
-fn join_keys() -> [PacketKey; 7] {
+fn join_keys() -> [PacketKey; 8] {
     [
         LoginPlay::KEY,
         SetDefaultSpawnPosition::KEY,
@@ -263,6 +263,7 @@ fn join_keys() -> [PacketKey; 7] {
         GameEvent::KEY,
         SynchronizePlayerPosition::KEY,
         SetHealth::KEY,
+        protocol::UpdateAttributes::KEY,
     ]
 }
 
@@ -528,6 +529,8 @@ async fn the_join_teleports_to_the_entry_pose_then_sets_health() {
     assert_eq!((teleport.x, teleport.y, teleport.z), (100.5, 70.0, -20.25));
     assert_eq!((teleport.yaw, teleport.pitch), (90.0, 12.5));
 
+    // Set Health follows the teleport; the player's own attributes close the
+    // join (Шаг 24c). Both are decoded from the wire, not the arguments.
     let (id, payload) = next_packet(&mut client).await;
     assert_eq!(
         id,
@@ -539,6 +542,26 @@ async fn the_join_teleports_to_the_entry_pose_then_sets_health() {
     assert_eq!(health.health, 15.5);
     assert_eq!(health.food, 17);
     assert_eq!(health.saturation, 2.5);
+
+    let (id, payload) = next_packet(&mut client).await;
+    assert_eq!(
+        id,
+        ids.id(protocol::UpdateAttributes::KEY),
+        "the own attributes follow Set Health"
+    );
+    let attributes =
+        protocol::UpdateAttributes::decode_payload(&mut protocol::PacketReader::new(&payload))
+            .expect("decodable attributes");
+    assert_eq!(attributes.entity_id, 7);
+    assert_eq!(
+        attributes.attributes.len(),
+        3,
+        "survival sends the three base attributes"
+    );
+    assert!(attributes
+        .attributes
+        .iter()
+        .all(|attribute| attribute.modifiers.is_empty()));
 }
 
 /// The property of step 3.3c: while the loader pool is stuck inside the

@@ -94,7 +94,7 @@ fn spawn_metadata(sneaking: bool, swimming: bool, forced: Forced, game_mode: i32
 /// +0.5`), which vanilla adds in creative only.
 // SOURCE: two-bot vanilla trace 26.3 (C1/C2 survival values 4.5, 0.1, 3.0;
 // C6 creative payload 123 bytes with the two resource-location modifiers).
-fn spawn_attributes(entity_id: PlayerId, game_mode: i32) -> UpdateAttributes {
+pub(crate) fn spawn_attributes(entity_id: PlayerId, game_mode: i32) -> UpdateAttributes {
     if game_mode == 1 {
         return UpdateAttributes {
             entity_id,

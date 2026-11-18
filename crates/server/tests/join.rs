@@ -14,7 +14,7 @@ use protocol::{
     ClientInformation, ConfirmTeleportation, FinishAck, FinishConfiguration, GameEvent, Handshake,
     LoginAcknowledged, LoginPlay, LoginStart, LoginSuccess, NextState, PacketReader,
     PlayerInfoUpdate, RegistryData, SetCenterChunk, SetDefaultSpawnPosition, SetHealth,
-    SynchronizePlayerPosition, UpdateTags,
+    SynchronizePlayerPosition, UpdateAttributes, UpdateTags,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -262,6 +262,23 @@ async fn full_join_handshake_reaches_play_with_registry_data() {
     assert_eq!(health.health, 20.0);
     assert_eq!(health.food, 20);
     assert_eq!(health.saturation, 5.0);
+
+    // The player's own attributes close the join (Шаг 24c): the client takes
+    // its block reach from them, so they must be on the wire in survival too.
+    let (id, payload) = recv(&mut stream).await;
+    assert_eq!(id, UpdateAttributes::ID, "expected the own attributes");
+    let mut reader = PacketReader::new(&payload);
+    let attributes = UpdateAttributes::decode_payload(&mut reader).expect("decodable");
+    reader.ensure_empty().expect("no trailing bytes");
+    assert_eq!(attributes.entity_id, 1, "the local player");
+    assert_eq!(attributes.attributes.len(), 3, "survival base attributes");
+    assert!(
+        attributes
+            .attributes
+            .iter()
+            .all(|attribute| attribute.modifiers.is_empty()),
+        "no creative modifiers in survival"
+    );
 
     // Confirm the teleport, then close: the server must drop the socket.
     let confirm = ConfirmTeleportation {
