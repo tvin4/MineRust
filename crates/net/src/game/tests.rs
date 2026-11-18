@@ -43,7 +43,7 @@ fn join_fixture_with(
 }
 
 /// A join registration plus the connection's side of its outbound queue.
-fn join_fixture(id: PlayerId) -> (PlayerJoin, mpsc::Receiver<ServerMessage>) {
+pub(crate) fn join_fixture(id: PlayerId) -> (PlayerJoin, mpsc::Receiver<ServerMessage>) {
     let (join, receiver, _kick, _slot) = join_fixture_with(id, OUTBOUND_CAPACITY);
     (join, receiver)
 }

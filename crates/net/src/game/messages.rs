@@ -75,6 +75,14 @@ pub enum ToGame {
     },
     /// Right click on a block (Шаг 24b): the placement request.
     UseItemOn(BlockPlacement),
+    /// A player typed a chat line (Шаг 25a). The tick broadcasts it as
+    /// `player_chat` to every client, the sender included.
+    Chat {
+        /// Player that typed.
+        id: PlayerId,
+        /// The line, already capped to the protocol's 256 characters.
+        message: String,
+    },
 }
 
 /// One `use_item_on` (66) as the game thread receives it (Шаг 24b).
@@ -275,6 +283,13 @@ pub enum ServerMessage {
         /// Why the connection ends.
         reason: KickReason,
     },
+    /// One chat line of the world (Шаг 25a): the connection writes
+    /// `player_chat` with the runtime id of [`protocol::PlayerChat::KEY`].
+    /// Sent to every client, the sender included.
+    PlayerChat(protocol::PlayerChat),
+    /// One system line (Шаг 25a): the connection writes `system_chat` for the
+    /// join/leave lines and the command replies.
+    SystemChat(protocol::SystemChat),
 }
 
 /// Why the game thread closes a connection.

@@ -1699,6 +1699,423 @@ impl SetHeldSlot {
     }
 }
 
+/// Maximum length of a chat message or a command, in characters.
+///
+/// SOURCE: the vanilla 26.3 client refuses longer input; every S19/S21 trace
+/// message is far below it.
+const MAX_CHAT_CHARS: usize = 256;
+
+/// Key of the clientbound command tree in the play state (Step 25b).
+pub const COMMANDS_TREE: PacketKey =
+    PacketKey::clientbound(ProtocolState::Play, "minecraft:commands", 0x10);
+
+/// Serverbound Chat (play id 9): one player chat message (Step 25a).
+///
+/// Only the text is decoded. The S19 trace shows `timestamp i64`, `salt i64`,
+/// an absent signature option, a message count and an acknowledged bitset
+/// after the text; in offline mode the server ignores all of them, and their
+/// exact split is not needed to deliver the line.
+// SOURCE: 2026-11-18_s19s20-vanilla-step25-r1, conn-1 seq 62417.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatMessage {
+    /// The typed text.
+    pub message: String,
+}
+
+impl ChatMessage {
+    /// Packet id of Chat (play state, serverbound).
+    pub const ID: u32 = 0x09;
+
+    /// Key that resolves the Chat id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::serverbound(ProtocolState::Play, "minecraft:chat", Self::ID);
+
+    /// Decodes the payload; the packet id must already be consumed.
+    pub fn decode_payload(reader: &mut PacketReader<'_>) -> Result<Self, CodecError> {
+        Ok(Self {
+            message: reader.read_string(MAX_CHAT_CHARS)?,
+        })
+    }
+
+    /// Encodes the payload (packet id excluded), for tests.
+    pub fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
+        let mut writer = PacketWriter::new();
+        writer.write_string(&self.message, MAX_CHAT_CHARS)?;
+        Ok(writer.into_bytes())
+    }
+}
+
+/// Serverbound Chat Command (play id 7): one command typed by the player
+/// (Step 25a/25b), without the leading slash.
+///
+/// SOURCE: 2026-11-18_s21-l2-vanilla-step25-r2, conn-1 seq 78557: a single
+/// String (`11 "gamemode creative"`), no trailing bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatCommand {
+    /// Command text, without the leading `/`.
+    pub command: String,
+}
+
+impl ChatCommand {
+    /// Packet id of Chat Command (play state, serverbound).
+    pub const ID: u32 = 0x07;
+
+    /// Key that resolves the Chat Command id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::serverbound(ProtocolState::Play, "minecraft:chat_command", Self::ID);
+
+    /// Decodes the payload; the packet id must already be consumed.
+    pub fn decode_payload(reader: &mut PacketReader<'_>) -> Result<Self, CodecError> {
+        Ok(Self {
+            command: reader.read_string(MAX_CHAT_CHARS)?,
+        })
+    }
+}
+
+/// Serverbound Chat Command Signed (play id 8): the signed variant of
+/// [`ChatCommand`]. Offline clients use id 7; the S19 trace carries none.
+///
+/// The text is the first field in both variants, so the same decoder serves
+/// both and the signature tail is ignored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatCommandSigned {
+    /// Command text, without the leading `/`.
+    pub command: String,
+}
+
+impl ChatCommandSigned {
+    /// Packet id of Chat Command Signed (play state, serverbound).
+    pub const ID: u32 = 0x08;
+
+    /// Key that resolves the Chat Command Signed id at runtime.
+    pub const KEY: PacketKey = PacketKey::serverbound(
+        ProtocolState::Play,
+        "minecraft:chat_command_signed",
+        Self::ID,
+    );
+
+    /// Decodes the payload; the packet id must already be consumed.
+    pub fn decode_payload(reader: &mut PacketReader<'_>) -> Result<Self, CodecError> {
+        Ok(Self {
+            command: reader.read_string(MAX_CHAT_CHARS)?,
+        })
+    }
+}
+
+/// Clientbound Player Chat (play id 66): one chat line, sent to every client
+/// including the sender (Step 25a).
+///
+/// The packet is reproduced field for field from the S19 trace except the
+/// sender-name component, whose entries our NBT map stores sorted:
+///
+/// - `global_index` VarInt, `sender` UUID, `index` VarInt (`0`), an absent
+///   signature option (`00`), the text, `timestamp` i64 and `salt` i64;
+/// - four constant bytes `00 00 00 01`: the trace does not establish their
+///   field split (unsigned content absent, filter type, chat type). They are
+///   reproduced verbatim and documented as unverified;
+/// - the sender-name component (text/insertion/click/hover with the sender's
+///   UUID), then an absent target-name option.
+///
+/// SOURCE: 2026-11-18_s19s20-vanilla-step25-r1, conn-1 seq 62427 (258 bytes
+/// for a 16-character message from `ChatA`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlayerChat {
+    /// Server-wide message counter.
+    pub global_index: i32,
+    /// Offline UUID of the sender.
+    pub sender: Uuid,
+    /// The message text.
+    pub content: String,
+    /// Milliseconds since the Unix epoch.
+    pub timestamp: i64,
+    /// The rendered sender name (see [`PlayerChat::name_component`]).
+    pub sender_name: NbtTag,
+}
+
+impl PlayerChat {
+    /// Packet id of Player Chat (play state, clientbound).
+    pub const ID: u32 = 0x42;
+
+    /// Key that resolves the Player Chat id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::clientbound(ProtocolState::Play, "minecraft:player_chat", Self::ID);
+
+    /// The four bytes between the salt and the sender-name component.
+    ///
+    /// SOURCE: the S19 trace (identical in both messages); semantics not
+    /// established.
+    const TRACED_TAIL: [u8; 4] = [0x00, 0x00, 0x00, 0x01];
+
+    /// The sender-name component the vanilla trace carries: the name as text
+    /// and insertion, `/tell <name> ` on click and the player entity on hover.
+    ///
+    /// SOURCE: the S19 trace NBT bytes, decoded field by field.
+    pub fn name_component(name: &str, uuid: Uuid) -> NbtTag {
+        let chunks = (0..4)
+            .map(|i| {
+                i32::from_be_bytes([
+                    uuid[i * 4],
+                    uuid[i * 4 + 1],
+                    uuid[i * 4 + 2],
+                    uuid[i * 4 + 3],
+                ])
+            })
+            .collect();
+        let mut click = BTreeMap::new();
+        click.insert(
+            "action".to_owned(),
+            NbtTag::String("suggest_command".to_owned()),
+        );
+        click.insert(
+            "command".to_owned(),
+            NbtTag::String(format!("/tell {name} ")),
+        );
+        let mut hover = BTreeMap::new();
+        hover.insert(
+            "action".to_owned(),
+            NbtTag::String("show_entity".to_owned()),
+        );
+        hover.insert(
+            "id".to_owned(),
+            NbtTag::String("minecraft:player".to_owned()),
+        );
+        hover.insert("name".to_owned(), NbtTag::String(name.to_owned()));
+        hover.insert("uuid".to_owned(), NbtTag::IntArray(chunks));
+        let mut root = BTreeMap::new();
+        root.insert("click_event".to_owned(), NbtTag::Compound(click));
+        root.insert("hover_event".to_owned(), NbtTag::Compound(hover));
+        root.insert("insertion".to_owned(), NbtTag::String(name.to_owned()));
+        root.insert("text".to_owned(), NbtTag::String(name.to_owned()));
+        NbtTag::Compound(root)
+    }
+
+    /// Encodes the payload (packet id excluded).
+    pub fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.global_index);
+        writer.write_uuid(self.sender);
+        writer.write_varint(0); // message index inside the sender's chain
+        writer.write_bool(false); // no signature (offline mode)
+        writer.write_string(&self.content, MAX_CHAT_CHARS)?;
+        writer.write_i64(self.timestamp);
+        writer.write_i64(0); // salt
+        writer.write_bytes(&Self::TRACED_TAIL);
+        writer.write_nbt(&self.sender_name)?;
+        writer.write_bool(false); // no target name
+        Ok(writer.into_bytes())
+    }
+}
+
+/// Clientbound System Chat (play id 124): a component plus the overlay flag
+/// (Step 25a). Join/leave lines, command replies and errors use it.
+///
+/// SOURCE: 2026-11-18_s20-vanilla-step25-r4 and S21 replies: a nameless NBT
+/// component followed by one `00` overlay byte.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SystemChat {
+    /// The message component.
+    pub component: NbtTag,
+    /// Whether the line is drawn in the action bar instead of the chat.
+    pub overlay: bool,
+}
+
+impl SystemChat {
+    /// Packet id of System Chat (play state, clientbound).
+    pub const ID: u32 = 0x7C;
+
+    /// Key that resolves the System Chat id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::clientbound(ProtocolState::Play, "minecraft:system_chat", Self::ID);
+
+    /// The line vanilla sends when a player joins or leaves (Шаг 25a): the
+    /// `multiplayer.player.joined`/`multiplayer.player.left` translation in
+    /// yellow with the player's name component as its only argument.
+    ///
+    /// SOURCE: 2026-11-18_s20-vanilla-step25-r4, conn-1 seq 49174 (joined)
+    /// and 57493 (left); the compound key order is our sorted map's, NBT does
+    /// not define one.
+    pub fn join_leave(key: &str, name: &str, uuid: Uuid) -> Self {
+        let mut root = BTreeMap::new();
+        root.insert("color".to_owned(), NbtTag::String("yellow".to_owned()));
+        root.insert("translate".to_owned(), NbtTag::String(key.to_owned()));
+        root.insert(
+            "with".to_owned(),
+            NbtTag::List(vec![PlayerChat::name_component(name, uuid)]),
+        );
+        Self {
+            component: NbtTag::Compound(root),
+            overlay: false,
+        }
+    }
+
+    /// Encodes the payload (packet id excluded).
+    pub fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
+        let mut writer = PacketWriter::new();
+        writer.write_nbt(&self.component)?;
+        writer.write_bool(self.overlay);
+        Ok(writer.into_bytes())
+    }
+}
+
+/// Clientbound Player Abilities (play id 65): the actor's ability flags and
+/// speeds, sent twice around a game-mode change (Step 25c).
+///
+/// SOURCE: 2026-11-18_s21-l2-vanilla-step25-r2: `0d 3d4ccccd 3dcccccd`
+/// (creative), `00 3d4ccccd 3dcccccd` (survival/adventure), `07 ...`
+/// (spectator).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlayerAbilities {
+    /// Ability flags: `0x01` invulnerable, `0x02` flying, `0x04` may fly,
+    /// `0x08` creative.
+    pub flags: u8,
+    /// Flying speed (`0.05` in every trace).
+    pub flying_speed: f32,
+    /// Walking speed (`0.1` in every trace).
+    pub walking_speed: f32,
+}
+
+impl PlayerAbilities {
+    /// Packet id of Player Abilities (play state, clientbound).
+    pub const ID: u32 = 0x41;
+
+    /// Key that resolves the Player Abilities id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::clientbound(ProtocolState::Play, "minecraft:player_abilities", Self::ID);
+
+    /// The traced flags and speeds for a game mode.
+    ///
+    /// SOURCE: S21 l2: creative `0x0d`, survival/adventure `0x00`, spectator
+    /// `0x07`; speeds `0.05` and `0.1` in all four.
+    pub fn for_mode(game_mode: i32) -> Self {
+        let flags = match game_mode {
+            1 => 0x0D,
+            3 => 0x07,
+            _ => 0x00,
+        };
+        Self {
+            flags,
+            flying_speed: 0.05,
+            walking_speed: 0.1,
+        }
+    }
+
+    /// Encodes the payload (packet id excluded).
+    pub fn encode_payload(&self) -> Vec<u8> {
+        let mut writer = PacketWriter::new();
+        writer.write_u8(self.flags);
+        writer.write_f32(self.flying_speed);
+        writer.write_f32(self.walking_speed);
+        writer.into_bytes()
+    }
+}
+
+/// Clientbound Player Info Update carrying only the game mode action mask
+/// (`0x04`), as vanilla sends on a game-mode change (Step 25c).
+///
+/// SOURCE: 2026-11-18_s21-l2-vanilla-step25-r2, conn-1 seq 78584: `04 01` +
+/// UUID + mode VarInt = 19 bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayerInfoGameMode {
+    /// Player whose mode changed.
+    pub uuid: Uuid,
+    /// New game mode (`0..=3`).
+    pub game_mode: i32,
+}
+
+impl PlayerInfoGameMode {
+    /// Packet id of Player Info Update (play state, clientbound).
+    pub const ID: u32 = 0x47;
+
+    /// Key that resolves the Player Info Update id at runtime.
+    pub const KEY: PacketKey = PacketKey::clientbound(
+        ProtocolState::Play,
+        "minecraft:player_info_update",
+        Self::ID,
+    );
+
+    /// Action mask of the mode-only update.
+    const ACTIONS: u8 = 0x04;
+
+    /// Encodes the payload (packet id excluded).
+    pub fn encode_payload(&self) -> Vec<u8> {
+        let mut writer = PacketWriter::new();
+        writer.write_u8(Self::ACTIONS);
+        writer.write_varint(1);
+        writer.write_uuid(self.uuid);
+        writer.write_varint(self.game_mode);
+        writer.into_bytes()
+    }
+}
+
+/// One clock update of [`SetTime`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClockUpdate {
+    /// Clock registry id (`0` = `minecraft:overworld` in the trace).
+    pub id: i32,
+    /// Total ticks of the clock (day count × 24000 + time of day).
+    pub total_ticks: i32,
+    /// Partial tick (`0.0` in every trace).
+    pub partial_tick: f32,
+    /// Clock rate (`1.0` in every trace).
+    pub rate: f32,
+}
+
+/// Clientbound Set Time (play id 115): the world game time plus per-clock
+/// updates (Step 25b `/time set day`).
+///
+/// The layout was derived from the traces: `game_time i64`, a VarInt count,
+/// then per clock a VarInt id, a VarInt total-ticks value, an f32 partial
+/// tick and an f32 rate. The 31-byte join packet (two clocks) and the 21-byte
+/// `/time set day` packet (one clock, 25000 ticks) both decode exactly under
+/// it.
+// SOURCE: 2026-11-18_s21-l2-vanilla-step25-r2, conn-1 seq 60 and 106749.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SetTime {
+    /// World game time in ticks.
+    pub game_time: i64,
+    /// Clock updates of this packet.
+    pub clocks: Vec<ClockUpdate>,
+}
+
+impl SetTime {
+    /// Packet id of Set Time (play state, clientbound).
+    pub const ID: u32 = 115;
+
+    /// Key that resolves the Set Time id at runtime.
+    pub const KEY: PacketKey =
+        PacketKey::clientbound(ProtocolState::Play, "minecraft:set_time", Self::ID);
+
+    /// Encodes the payload (packet id excluded).
+    pub fn encode_payload(&self) -> Vec<u8> {
+        let mut writer = PacketWriter::new();
+        writer.write_i64(self.game_time);
+        writer.write_varint(self.clocks.len() as i32);
+        for clock in &self.clocks {
+            writer.write_varint(clock.id);
+            writer.write_varint(clock.total_ticks);
+            writer.write_f32(clock.partial_tick);
+            writer.write_f32(clock.rate);
+        }
+        writer.into_bytes()
+    }
+
+    /// Decodes the payload; the packet id must already be consumed.
+    pub fn decode_payload(reader: &mut PacketReader<'_>) -> Result<Self, CodecError> {
+        let game_time = reader.read_i64()?;
+        let count = super::read_count(reader)?;
+        let mut clocks = Vec::with_capacity(count.min(8));
+        for _ in 0..count {
+            clocks.push(ClockUpdate {
+                id: reader.read_varint()?,
+                total_ticks: reader.read_varint()?,
+                partial_tick: reader.read_f32()?,
+                rate: reader.read_f32()?,
+            });
+        }
+        Ok(Self { game_time, clocks })
+    }
+}
+
 /// Reads a non-negative length prefix used by the array fields above.
 fn read_count(reader: &mut PacketReader<'_>) -> Result<usize, CodecError> {
     let count = reader.read_varint()?;
@@ -2535,5 +2952,174 @@ mod tests {
         let mut writer = PacketWriter::new();
         stack.encode(&mut writer);
         assert_eq!(writer.into_bytes(), bytes);
+    }
+}
+
+#[cfg(test)]
+mod chat_tests {
+    //! Byte tests for the step-25 chat, ability and time packets: every
+    //! expectation is a payload captured from vanilla 26.3 (traces of step
+    //! 25.0), and the only tolerated difference is NBT compound key order.
+
+    use super::*;
+
+    /// Parses a hex dump with spaces or newlines.
+    fn hex(text: &str) -> Vec<u8> {
+        text.split_whitespace()
+            .map(|byte| u8::from_str_radix(byte, 16).expect("hex byte"))
+            .collect()
+    }
+
+    /// The serverbound chat of the S19 trace (39 bytes).
+    // SOURCE: 2026-11-18_s19s20-vanilla-step25-r1, conn-1 seq 62417.
+    const S19_CHAT: &str = "\
+        10 73 31 39 20 68 65 6c 6c 6f 20 66 72 6f 6d 20 41 00 00 01 a1 ef fe 1a a0 \
+        77 0f 7f 60 99 73 65 85 00 00 00 00 00 01";
+
+    /// Everything of the S19 `player_chat` before the sender-name component.
+    // SOURCE: 2026-11-18_s19s20-vanilla-step25-r1, conn-1 seq 62427.
+    const S19_PLAYER_CHAT_PREFIX: &str = "\
+        00 14 af be 82 83 6c 32 06 8b 29 73 72 6b 87 9d e6 00 00 10 73 31 39 20 68 \
+        65 6c 6c 6f 20 66 72 6f 6d 20 41 00 00 01 a1 ef fe 1a ab 00 00 00 00 00 00 \
+        00 00 00 00 00 01";
+
+    #[test]
+    fn the_s19_chat_decodes_to_its_text() {
+        let bytes = hex(S19_CHAT);
+        assert_eq!(bytes.len(), 39);
+        let mut reader = PacketReader::new(&bytes);
+        let packet = ChatMessage::decode_payload(&mut reader).expect("decodable");
+        assert_eq!(packet.message, "s19 hello from A");
+        // The tail (timestamp, salt, signature and acknowledgement) is not
+        // read, so the reader is not empty; a decode keeps working.
+        assert!(!reader.is_empty());
+    }
+
+    #[test]
+    fn the_s19_player_chat_matches_the_trace() {
+        let sender = hex("14 af be 82 83 6c 32 06 8b 29 73 72 6b 87 9d e6");
+        let mut uuid = [0u8; 16];
+        uuid.copy_from_slice(&sender);
+        let line = PlayerChat {
+            global_index: 0,
+            sender: uuid,
+            content: "s19 hello from A".to_owned(),
+            timestamp: 0x0000_01a1_effe_1aab,
+            sender_name: PlayerChat::name_component("ChatA", uuid),
+        };
+        let payload = line.encode_payload().expect("encodable");
+        let prefix = hex(S19_PLAYER_CHAT_PREFIX);
+        assert_eq!(payload.len(), 258, "the traced length");
+        assert_eq!(&payload[..prefix.len()], &prefix[..], "the traced prefix");
+        // Root compound end, the hover compound end and the absent target
+        // name close the packet.
+        // Our compound keys are sorted, so the hover compound closes before
+        // `insertion`/`text` while vanilla closes it last; the packet ends
+        // with the root compound end and the absent target name. The traced
+        // bytes carry one more `00` there for that reason.
+        assert_eq!(&payload[256..], &[0x00, 0x00]);
+    }
+
+    #[test]
+    fn the_sender_name_component_roundtrips() {
+        let uuid = protocol_uuid();
+        let component = PlayerChat::name_component("ChatA", uuid);
+        let mut writer = PacketWriter::new();
+        writer.write_nbt(&component).expect("encodable");
+        let bytes = writer.into_bytes();
+        let mut reader = PacketReader::new(&bytes);
+        let decoded = reader.read_nbt().expect("decodable");
+        reader.ensure_empty().expect("the whole component");
+        assert_eq!(decoded, component);
+    }
+
+    /// The offline UUID of `ChatA` as the traces carry it.
+    fn protocol_uuid() -> Uuid {
+        crate::offline_uuid("ChatA")
+    }
+
+    #[test]
+    fn the_s20_join_line_has_the_traced_length() {
+        let uuid = crate::offline_uuid("JoinB");
+        let line = SystemChat::join_leave("multiplayer.player.joined", "JoinB", uuid);
+        let payload = line.encode_payload().expect("encodable");
+        // SOURCE: 2026-11-18_s20-vanilla-step25-r4, conn-1 seq 49174: the
+        // joined line is 270 bytes with its trailing overlay flag.
+        assert_eq!(payload.len(), 270);
+        assert_eq!(*payload.last().expect("non-empty"), 0);
+        let mut reader = PacketReader::new(&payload[..payload.len() - 1]);
+        let decoded = reader.read_nbt().expect("decodable");
+        reader.ensure_empty().expect("component then the flag");
+        assert_eq!(decoded, line.component);
+    }
+
+    #[test]
+    fn player_abilities_carry_the_traced_mode_bytes() {
+        // SOURCE: 2026-11-18_s21-l2-vanilla-step25-r2: creative `0d ...`,
+        // spectator `07 ...`; survival and adventure `00 ...`.
+        let speeds = "3d 4c cc cd 3d cc cc cd";
+        for (mode, flags) in [(1, "0d"), (3, "07"), (0, "00"), (2, "00")] {
+            let bytes = PlayerAbilities::for_mode(mode).encode_payload();
+            assert_eq!(bytes, hex(&format!("{flags} {speeds}")), "mode {mode}");
+        }
+    }
+
+    #[test]
+    fn set_time_decodes_the_join_and_the_time_set_packets() {
+        // SOURCE: 2026-11-18_s21-l2-vanilla-step25-r2, conn-1 seq 60 (join,
+        // two clocks) and seq 106749 (`/time set day`, one clock).
+        let join = hex(
+            "00 00 00 00 00 00 0b b5 02 01 b5 17 00 00 00 00 3f 80 00 00 \
+             00 b5 17 00 00 00 00 3f 80 00 00",
+        );
+        assert_eq!(join.len(), 31);
+        let mut reader = PacketReader::new(&join);
+        let packet = SetTime::decode_payload(&mut reader).expect("decodable");
+        reader.ensure_empty().expect("the whole packet");
+        assert_eq!(packet.game_time, 0x0000_0000_0000_0bb5);
+        assert_eq!(
+            packet.clocks,
+            vec![
+                ClockUpdate {
+                    id: 1,
+                    total_ticks: 2997,
+                    partial_tick: 0.0,
+                    rate: 1.0,
+                },
+                ClockUpdate {
+                    id: 0,
+                    total_ticks: 2997,
+                    partial_tick: 0.0,
+                    rate: 1.0,
+                },
+            ]
+        );
+        assert_eq!(
+            SetTime {
+                game_time: packet.game_time,
+                clocks: packet.clocks.clone(),
+            }
+            .encode_payload(),
+            join
+        );
+
+        let day = hex("00 00 00 00 00 00 13 41 01 00 a8 c3 01 00 00 00 00 3f 80 00 00");
+        assert_eq!(day.len(), 21);
+        let mut reader = PacketReader::new(&day);
+        let packet = SetTime::decode_payload(&mut reader).expect("decodable");
+        reader.ensure_empty().expect("the whole packet");
+        assert_eq!(
+            packet,
+            SetTime {
+                game_time: 0x0000_0000_0000_1341,
+                clocks: vec![ClockUpdate {
+                    id: 0,
+                    total_ticks: 25_000,
+                    partial_tick: 0.0,
+                    rate: 1.0,
+                }],
+            }
+        );
+        assert_eq!(packet.encode_payload(), day);
     }
 }

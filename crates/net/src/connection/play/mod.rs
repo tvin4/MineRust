@@ -17,12 +17,13 @@ use chunk_pace::ChunkPace;
 
 use data::{GameData, PacketIds};
 use protocol::{
-    decode_frame, BlockChangedAck, BlockDestruction, BlockUpdate, ChunkBatchReceived,
+    decode_frame, BlockChangedAck, BlockDestruction, BlockUpdate, ChatMessage, ChunkBatchReceived,
     ClientInformation, ConfirmTeleportation, ContainerSetContent, ContainerSetSlot, DisconnectPlay,
-    ItemStack, KeepAlive, LevelEvent, PacketReader, PickItemFromBlock, PlayerAction, PlayerCommand,
-    PlayerInput, Position, ProtocolState, Punch, SetCarriedItem, SetCreativeModeSlot, SetHeldSlot,
-    StatusInfo, UseItemOn, MAX_STRING_CHARS, MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT,
-    MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
+    ItemStack, KeepAlive, LevelEvent, PacketReader, PickItemFromBlock, PlayerAction, PlayerChat,
+    PlayerCommand, PlayerInput, Position, ProtocolState, Punch, SetCarriedItem,
+    SetCreativeModeSlot, SetHeldSlot, StatusInfo, SystemChat, UseItemOn, MAX_STRING_CHARS,
+    MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT, MOVE_PLAYER_STATUS_ONLY,
+    PLAY_PLUGIN_MESSAGE,
 };
 use std::sync::Arc;
 
@@ -670,6 +671,29 @@ where
                         }
                         return Ok(());
                     }
+                    // One chat line of the world (Шаг 25a): `player_chat` with
+                    // the runtime id of its key, the same bytes for every
+                    // recipient.
+                    Some(ServerMessage::PlayerChat(line)) => {
+                        write_tracked(
+                            &mut writer,
+                            ProtocolState::Play,
+                            ids.id(PlayerChat::KEY),
+                            &line.encode_payload()?,
+                        )
+                        .await?;
+                    }
+                    // One system line (Шаг 25a): join/leave and the command
+                    // replies.
+                    Some(ServerMessage::SystemChat(line)) => {
+                        write_tracked(
+                            &mut writer,
+                            ProtocolState::Play,
+                            ids.id(SystemChat::KEY),
+                            &line.encode_payload()?,
+                        )
+                        .await?;
+                    }
                     // The game thread dropped this player (quit); the
                     // connection closes. The kick reason is read in M4.1's
                     // kick policy (see the game module).
@@ -890,6 +914,20 @@ where
                         };
                         if let Err(err) = game.send(ToGame::UseItemOn(action)).await {
                             warn!(%err, "the game thread is gone, placement dropped");
+                        }
+                    }
+                    // Chat (Шаг 25a): only the text is read; the game thread
+                    // owns the broadcast to every client.
+                    id if id == ids.id(ChatMessage::KEY) => {
+                        let chat = ChatMessage::decode_payload(&mut payload)?;
+                        if let Err(err) = game
+                            .send(ToGame::Chat {
+                                id: player_id,
+                                message: chat.message,
+                            })
+                            .await
+                        {
+                            warn!(%err, "the game thread is gone, chat dropped");
                         }
                     }
                     // M2 has no gameplay: unknown or not-yet-handled

@@ -55,6 +55,11 @@ pub struct Scheduler {
     /// Number of the last **completed** tick. A break that arrives before
     /// tick `T` sees `T - 1` and queues the cascade for `T + 1`.
     current_tick: u64,
+    /// Server-wide `global_index` of the last `player_chat` line (Шаг 25a).
+    ///
+    /// The S19 trace numbers every message of the run, not per sender, and the
+    /// counter lives as long as the world.
+    chat_index: i32,
     /// Tests measure the dispatch on a single region; production always
     /// ticks one region inline (the transfer costs more than it saves).
     #[cfg(test)]
@@ -107,6 +112,7 @@ impl Scheduler {
             store: None,
             pending_breaks: Vec::new(),
             current_tick: 0,
+            chat_index: 0,
             #[cfg(test)]
             force_dispatch: false,
         }
@@ -115,6 +121,16 @@ impl Scheduler {
     /// Number of the last completed tick (see [`Self::tick`]).
     pub(crate) fn current_tick(&self) -> u64 {
         self.current_tick
+    }
+
+    /// Takes the next server-wide `player_chat` index (Шаг 25a).
+    ///
+    /// The S19 trace starts at `0` and counts every message of the world, so
+    /// the value is returned before it is raised.
+    pub(crate) fn next_chat_index(&mut self) -> i32 {
+        let index = self.chat_index;
+        self.chat_index = self.chat_index.saturating_add(1);
+        index
     }
 
     /// Queues a kelp block above a broken one for its tick.

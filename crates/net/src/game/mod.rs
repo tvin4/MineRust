@@ -13,6 +13,7 @@
 
 mod block_action;
 mod break_block;
+mod chat;
 mod dig;
 mod entities;
 mod grid;
@@ -764,6 +765,10 @@ fn apply<W: std::io::Write>(
                 if let Some(dig) = dig::take(scheduler, old) {
                     dig::reset(scheduler, old, dig.position);
                 }
+                // Шаг 25a: the kicked session leaves the world like a quit, so
+                // the others see the leave line. Vanilla was not traced for
+                // this path; the line is sent once, by this removal.
+                chat::announce_leave(scheduler, old);
                 scheduler.remove_player(old);
             }
             let payload = serde_json::json!({
@@ -797,6 +802,9 @@ fn apply<W: std::io::Write>(
                 scheduler.deliver(id, ServerMessage::SetHeldSlot { slot: held });
                 scheduler.deliver(id, ServerMessage::ContainerSetContent { state_id, items });
             }
+            // Шаг 25a: the others see the join line before the tab entry and
+            // the spawn of this player, as the S20 vanilla trace does.
+            chat::announce_join(scheduler, id);
             replay.record(tick, Some(region_id), id, "join", payload);
         }
         ToGame::TeleportAck { id, teleport_id } => {
@@ -826,6 +834,9 @@ fn apply<W: std::io::Write>(
             if let Some(dig) = dig::take(scheduler, id) {
                 dig::reset(scheduler, id, dig.position);
             }
+            // Шаг 25a: the others see the leave line before the removal
+            // packets, as the S20 vanilla trace does.
+            chat::announce_leave(scheduler, id);
             scheduler.remove_player(id);
         }
         ToGame::BlockAction(action) => {
@@ -887,6 +898,18 @@ fn apply<W: std::io::Write>(
             config.store.as_ref().map(|store| store.blocks()),
             config.registries.as_deref(),
         ),
+        ToGame::Chat { id, message } => {
+            // The text itself stays out of the replay journal: the line is
+            // player content, its length is enough to identify the event.
+            replay.record(
+                tick,
+                scheduler.region_of(id),
+                id,
+                "chat",
+                serde_json::json!({ "chars": message.chars().count() }),
+            );
+            chat::broadcast(scheduler, id, &message);
+        }
     }
 }
 

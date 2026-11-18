@@ -46,13 +46,14 @@ pub use login::{
 };
 pub use movement::{MoveEntityPos, MoveEntityPosRot, MoveEntityRot, MoveHeader, RotateHead};
 pub use play::{
-    hashed_seed, BlockChangedAck, BlockDestruction, BlockUpdate, ConfirmTeleportation,
-    ContainerSetContent, ContainerSetSlot, DeathLocation, DisconnectPlay, ForgetLevelChunk,
-    GameEvent, ItemStack, KeepAlive, LevelEvent, LoginPlay, PickItemFromBlock, PlayerAction,
-    PlayerCommand, PlayerInfoEntry, PlayerInfoUpdate, PlayerInput, Punch, SetCarriedItem,
-    SetCenterChunk, SetCreativeModeSlot, SetDefaultSpawnPosition, SetHealth, SetHeldSlot,
-    SynchronizePlayerPosition, UseItemOn, MOVE_PLAYER_POS, MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT,
-    MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
+    hashed_seed, BlockChangedAck, BlockDestruction, BlockUpdate, ChatCommand, ChatCommandSigned,
+    ChatMessage, ClockUpdate, ConfirmTeleportation, ContainerSetContent, ContainerSetSlot,
+    DeathLocation, DisconnectPlay, ForgetLevelChunk, GameEvent, ItemStack, KeepAlive, LevelEvent,
+    LoginPlay, PickItemFromBlock, PlayerAbilities, PlayerAction, PlayerChat, PlayerCommand,
+    PlayerInfoEntry, PlayerInfoGameMode, PlayerInfoUpdate, PlayerInput, Punch, SetCarriedItem,
+    SetCenterChunk, SetCreativeModeSlot, SetDefaultSpawnPosition, SetHealth, SetHeldSlot, SetTime,
+    SynchronizePlayerPosition, SystemChat, UseItemOn, COMMANDS_TREE, MOVE_PLAYER_POS,
+    MOVE_PLAYER_POS_ROT, MOVE_PLAYER_ROT, MOVE_PLAYER_STATUS_ONLY, PLAY_PLUGIN_MESSAGE,
 };
 pub use status::{PingRequest, PongResponse, StatusRequest, StatusResponse};
 
@@ -132,6 +133,15 @@ pub fn used_packet_keys() -> &'static [PacketKey] {
         UpdateAttributes::KEY,
         EntityPositionSync::KEY,
         SwingAnimation::KEY,
+        // play, clientbound chat (Шаг 25a)
+        PlayerChat::KEY,
+        SystemChat::KEY,
+        PlayerAbilities::KEY,
+        COMMANDS_TREE,
+        // play, serverbound chat and commands (Шаг 25a)
+        ChatMessage::KEY,
+        ChatCommand::KEY,
+        ChatCommandSigned::KEY,
         // play, serverbound
         ChunkBatchReceived::KEY,
         ConfirmTeleportation::KEY,
