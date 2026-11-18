@@ -23,8 +23,8 @@ mod writer;
 
 pub use error::PlayerdataError;
 pub use state::{
-    Pose, SavedPlayer, Snapshot, NEW_PLAYER_FOOD, NEW_PLAYER_HEALTH, NEW_PLAYER_SATURATION,
-    OVERWORLD,
+    Pose, SavedItem, SavedPlayer, Snapshot, NEW_PLAYER_FOOD, NEW_PLAYER_HEALTH,
+    NEW_PLAYER_SATURATION, OVERWORLD,
 };
 pub use store::{file_name, Store};
 pub use writer::{spawn, Sink, Writer, DEFAULT_CAPACITY};

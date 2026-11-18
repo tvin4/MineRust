@@ -158,6 +158,7 @@ mod tests {
             food: 20,
             saturation: 5.0,
             game_mode: 0,
+            inventory: Vec::new(),
         }
     }
 

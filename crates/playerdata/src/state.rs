@@ -22,6 +22,22 @@ pub struct Pose {
     pub pitch: f32,
 }
 
+/// One stack of the saved `Inventory` list (Шаг 24d).
+///
+/// Vanilla stores the list as compounds `{count: int, Slot: byte, id: string}`
+/// (Шаг 24.0d read a real 26.3 file); components are not modelled and a stack
+/// that carries any is not written back (see `store::update`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedItem {
+    /// `Slot` byte; the player-file slot space (`0..=8` hotbar, `9..=35`
+    /// main, `36..=39` armor, `40` offhand).
+    pub slot: i32,
+    /// `count` int; `1..=99` is what the server writes.
+    pub count: i32,
+    /// `id` string, e.g. `minecraft:stone`.
+    pub id: String,
+}
+
 /// The part of an existing player file the join sequence reads.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SavedPlayer {
@@ -43,6 +59,9 @@ pub struct SavedPlayer {
     pub game_mode: Option<i32>,
     /// `Dimension` as stored; only `minecraft:overworld` is joinable.
     pub dimension: String,
+    /// `Inventory` entries the server reads back (Шаг 24d). `Slot` is the
+    /// player-file slot space; `update` writes the hotbar back into it.
+    pub inventory: Vec<SavedItem>,
 }
 
 impl SavedPlayer {
@@ -56,7 +75,7 @@ impl SavedPlayer {
 pub const OVERWORLD: &str = "minecraft:overworld";
 
 /// The state one save operation writes: what the tick thread snapshots.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
     /// Offline UUID of the player (also selects the file name).
     pub uuid: Uuid,
@@ -72,6 +91,10 @@ pub struct Snapshot {
     pub saturation: f32,
     /// Current game mode (0..=3).
     pub game_mode: i32,
+    /// Hotbar stacks to write into `Inventory` (Шаг 24d). The player-file
+    /// slot space is `0..=8`; entries of other slots in an existing file are
+    /// kept as they are.
+    pub inventory: Vec<SavedItem>,
 }
 
 /// The values a brand-new player starts with (the vanilla S7 trace of a

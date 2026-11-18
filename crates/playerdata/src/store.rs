@@ -31,8 +31,8 @@ use tracing::{info, warn};
 
 use crate::error::PlayerdataError;
 use crate::state::{
-    Pose, SavedPlayer, Snapshot, NEW_PLAYER_FOOD, NEW_PLAYER_HEALTH, NEW_PLAYER_SATURATION,
-    OVERWORLD,
+    Pose, SavedItem, SavedPlayer, Snapshot, NEW_PLAYER_FOOD, NEW_PLAYER_HEALTH,
+    NEW_PLAYER_SATURATION, OVERWORLD,
 };
 
 /// Marker file of a save root created by this server.
@@ -274,6 +274,7 @@ impl Store {
             on_ground,
             game_mode,
             dimension,
+            inventory: parse_inventory(map, uuid),
         })
     }
 }
@@ -353,6 +354,10 @@ fn update(map: &mut BTreeMap<String, NbtTag>, snapshot: &Snapshot, data_version:
     map.insert("playerGameType".to_owned(), NbtTag::Int(snapshot.game_mode));
     map.insert("Dimension".to_owned(), NbtTag::String(OVERWORLD.to_owned()));
     map.insert(
+        "Inventory".to_owned(),
+        inventory_tags(map.get("Inventory"), &snapshot.inventory),
+    );
+    map.insert(
         "OnGround".to_owned(),
         NbtTag::Byte(if snapshot.on_ground { 1 } else { 0 }),
     );
@@ -375,6 +380,49 @@ fn update(map: &mut BTreeMap<String, NbtTag>, snapshot: &Snapshot, data_version:
     map.entry("XpLevel".to_owned()).or_insert(NbtTag::Int(0));
     map.entry("XpTotal".to_owned()).or_insert(NbtTag::Int(0));
     map.entry("XpP".to_owned()).or_insert(NbtTag::Float(0.0));
+}
+
+/// The `Inventory` list written back: the snapshot's hotbar entries plus
+/// every existing entry the server does not model (all slots above the
+/// hotbar), in slot order.
+///
+/// Шаг 24d: only the hotbar is saved, as the plan says. Keeping the other
+/// entries byte-for-byte means a file from the vanilla server does not lose
+/// the armor or the main inventory when this server saves it.
+fn inventory_tags(existing: Option<&NbtTag>, hotbar: &[SavedItem]) -> NbtTag {
+    let mut entries: Vec<(i32, NbtTag)> = Vec::new();
+    if let Some(NbtTag::List(list)) = existing {
+        for entry in list {
+            let slot = match entry {
+                NbtTag::Compound(fields) => match fields.get("Slot") {
+                    Some(NbtTag::Byte(value)) => Some(i32::from(*value)),
+                    Some(NbtTag::Int(value)) => Some(*value),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(slot) = slot {
+                if !(0..=8).contains(&slot) {
+                    entries.push((slot, entry.clone()));
+                }
+            }
+        }
+    }
+    for item in hotbar {
+        if !(0..=8).contains(&item.slot) {
+            continue;
+        }
+        entries.push((
+            item.slot,
+            NbtTag::Compound(BTreeMap::from([
+                ("count".to_owned(), NbtTag::Int(item.count)),
+                ("Slot".to_owned(), NbtTag::Byte(item.slot as i8)),
+                ("id".to_owned(), NbtTag::String(item.id.clone())),
+            ])),
+        ));
+    }
+    entries.sort_by_key(|(slot, _)| *slot);
+    NbtTag::List(entries.into_iter().map(|(_, tag)| tag).collect())
 }
 
 /// The four big-endian ints of the UUID, the layout the vanilla file uses.
@@ -428,7 +476,80 @@ fn validate(snapshot: &Snapshot) -> Result<(), PlayerdataError> {
             detail: format!("{} is outside 0..=3", snapshot.game_mode),
         });
     }
+    for item in &snapshot.inventory {
+        if !(0..=8).contains(&item.slot) {
+            return Err(PlayerdataError::InvalidValue {
+                field: "Inventory",
+                detail: format!("Slot {} is outside the saved hotbar 0..=8", item.slot),
+            });
+        }
+        if !(1..=99).contains(&item.count) {
+            return Err(PlayerdataError::InvalidValue {
+                field: "Inventory",
+                detail: format!("count {} is outside 1..=99", item.count),
+            });
+        }
+        if item.id.is_empty() {
+            return Err(PlayerdataError::InvalidValue {
+                field: "Inventory",
+                detail: "an entry has an empty item id".to_owned(),
+            });
+        }
+    }
     Ok(())
+}
+
+/// The `Inventory` list of the file, as far as the server models it (Шаг 24d).
+///
+/// SOURCE: a real 26.3 player file (`docs/PLAYERDATA.md` §…; read during
+/// Шаг 24.0d) carries `Inventory` as a list of compounds
+/// `{count: int, Slot: byte, id: string}`. Entries the server cannot read are
+/// skipped with a warning instead of failing the whole file, so an unknown or
+/// newer entry never locks a player out.
+fn parse_inventory(map: &BTreeMap<String, NbtTag>, uuid: Uuid) -> Vec<SavedItem> {
+    let Some(NbtTag::List(entries)) = map.get("Inventory") else {
+        return Vec::new();
+    };
+    let mut items = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let NbtTag::Compound(fields) = entry else {
+            warn!(player = %hex_uuid(uuid), "Inventory entry is not a compound, skipped");
+            continue;
+        };
+        let slot = match fields.get("Slot") {
+            Some(NbtTag::Byte(value)) => i32::from(*value),
+            Some(NbtTag::Int(value)) => *value,
+            _ => {
+                warn!(player = %hex_uuid(uuid), "Inventory entry has no readable Slot, skipped");
+                continue;
+            }
+        };
+        let count = match fields.get("count") {
+            Some(NbtTag::Int(value)) => *value,
+            Some(NbtTag::Byte(value)) => i32::from(*value),
+            _ => {
+                warn!(player = %hex_uuid(uuid), slot, "Inventory entry has no readable count, skipped");
+                continue;
+            }
+        };
+        let id = match fields.get("id") {
+            Some(NbtTag::String(value)) => value.clone(),
+            _ => {
+                warn!(player = %hex_uuid(uuid), slot, "Inventory entry has no item id, skipped");
+                continue;
+            }
+        };
+        if count <= 0 {
+            continue;
+        }
+        // Only the hotbar is modelled (Шаг 24d); the other entries of the
+        // file are kept verbatim by `inventory_tags` on the next write.
+        if !(0..=8).contains(&slot) {
+            continue;
+        }
+        items.push(SavedItem { slot, count, id });
+    }
+    items
 }
 
 /// `Pos` and `Rotation` of the file, if both are complete and finite.
@@ -755,6 +876,7 @@ mod tests {
             food: 17,
             saturation: 0.0,
             game_mode: 0,
+            inventory: Vec::new(),
         }
     }
 
@@ -816,7 +938,14 @@ mod tests {
         let store = Store::open(&dir, 5023, &[]).expect("store");
         let path = store.path(uuid());
         let mut inventory = BTreeMap::new();
-        inventory.insert("Slot".to_owned(), NbtTag::Byte(5));
+        // Slot 40 is the offhand in the player-file slot space: a slot the
+        // server does not model (Шаг 24d), so it must survive the merge.
+        inventory.insert("Slot".to_owned(), NbtTag::Byte(40));
+        inventory.insert("count".to_owned(), NbtTag::Int(1));
+        inventory.insert(
+            "id".to_owned(),
+            NbtTag::String("minecraft:shield".to_owned()),
+        );
         let mut abilities = BTreeMap::new();
         abilities.insert("mayfly".to_owned(), NbtTag::Byte(1));
         let mut map = BTreeMap::new();
@@ -857,10 +986,115 @@ mod tests {
         assert!(map.contains_key("Inventory"), "unknown list kept");
         assert!(map.contains_key("abilities"), "unknown compound kept");
         assert_eq!(map["DataVersion"], NbtTag::Int(5023));
+        let NbtTag::List(inventory) = &map["Inventory"] else {
+            panic!("Inventory list");
+        };
+        assert_eq!(inventory.len(), 1, "the offhand entry is kept");
+        assert_eq!(
+            inventory[0],
+            NbtTag::Compound({
+                let mut entry = BTreeMap::new();
+                entry.insert("Slot".to_owned(), NbtTag::Byte(40));
+                entry.insert("count".to_owned(), NbtTag::Int(1));
+                entry.insert(
+                    "id".to_owned(),
+                    NbtTag::String("minecraft:shield".to_owned()),
+                );
+                entry
+            })
+        );
         let NbtTag::List(pos) = &map["Pos"] else {
             panic!("Pos list");
         };
         assert_eq!(pos[0], NbtTag::Double(96.5), "known fields updated");
+    }
+
+    #[test]
+    fn the_hotbar_round_trips_and_other_inventory_entries_are_kept() {
+        // Шаг 24d: the hotbar is saved in the player-file slot space
+        // (`0..=8`), read back at join, and every other entry of an existing
+        // `Inventory` list stays untouched.
+        let dir = temp_dir("inventory");
+        let store = Store::open(&dir, 5023, &[]).expect("store");
+        let path = store.path(uuid());
+        let mut offhand = BTreeMap::new();
+        offhand.insert("Slot".to_owned(), NbtTag::Byte(40));
+        offhand.insert("count".to_owned(), NbtTag::Int(1));
+        offhand.insert(
+            "id".to_owned(),
+            NbtTag::String("minecraft:shield".to_owned()),
+        );
+        let mut map = snapshot_fixture();
+        map.insert(
+            "Inventory".to_owned(),
+            NbtTag::List(vec![NbtTag::Compound(offhand)]),
+        );
+        fs::write(
+            &path,
+            gzip(&NbtTag::Compound(map).to_disk_bytes("").expect("disk")),
+        )
+        .expect("seed file");
+
+        let mut snap = snapshot(uuid());
+        snap.inventory = vec![
+            SavedItem {
+                slot: 0,
+                count: 64,
+                id: "minecraft:stone".to_owned(),
+            },
+            SavedItem {
+                slot: 4,
+                count: 1,
+                id: "minecraft:oak_stairs".to_owned(),
+            },
+        ];
+        store.write(&snap).expect("write");
+
+        let saved = store.read(uuid()).expect("read").expect("file");
+        assert_eq!(saved.inventory, snap.inventory, "the hotbar round-trips");
+
+        // The offhand entry of the seeded file is still there.
+        let raw = fs::read(&path).expect("read");
+        let mut decoded = Vec::new();
+        GzDecoder::new(&raw[..])
+            .read_to_end(&mut decoded)
+            .expect("gunzip");
+        let NbtTag::Compound(map) = NbtTag::decode_disk(&decoded).expect("nbt") else {
+            panic!("compound root");
+        };
+        let NbtTag::List(entries) = &map["Inventory"] else {
+            panic!("Inventory list");
+        };
+        let slots: Vec<i32> = entries
+            .iter()
+            .filter_map(|entry| match entry {
+                NbtTag::Compound(fields) => match fields.get("Slot") {
+                    Some(NbtTag::Byte(value)) => Some(i32::from(*value)),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(slots, vec![0, 4, 40]);
+    }
+
+    /// The compound fields `parse_player` reads, for tests that seed a file.
+    fn snapshot_fixture() -> BTreeMap<String, NbtTag> {
+        let mut map = BTreeMap::new();
+        map.insert(
+            "Pos".to_owned(),
+            NbtTag::List(vec![
+                NbtTag::Double(1.0),
+                NbtTag::Double(2.0),
+                NbtTag::Double(3.0),
+            ]),
+        );
+        map.insert(
+            "Rotation".to_owned(),
+            NbtTag::List(vec![NbtTag::Float(0.0), NbtTag::Float(0.0)]),
+        );
+        map.insert("DataVersion".to_owned(), NbtTag::Int(1));
+        map
     }
 
     #[test]
