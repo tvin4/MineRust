@@ -382,12 +382,12 @@ Fabric-клиент, команды тест-мода). Артефакты:
 | l2 (38/38) | дерево при входе | `commands` — **34126** байт (34 КБ; в код не переносим — долг) |
 | non-op | `/gamemode`, `/tp`, `/time set` | `system_chat` с `command.unknown.command` + `command.context.here` |
 | non-op | `/help` | ~73 отдельных `system_chat`, компоненты — простые строки, не `translate` |
-| l2/l4 | `/gamemode <режим>` у актора | `player_abilities` (9) → `game_event` (5) → `player_abilities` (9) → `player_info_update` (19) → `system_chat` `commands.gamemode.success.self` |
+| l2/l4 | `/gamemode <режим>` у актора | `player_abilities` (9) → `player_info_update` (19) → `game_event` (5) → `player_abilities` (9) → `system_chat` `commands.gamemode.success.self` (seq 78583–78587) |
 | l2/l4 | наблюдатель | `player_info_update`; spectator → `remove_entities`, возврат в survival/creative → `add_entity` |
 | l2/l4 | `/tp x y z` | `player_position` с точными координатами |
 | l2/l4 | `/tp <ник>` | телепорт к игроку (координаты цели) |
-| l2/l4 | `/say` | `system_chat` с текстом сообщения |
-| l2/l4 | `/op CmdB` | `commands.op.success` + `chat.type.admin`; после этого B сам может `/gamemode creative` |
+| l2/l4 | `/say` | `player_chat` от актора (не `system_chat`) |
+| l4 | `/op CmdB` | `commands.op.success` + `chat.type.admin`; после этого B сам может `/gamemode creative`. На **l2** `/op` требует уровень 3 и даёт `command.unknown.command` |
 | l2/l4 | ошибка аргумента | `argument.gamemode.invalid` + `command.context.here` |
 | l2/l4 | `/time set day` | `set_time` (115), **21** байт |
 
@@ -423,6 +423,90 @@ Hex-факты (побайтно подтверждены):
   путь нет — гипотеза, помечена в коде.
 - Побайтные тесты: `chat_tests` в `crates/protocol/src/packets/play.rs`
   (39, 258, 270, 9, 21 и 31 байт из трасс), `game::chat::tests`.
+
+### 25b: дерево команд, права и ответы — реализация
+
+- Дерево — **своё**, только узлы реализованных команд, обрезанное по уровню
+  оператора: non-op = 3 узла (`root → help → command`, 24 байта), op = 13.
+  Ванильные 265 байт / 26 узлов (non-op) и 34 КБ (l2/l4) не воспроизводятся
+  — долг, следствие: клиент предлагает только то, что сервер понимает.
+- Раскладка узла (S21 non-op seq 52): flags, children count + индексы,
+  [redirect], имя (literal/argument), parser id, свойства; **после всего
+  списка узлов — VarInt индекса корня**. Flags: `0x03` тип, `0x04`
+  executable, `0x08` redirect, `0x10` suggestions (в трейсе —
+  `minecraft:ask_server` у `/trigger`). Свойства парсеров из наших:
+  `brigadier:string` — VarInt kind (2 = greedy), `minecraft:entity` —
+  flags-байт, `minecraft:time` — i32 min; числовые `brigadier:` парсеры
+  (в трейсе `/random`) несут flags-байт `0x01`/`0x02` = min/max.
+- Кодировщик `protocol::CommandTree` валидирует: первый узел — root,
+  индексы внутри дерева, redirect и children взаимоисключающие; пишет
+  root index в конце. Без root index ванильный клиент **разрывает
+  соединение** (`DecoderException: Failed to decode packet
+  'clientbound/minecraft:commands'`) — найдено живьём 19.11.2026.
+- `commands` уходит в join **после** `set_center_chunk` и перед
+  `game_event` (у ванили он позже, seq 52; расхождение в позиции,
+  клиенту всё равно).
+- Уровень: `ServerConfig.ops` (имена или UUID) → `GameConfig.ops` →
+  `op_level` игрока, `OP_LEVEL = 2`; `ops.json` ванили читается только на
+  старте, поэтому у нас список тоже статичен.
+- Ответы/ошибки: `/help`, `/gamemode`, `/tp`, `/time set`, `/say` — ключи
+  из трейса; неизвестная/недоступная по уровню команда = две
+  `system_chat` (`command.unknown.command` + контекст
+  `command.context.here`), `/help <чужое>` = `commands.help.failed`,
+  `/gamemode banana` = `argument.gamemode.invalid`. `/say` — `player_chat`
+  от актора, не `system_chat`.
+- `/op` не реализован (в l2 отвечает `command.unknown.command` — как
+  ваниль; на l4 ваниль выполняет — расхождение, долг).
+- `/time set`: `set_time` 21 байт + `commands.time.set.time_marker`;
+  `noon/night/midnight` — `SOURCE: wiki, unverified`. `/tp` принимает
+  только числа (`~`/`^` не реализованы, долг), целые x/z центрируются.
+
+### 25c: смена режима в игре, spectator, playerdata — реализация
+
+- Порядок у актора по трейсу (seq 78583–78587): `player_abilities` (новый
+  режим) → `player_info_update` (только action gamemode, 19 байт, всем) →
+  `game_event` (`03` + f32 режима) → `player_abilities` → `system_chat
+  commands.gamemode.success.self`.
+- **`update_attributes` при смене режима в трейсе нет** (окно 78583–78587);
+  пакеты 78709+ относятся к entity 76 (другой игрок), не к актору.
+  Итог: креативный предел взаимодействия после `/gamemode creative`
+  клиенту не пересылается — как в ванили. Это закрывает долг 24c про
+  переотправку при смене режима: её у ванили нет.
+- Наблюдатель: `player_info_update` при каждой смене; из spectator
+  актор уходит `remove_entities`, возвращается `add_entity`
+  (правило в `game::entities::visibility_pass`: spectator виден только
+  spectator'ам, spectator видит всех).
+- Режим в playerdata: `Player::set_game_mode` меняет состояние тика,
+  `snapshot_of` берёт его в файл; `force_gamemode` решает при входе
+  (`resolve_game_mode`, тесты в `connection/play/tests.rs`).
+
+### 25d: S19–S21 на нашем сервере (19.11.2026)
+
+| прогон (наш сервер, `-Release`) | результат |
+|---|---|
+| `2026-11-18_step25b-ours-s19s20-r2`: S19 + S20 | 12/12 + 6/6 |
+| `2026-11-18_step25b-ours-s21-nonop`: S21 non-op | 18/18 |
+| `2026-11-18_step25b-ours-s21-l2`: S21 l2 (`-OursOps CmdA`) | 38/38 |
+| `2026-11-18_step25b-ours-s21-l4-r2`: S21 l4 (`-OursOps CmdA,CmdB`) | 38/38 |
+
+Первый прогон S19 после 25b оборвался на join: `DecoderException` на
+`clientbound/minecraft:commands` — не хватало root index (см. 25b).
+Первый прогон l4 (`...-s21-l4`) дал 37/38: B не оператор, потому что `/op`
+у нас нет; для сравнения остальных команд B выдан через `ops` конфига —
+единственное расхождение l4 с ванилью.
+
+Живой A–B: S19 — переписка в обе стороны (`player_chat` видят оба), S20 —
+вход/выход/повторный вход, S21 l2 — A (op) прогоняет
+creative → survival → spectator → adventure → creative, `/tp` по
+координатам и к нику, `/time set`, `/say`, `/help`; B видит смены режима,
+а из spectator A исчезает и возвращается. Без прав все команды дают
+`command.unknown.command` + контекст, как ваниль non-op.
+
+Побайтно: S19/S20 сверяются по длинам и содержимому (39/258/270 байт —
+юнит-тесты), S21 — по компонентам ответов и hex-тестам пакетов
+(`player_info_update` 19, `game_event` 5, `player_abilities` 9, `set_time`
+21). Дерево команд побайтно не сравнивается — оно своё (24 байта против
+265 / 34 КБ).
 
 ## Общие ограничения серверной части (обновлено 18.11.2026)
 

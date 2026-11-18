@@ -65,9 +65,11 @@ param(
 	# Шаг 25: operator rights for the vanilla stand. ops.json is read only at
 	# server start, so the level is a run-level parameter, not a per-scenario
 	# one; -1 leaves the file untouched. Level 0 writes the empty list (the
-	# non-operator baseline).
+	# non-operator baseline). -OursOps mirrors it on our server: a comma
+	# separated list of names/UUIDs written into the generated config.
 	[int]$VanillaOpsLevel = -1,
 	[string]$VanillaOpsPlayer = '',
+	[string]$OursOps = '',
 	[switch]$KeepStand
 )
 $ErrorActionPreference = 'Stop'
@@ -500,6 +502,15 @@ function Start-Stand {
 				$config = $config -replace '(?m)^force_gamemode\s*=.*$', "force_gamemode = $OursForceGamemode"
 			} else {
 				$config = $config.TrimEnd() + "`r`nforce_gamemode = $OursForceGamemode`r`n"
+			}
+		}
+		if ($OursOps) {
+			# Шаг 25b: the operator list our server reads at join.
+			$items = ($OursOps.Split(',') | ForEach-Object { '"' + $_.Trim() + '"' }) -join ', '
+			if ($config -match '(?m)^ops\s*=') {
+				$config = $config -replace '(?m)^ops\s*=.*$', "ops = [$items]"
+			} else {
+				$config = $config.TrimEnd() + "`r`nops = [$items]`r`n"
 			}
 		}
 		$config | Set-Content $oursConfig -Encoding utf8

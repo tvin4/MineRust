@@ -3483,6 +3483,9 @@ diff`, chunk `3,-5` cells=1 и `4,-5` cells=2). Раннер теперь для
 - Переотправка атрибутов при смене режима **уже в игре** (`set_gamemode`):
   у ванили в S17 она есть (seq 62634), наш сервер собственные атрибуты при
   смене режима не пересчитывает. Проверен только вход сразу в креативе.
+  **Уточнено Шагом 25:** в S21 l2 окно `/gamemode` (78583–78587)
+  `update_attributes` не содержит, пакеты 78709+ — другой сущности; долг
+  закрыт без реализации (`docs/DECISIONS.md` «Шаг 25c»).
 - Серверный отказ при клике в занятую клетку/вне предела: клиент такой
   `use_item_on` не отправляет, поэтому поведение сервера покрыто только
   юнит-тестами (гипотеза).
@@ -3494,3 +3497,122 @@ diff`, chunk `3,-5` cells=1 и `4,-5` cells=2). Раннер теперь для
   (`handleCreativeModeItemAdd` + `Inventory.setItem`), а не буквальным
   кликом по координатам GUI (задокументированное ограничение).
 - `Inventory` в playerdata не пишет стеки с components (долг 24d).
+
+## Шаг 25: чат и команды (18–19.11.2026)
+
+Владелец: чат, вход/выход, дерево команд с правами оператора, `/gamemode`,
+`/tp`, `/time set`, `/say`, `/help`, смена режима уже в игре и живая
+приёмка S19–S21. Источники: generated reports > parity > wiki; все ответы и
+hex — из ванильных трейсов 25.0.
+
+### 25.0 — ванильные трейсы (коммит `83b2063`)
+
+- **S19** `2026-11-18_s19s20-vanilla-step25-r1` (12/12): `chat` 39 байт →
+  `player_chat` 258 байт; `global_index` общий по серверу; offline — без
+  подписи; компонент имени `suggest_command`/`show_entity`.
+- **S20** `2026-11-18_s20-vanilla-step25-r4` (6/6): порядок входа
+  `system_chat` → `player_info_update` → `add_entity`, выхода
+  `system_chat` → `remove_entities` → `player_info_remove`; своего
+  join-сообщения клиент не получает.
+- **S21** non-op `…s21-nonop-vanilla-step25-r2` (18/18), l2
+  `…s21-l2-vanilla-step25-r2` (38/38), l4 `…s21-l4-vanilla-step25-r1`
+  (38/38); уровень оператора задаётся на запуск раннера
+  (`-VanillaOpsLevel`/`-VanillaOpsPlayer`), сценарий сверяет `opLevel`.
+- Таблицы и hex — `docs/MECHANICS.md` «25.0a–c».
+
+### 25a — чат и сообщения входа/выхода (коммит `b1d7117`)
+
+`ChatMessage`(9) / `PlayerChat`(66) / `SystemChat`(124), `ToGame::Chat`,
+`ToGame::Join`/`Quit` → строки входа/выхода в порядке S20, `global_index`
+через `Scheduler::chat_index`. Побайтные тесты `chat_tests` (39/258/270/9/21/31)
+и `game::chat::tests`. Подробности — `docs/MECHANICS.md` «25a».
+
+### 25b — дерево команд, права и ответы (коммит `90eae64`)
+
+- `crates/protocol/src/packets/commands.rs`: `CommandTree`/`CommandNode`/
+  `ArgumentParser` (string, entity, vec3, message, gamemode, time) с
+  валидацией (root первый, индексы, redirect ⊕ children) и **root index
+  после списка узлов** — без него ванильный клиент рвёт соединение
+  (`DecoderException` на `clientbound/minecraft:commands`, найдено живьём
+  при первом join после 25b). 5 юнит-тестов раскладки.
+- `crates/net/src/game/commands.rs`: дерево по уровню (non-op — `/help`,
+  op — + `/gamemode`, `/tp`, `/time set`, `/say`), `apply` с ответами из
+  трейса, ошибки (две строки: ключ + контекст), `/help` с фильтром.
+- `GameConfig.ops`/`op_level`, `ServerConfig.ops` (имена или UUID +
+  `parse_uuid`), `OP_LEVEL = 2`; `commands` уходит в join после
+  `set_center_chunk`. Свойства парсеров, порядок узлов (children — только
+  вперёд) и hex-тесты `player_info_update`(19), `game_event`(5),
+  `player_abilities`(9), `set_time`(21/31).
+- `/say` — `player_chat` от актора; `/tp` — числа (целые центрируются),
+  `~`/`^` не реализованы (долг); `noon/night/midnight` в `/time set` —
+  `SOURCE: wiki, unverified`; `/op` не реализован (l2 →
+  `command.unknown.command`, как ваниль; l4 ваниль выполняет — долг).
+
+### 25c — смена режима в игре, spectator, playerdata (коммит `477cfcd`)
+
+- `Player::set_game_mode`/`teleport`; порядок пакетов у актора по трейсу:
+  `player_abilities` → `player_info_update` (всем) → `game_event`(3, f32) →
+  `player_abilities` → `system_chat commands.gamemode.success.self`.
+- **`update_attributes` при смене режима не шлётся** — в S21 l2 в окне
+  78583–78587 его нет (пакеты 78709+ — entity 76, другой игрок). Это
+  закрывает долг 24c: переотправки атрибутов к `/gamemode` у ванили нет.
+- spectator в `game::entities::visibility_pass`: spectator виден только
+  spectator'ам и видит всех; наблюдатель получает `remove_entities`/
+  `add_entity` (тест `a_spectator_is_hidden_from_players_and_sees_them`).
+- playerdata: режим берётся в `snapshot_of` (тест
+  `a_gamemode_command_change_reaches_the_saved_snapshot`),
+  `force_gamemode` решает при входе (тесты play).
+
+### 25d — приёмка S19–S21 на нашем сервере
+
+- S19 + S20 `2026-11-18_step25b-ours-s19s20-r2` — **12/12 и 6/6**;
+  S21 non-op `…s21-nonop` — **18/18**; S21 l2 `…s21-l2` (`-OursOps CmdA`)
+  — **38/38**; S21 l4 `…s21-l4-r2` (`-OursOps CmdA,CmdB`) — **38/38**.
+- Первый S19 после 25b упал на join (нет root index в `commands`).
+  Первый l4 дал 37/38: B не оператор, `/op` у нас нет — B выдан через
+  `ops` конфига для сравнения остальных команд; это единственное
+  расхождение l4 с ванилью.
+- Живой A–B: переписка в обе стороны (S19), вход/выход/повторный вход
+  (S20), у A (op) — creative → survival → spectator → adventure →
+  creative, `/tp` по координатам и к нику, `/time set`, `/say`, `/help`;
+  B видит смены режима, из spectator A исчезает и возвращается. Без прав —
+  `command.unknown.command` + контекст, как ваниль non-op.
+
+### Коммиты Шага 25
+
+- `83b2063` test: trace vanilla chat, join/leave and commands (step 25.0)
+- `b1d7117` feat: broadcast chat lines and join/leave messages (step 25a)
+- `90eae64` feat: command tree, operator rights and command replies (step 25b)
+- `477cfcd` feat: gamemode switching, spectator visibility and saved mode (step 25c)
+- этот коммит — test: replay S19-S21 on our server and document step 25
+  (step 25d).
+
+### Проверка и замеры (Шаг 25)
+
+- Gate строго последовательно, на каждом подэтапе отдельно: `cargo fmt --all`
+  — exit 0; `cargo clippy --workspace --all-targets -- -D warnings` — exit 0;
+  `cargo test --workspace` — exit 0 (net 270 passed/4 ignored, protocol 167,
+  server 53 + интеграционные join/status/entrypoint, parity 35, data 42/2,
+  playerdata 19, world 42, worldsave 21).
+- Харнесс: `run-scenario.ps1` получил `-OursOps` (список операторов в
+  генерируемый конфиг — зеркало `-VanillaOpsLevel`); `-OursForceGamemode`
+  уже был.
+- `graphify update .` после кода шага.
+
+### Не установлено / долги Шага 25
+
+- Дерево команд: ванильное (26 узлов / 265 байт non-op, 34 КБ l2/l4) не
+  воспроизводится; `/me`, `/list`, `/msg`, `/teammsg`, `/trigger`, `/op`,
+  `/deop` и прочие ванильные команды на нашем сервере неизвестны.
+- `/op`/`deop` не реализованы, уровни оператора сводятся к 2 (ваниль
+  различает 0–4); s21-l4 с `/op` у нас не проходит без выдачи B через
+  конфиг.
+- `/time set`: серверных часов нет (пакет шлётся, `set_time` дальше не
+  рассылается), `noon/night/midnight` — непроверенная память.
+- `/tp`: нет `~`/`^` и телепорта другого игрока (`/tp <цель> <…>`),
+  только «к нику» и «на координаты» от актора.
+- Побайтное сравнение ответов S21 не делалось (сверялись компоненты и
+  hex-тесты отдельных пакетов); `player_chat` имени — порядок ключей NBT
+  не воспроизводится (длина совпадает, 25a).
+- `set_time` в join: у ванили он есть (seq 60, 2 clocks), у нас join его
+  не шлёт — отдельная проверка не выполнялась.
