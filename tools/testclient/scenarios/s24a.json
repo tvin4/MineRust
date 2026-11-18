@@ -1,0 +1,24 @@
+{
+  "id": "s24a",
+  "title": "vanilla creative-menu item add and hotbar selection (step 24.0a/e)",
+  "playerA": "MenuA",
+  "playerB": "MenuB",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "settleMs": 900,
+  "menu": [
+    { "item": "minecraft:stone", "slot": 36 },
+    { "item": "minecraft:oak_planks", "slot": 37 },
+    { "item": "minecraft:oak_log", "slot": 38 },
+    { "item": "minecraft:oak_slab", "slot": 39 },
+    { "item": "minecraft:oak_stairs", "slot": 40 },
+    { "item": "minecraft:glass", "slot": 41 }
+  ],
+  "slotOps": [
+    { "op": "key", "value": 1 },
+    { "op": "scroll", "value": 1.0 },
+    { "op": "scroll", "value": 1.0 },
+    { "op": "scroll", "value": -1.0 },
+    { "op": "scroll", "value": 2.0 }
+  ]
+}

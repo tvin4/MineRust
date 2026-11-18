@@ -374,6 +374,23 @@ function New-SessionCmd {
 	return '{"id":"' + $Id + '","cmd":"' + $Cmd + '"}'
 }
 
+# Шаг 24.0a: the creative-menu item-add path. `slot` is the raw container slot
+# (the player inventory menu numbers the hotbar 36..44; omitted -> selected).
+function New-CreativeCmd {
+	param([string]$Id, [string]$Item, [int]$Slot = -1, [int]$Count = 0)
+	$json = '{"id":"' + $Id + '","cmd":"creative","args":{"item":"' + $Item + '"'
+	if ($Slot -ge 0) { $json += ',"slot":' + $Slot }
+	if ($Count -gt 0) { $json += ',"count":' + $Count }
+	return $json + '}}'
+}
+
+# Шаг 24.0e: one mouse-wheel tick through MouseHandler.onScroll.
+function New-ScrollCmd {
+	param([string]$Id, [double]$Dy)
+	$inv = [System.Globalization.CultureInfo]::InvariantCulture
+	return '{"id":"' + $Id + '","cmd":"scroll","args":{"dy":' + ([string]::Format($inv, '{0}', $Dy)) + '}}'
+}
+
 # Client-side teleport for our own server (no RCON, no /tp): the mod sets the
 # local player position and the client's own movement path reports it.
 # Rotation is optional; the invariant-culture strings keep the decimals plain.

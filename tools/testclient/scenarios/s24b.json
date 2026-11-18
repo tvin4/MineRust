@@ -1,0 +1,9 @@
+{
+  "id": "s24b",
+  "title": "vanilla placement limits, light and stairs shapes (step 24.0b/c/d)",
+  "playerA": "PlaceA",
+  "playerB": "PlaceB",
+  "controlPortA": 25571,
+  "controlPortB": 25572,
+  "settleMs": 900
+}

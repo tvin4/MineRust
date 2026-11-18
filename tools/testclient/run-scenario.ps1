@@ -3720,6 +3720,332 @@ function Invoke-S17 {
 	$script:s7Facts.Add("S17 artifact: $artifactPath")
 }
 
+# --- S24a (Шаг 24.0a/e): creative-menu item add and hotbar selection --------
+# Vanilla-only data collection: the real creative-inventory path
+# (`creative` -> MultiPlayerGameMode.handleCreativeModeItemAdd ->
+# serverbound set_creative_mode_slot) plus hotbar changes through the number
+# keys and the mouse wheel. No server code is touched; the artifact carries the
+# wire rows for the offline table builder.
+function Invoke-S24a {
+	param($Cfg, $Result)
+	if (-not $isVanilla) { throw 'S24a is a vanilla trace scenario; no server implementation exists yet' }
+	$portA = [int]$Cfg.controlPortA
+	$portB = [int]$Cfg.controlPortB
+	$nickA = [string]$Cfg.playerA
+	$nickB = [string]$Cfg.playerB
+	$watermark = Get-Date
+	$launchA = Start-Client $nickA $portA $watermark
+	$null = Start-Client $nickB $portB (Get-Date)
+	$null = Wait-ObserverChunksStable $portB 30
+	Invoke-VanillaConsole ("gamemode creative {0}" -f $nickA) | Out-Null
+	Invoke-VanillaConsole ("gamemode creative {0}" -f $nickB) | Out-Null
+	Invoke-VanillaConsole 'gamerule doMobSpawning false' | Out-Null
+	Start-Sleep -Seconds 2
+
+	# Every menu add targets a distinct hotbar slot (inventory menu 36..44) and
+	# is then selected through the number-key path, so one trace shows both
+	# set_creative_mode_slot and set_carried_item.
+	$menuFacts = New-Object System.Collections.ArrayList
+	foreach ($entry in @($Cfg.menu)) {
+		$item = [string]$entry.item
+		$slot = [int]$entry.slot
+		$add = Invoke-TestCmd $portA (New-CreativeCmd ("s24a-add-{0}" -f $slot) $item $slot)
+		Start-Sleep -Milliseconds 350
+		$obs = (Invoke-TestCmd $portA (New-ObserveCmd ("s24a-add-{0}-obs" -f $slot))).result
+		$null = Invoke-TestCmd $portA (New-KeyCmd ("s24a-key-{0}" -f $slot) ("hotbar" + ($slot - 35)) 'tap')
+		Start-Sleep -Milliseconds 300
+		$after = (Invoke-TestCmd $portA (New-ObserveCmd ("s24a-key-{0}-obs" -f $slot))).result
+		$slotId = $null
+		foreach ($h in @($obs.hotbar)) { if ([int]$h.slot -eq ($slot - 36)) { $slotId = [string]$h.id } }
+		Add-Check $Result ("S24a menu add {0} -> hotbar slot {1}" -f $item, ($slot - 36)) `
+			([string]$obs.hotbar[($slot - 36)].id -eq $item) `
+			("add.ok={0} hotbarSlot={1} held={2} count={3} selected={4}" -f `
+				$add.ok, ($slot - 36), $obs.heldItem, $obs.heldCount, $after.selectedSlot)
+		$menuFacts.Add([PSCustomObject]@{
+			item = $item; slot = $slot; hotbarIndex = ($slot - 36); addOk = [bool]$add.ok
+			hotbarSlotId = $slotId; heldItem = [string]$obs.heldItem; heldCount = $obs.heldCount
+			selectedAfterKey = [int]$after.selectedSlot; hotbar = @($obs.hotbar)
+		}) | Out-Null
+	}
+
+	# Selection changes: number key then wheel ticks, recording the observed
+	# selected slot after each so the trace can be tied to a known state.
+	$slotFacts = New-Object System.Collections.ArrayList
+	foreach ($op in @($Cfg.slotOps)) {
+		$id = "s24a-op-$($slotFacts.Count)"
+		if ([string]$op.op -eq 'key') {
+			$n = [int]$op.value
+			$null = Invoke-TestCmd $portA (New-KeyCmd $id ("hotbar" + $n) 'tap')
+		} else {
+			$null = Invoke-TestCmd $portA (New-ScrollCmd $id ([double]$op.value))
+		}
+		Start-Sleep -Milliseconds 300
+		$obs = (Invoke-TestCmd $portA (New-ObserveCmd ($id + '-obs'))).result
+		$slotFacts.Add([PSCustomObject]@{
+			op = [string]$op.op; value = $op.value; selectedSlot = [int]$obs.selectedSlot
+			heldItem = [string]$obs.heldItem
+		}) | Out-Null
+	}
+	Add-Check $Result 'S24a the hotbar selection follows the wheel and the number keys' $true `
+		(($slotFacts | ForEach-Object { "$($_.op)=$($_.value):$($_.selectedSlot)" }) -join ', ')
+
+	Start-Sleep -Seconds 1
+	try { $null = Invoke-TestCmd $portA (New-SessionCmd 's24a-off-a' 'disconnect') } catch { }
+	try { $null = Invoke-TestCmd $portB (New-SessionCmd 's24a-off-b' 'disconnect') } catch { }
+	Start-Sleep -Seconds 3
+	$files = @(Get-NewTraceFiles $traceDir $watermark)
+	$aTrace = Select-TraceByPattern $files 'minecraft:set_creative_mode_slot'
+	$packetNames = @(
+		'minecraft:set_creative_mode_slot', 'minecraft:set_carried_item',
+		'minecraft:container_set_slot', 'minecraft:container_set_content',
+		'minecraft:container_set_data', 'minecraft:set_held_slot', 'minecraft:set_cursor_item'
+	)
+	$wire = New-Object System.Collections.ArrayList
+	if ($aTrace) {
+		foreach ($row in @(Read-TraceMatches $aTrace.FullName $packetNames)) {
+			$wire.Add([PSCustomObject]@{
+				trace = $aTrace.Name; seq = [int]$row.seq; ms = [double]$row.read_ms
+				state = [string]$row.state; dir = [string]$row.dir; id = [int]$row.id
+				name = [string]$row.name; b64 = [string]$row.b64
+			}) | Out-Null
+		}
+	}
+	$creativeRows = @($wire | Where-Object { $_.dir -eq 'serverbound' -and $_.name -eq 'minecraft:set_creative_mode_slot' })
+	$carriedRows = @($wire | Where-Object { $_.dir -eq 'serverbound' -and $_.name -eq 'minecraft:set_carried_item' })
+	Add-Check $Result 'S24a the creative-menu path sends set_creative_mode_slot' ($creativeRows.Count -ge $menuFacts.Count) `
+		("count={0} menu={1}" -f $creativeRows.Count, $menuFacts.Count)
+	Add-Check $Result 'S24a hotbar selection sends set_carried_item' ($carriedRows.Count -gt 0) `
+		("count={0}" -f $carriedRows.Count)
+
+	Invoke-VanillaConsole 'save-all flush' | Out-Null
+	Start-Sleep -Seconds 2
+	$playerFile = Join-Path (Join-Path $script:activeWorldDir 'players\data') (Get-OfflinePlayerFileName $nickA)
+	$inventory = @()
+	$selectedItemSlot = $null
+	if (Test-Path -LiteralPath $playerFile) {
+		$playerDoc = Read-PlayerNbt $playerFile
+		$selectedItemSlot = $playerDoc.root['SelectedItemSlot']
+		$inventory = @($playerDoc.root['Inventory'])
+	}
+	$artifact = [PSCustomObject]@{
+		generated = (Get-Date).ToString('o')
+		menu = @($menuFacts)
+		slotOps = @($slotFacts)
+		wire = @($wire)
+		playerdata = [PSCustomObject]@{ path = $playerFile; selectedItemSlot = $selectedItemSlot; inventory = @($inventory) }
+	}
+	$artifactPath = Join-Path $traceDir 's24a-samples.json'
+	$artifact | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $artifactPath -Encoding utf8
+	$script:s7Facts.Add("S24a artifact: $artifactPath")
+}
+
+# --- S24b (Шаг 24.0b/c/d): placement limits, light, stairs shapes -----------
+# Vanilla-only data collection. The reach boundary, the player-own-cell refusal
+# and the waterlogged stair go through the real client use path (`use`); the
+# stair-shape variants are built with the vanilla server's own `setblock`, so
+# the "neighbours -> shape" rule comes from the game and not from our guesses.
+# No server code is touched; the artifact carries the wire rows (including
+# light_update) for the offline table builder.
+function Invoke-S24b {
+	param($Cfg, $Result)
+	if (-not $isVanilla) { throw 'S24b is a vanilla trace scenario; no server implementation exists yet' }
+	$portA = [int]$Cfg.controlPortA
+	$portB = [int]$Cfg.controlPortB
+	$nickA = [string]$Cfg.playerA
+	$nickB = [string]$Cfg.playerB
+	$settle = [int]$Cfg.settleMs
+	$inv = [Globalization.CultureInfo]::InvariantCulture
+	$watermark = Get-Date
+	$null = Start-Client $nickA $portA $watermark
+	$null = Start-Client $nickB $portB (Get-Date)
+	$null = Wait-ObserverChunksStable $portB 30
+	Invoke-VanillaConsole ("gamemode creative {0}" -f $nickA) | Out-Null
+	Invoke-VanillaConsole ("gamemode creative {0}" -f $nickB) | Out-Null
+	Invoke-VanillaConsole 'gamerule doMobSpawning false' | Out-Null
+	Invoke-VanillaConsole 'forceload add 60 -60 260 10' | Out-Null
+	Start-Sleep -Seconds 2
+
+	$facts = New-Object System.Collections.ArrayList
+	# One real client use against a block face: give the item, teleport, confirm
+	# the crosshair, tap use, read the destination cell. `$Stand` is feet+rot.
+	function Invoke-S24bUse {
+		param([string]$Id, $Stand, $Yaw, $Pitch, [string]$Item, [int]$Tx, [int]$Ty, [int]$Tz)
+		Invoke-VanillaConsole ([string]::Format($inv, "tp {0} {1} {2} {3} {4} {5}", $nickA, `
+			[double]$Stand[0], [double]$Stand[1], [double]$Stand[2], [double]$Yaw, [double]$Pitch)) | Out-Null
+		Start-Sleep -Milliseconds 350
+		$null = Invoke-TestCmd $portA (New-CreativeCmd ("$Id-item") $Item 36)
+		Start-Sleep -Milliseconds 250
+		$null = Invoke-TestCmd $portA (New-KeyCmd ("$Id-sel") 'hotbar1' 'tap')
+		Start-Sleep -Milliseconds 350
+		$aim = (Invoke-TestCmd $portA (New-ObserveCmd ("$Id-aim"))).result
+		$pre = (Invoke-TestCmd $portA (New-BlockCmd ("$Id-pre") $Tx $Ty $Tz)).result
+		$null = Invoke-TestCmd $portA (New-KeyCmd ("$Id-use") 'use' 'tap' 100)
+		Start-Sleep -Milliseconds $settle
+		$post = (Invoke-TestCmd $portA (New-BlockCmd ("$Id-post") $Tx $Ty $Tz)).result
+		return [PSCustomObject]@{
+			aim = $aim; before = [string]$pre.block.id; after = [string]$post.block.id
+			waterlogged = [bool]$post.block.waterlogged; properties = $post.block.properties
+		}
+	}
+
+	# 24.0b: the reach boundary. A two-high wall at x=W, z=-40; the eye ray runs
+	# along -X at y=202.62 and hits the east face of (W,202,-40) at x=W+1, so the
+	# eye-to-face distance is exactly D. One distinct wall per distance, so a
+	# close success cannot mask a farther miss.
+	foreach ($d in @(4.5, 5.0, 5.5, 6.0)) {
+		$w = 80 + [int](($d - 4.5) * 40)
+		$standX = $w + 1 + $d
+		Invoke-VanillaConsole ("fill {0} 200 -41 {1} 200 -39 minecraft:stone" -f ($w + 1), ($w + 11)) | Out-Null
+		Invoke-VanillaConsole ("setblock {0} 201 -40 minecraft:stone" -f $w) | Out-Null
+		Invoke-VanillaConsole ("setblock {0} 202 -40 minecraft:stone" -f $w) | Out-Null
+		Invoke-VanillaConsole ("setblock {0} 202 -40 minecraft:air" -f ($w + 1)) | Out-Null
+		Start-Sleep -Milliseconds 350
+		$r = Invoke-S24bUse ("s24b-reach$d") @($standX, 201, -39.5) 90 0 'minecraft:stone' ($w + 1) 202 -40
+		$hit = ($r.aim.hitType -eq 'BLOCK' -and [int]$r.aim.hitBlock.x -eq $w -and `
+			[int]$r.aim.hitBlock.y -eq 202 -and [int]$r.aim.hitBlock.z -eq -40)
+		Add-Check $Result ("S24b reach {0}: crosshair reaches the wall face" -f $d) $hit `
+			("hit={0} ({1},{2},{3})" -f $r.aim.hitType, $r.aim.hitBlock.x, $r.aim.hitBlock.y, $r.aim.hitBlock.z)
+		$facts.Add([PSCustomObject]@{
+			kind = 'reach'; distance = $d; wall = $w; stand = @($standX, 201, -39.5)
+			target = @(($w + 1), 202, -40); hitType = [string]$r.aim.hitType; hit = $r.aim.hitBlock
+			before = $r.before; after = $r.after; properties = $r.properties
+		}) | Out-Null
+	}
+
+	# 24.0b: place into the player's own cell. Looking straight down, the target
+	# cell above the hit block is always the one the player occupies.
+	Invoke-VanillaConsole 'fill 179 200 -41 181 200 -39 minecraft:stone' | Out-Null
+	Start-Sleep -Milliseconds 300
+	$own = Invoke-S24bUse 's24b-own' @(180.5, 201, -40.5) 0 90 'minecraft:stone' 180 201 -41
+	Add-Check $Result "S24b own cell: vanilla refuses to place into the player's own block" `
+		($own.after -eq 'minecraft:air') `
+		("hit={0} ({1},{2},{3}) before={4} after={5}" -f $own.aim.hitType, $own.aim.hitBlock.x, `
+			$own.aim.hitBlock.y, $own.aim.hitBlock.z, $own.before, $own.after)
+	$facts.Add([PSCustomObject]@{
+		kind = 'ownCell'; stand = @(180.5, 201, -40.5); target = @(180, 201, -41)
+		hitType = [string]$own.aim.hitType; hit = $own.aim.hitBlock; before = $own.before; after = $own.after
+	}) | Out-Null
+
+	# 24.0c: a light-emitting block (torch) placed by the client, so the server
+	# has a reason to send light_update; the plain stone placements above are the
+	# no-change control.
+	Invoke-VanillaConsole 'fill 169 200 -41 171 200 -37 minecraft:stone' | Out-Null
+	Invoke-VanillaConsole 'setblock 170 201 -40 minecraft:stone' | Out-Null
+	Invoke-VanillaConsole 'setblock 170 202 -40 minecraft:air' | Out-Null
+	Start-Sleep -Milliseconds 300
+	$torch = Invoke-S24bUse 's24b-torch' @(170.5, 201, -37.5) 180 17.2 'minecraft:torch' 170 202 -40
+	Add-Check $Result 'S24b light: the client places the torch' `
+		($torch.after -eq 'minecraft:torch') ("hit={0} after={1}" -f $torch.aim.hitType, $torch.after)
+	$facts.Add([PSCustomObject]@{
+		kind = 'light'; stand = @(170.5, 201, -37.5); target = @(170, 202, -40)
+		hitType = [string]$torch.aim.hitType; hit = $torch.aim.hitBlock; before = $torch.before; after = $torch.after
+	}) | Out-Null
+
+	# 24.0d: waterlogged. A water source sits in the destination cell; the
+	# vanilla server's own placement rule has to set waterlogged=true.
+	Invoke-VanillaConsole 'fill 229 200 -41 231 200 -37 minecraft:stone' | Out-Null
+	Invoke-VanillaConsole 'setblock 230 201 -40 minecraft:stone' | Out-Null
+	Invoke-VanillaConsole 'setblock 230 202 -40 minecraft:water' | Out-Null
+	Start-Sleep -Milliseconds 300
+	$wet = Invoke-S24bUse 's24b-water' @(230.5, 201, -37.5) 180 17.2 'minecraft:oak_stairs' 230 202 -40
+	Add-Check $Result 'S24b waterlogged: a stair placed into water becomes waterlogged' `
+		($wet.waterlogged -eq $true) ("after={0} waterlogged={1} props={2}" -f $wet.after, $wet.waterlogged, ($wet.properties | ConvertTo-Json -Compress))
+	$facts.Add([PSCustomObject]@{
+		kind = 'waterlogged'; stand = @(230.5, 201, -37.5); target = @(230, 202, -40)
+		hitType = [string]$wet.aim.hitType; hit = $wet.aim.hitBlock; before = $wet.before; after = $wet.after
+		waterlogged = $wet.waterlogged; properties = $wet.properties
+	}) | Out-Null
+
+	# 24.0d: stairs shape from neighbours. The base stair faces east and stays in
+	# place; the shape rule compares a stair in FRONT (relative to facing) and
+	# BEHIND, so the neighbours must have perpendicular facings to move off
+	# `straight`. Each variant clears the two neighbour cells, plants its own
+	# neighbours and reads the base stair's shape.
+	Invoke-VanillaConsole 'fill 199 200 -41 205 200 -38 minecraft:stone' | Out-Null
+	Invoke-VanillaConsole 'setblock 200 201 -40 minecraft:oak_stairs[facing=east]' | Out-Null
+	Start-Sleep -Milliseconds 400
+	$stairShapes = New-Object System.Collections.ArrayList
+	$variants = @(
+		@{ call = 'lone'; neighbours = @() },
+		@{ call = 'behind_north'; neighbours = @(@(199, -40, 'north')) },
+		@{ call = 'behind_south'; neighbours = @(@(199, -40, 'south')) },
+		@{ call = 'front_north'; neighbours = @(@(201, -40, 'north')) },
+		@{ call = 'front_south'; neighbours = @(@(201, -40, 'south')) },
+		@{ call = 'front_north_behind_north'; neighbours = @(@(201, -40, 'north'), @(199, -40, 'north')) }
+	)
+	for ($i = 0; $i -lt $variants.Count; $i++) {
+		$v = $variants[$i]
+		Invoke-VanillaConsole 'setblock 199 201 -40 minecraft:air' | Out-Null
+		Invoke-VanillaConsole 'setblock 201 201 -40 minecraft:air' | Out-Null
+		foreach ($nb in @($v.neighbours)) {
+			Invoke-VanillaConsole ("setblock {0} 201 -40 minecraft:oak_stairs[facing={1}]" -f $nb[0], $nb[2]) | Out-Null
+		}
+		Start-Sleep -Milliseconds 400
+		$base = (Invoke-TestCmd $portA (New-BlockCmd ("s24b-stair-$i") 200 201 -40)).result
+		$back = (Invoke-TestCmd $portA (New-BlockCmd ("s24b-stair-$i-b") 199 201 -40)).result
+		$front = (Invoke-TestCmd $portA (New-BlockCmd ("s24b-stair-$i-f") 201 201 -40)).result
+		$stairShapes.Add([PSCustomObject]@{
+			step = [string]$v.call; neighbours = @($v.neighbours)
+			baseShape = [string]$base.block.properties.shape
+			baseProps = $base.block.properties
+			backShape = [string]$back.block.properties.shape
+			frontShape = [string]$front.block.properties.shape
+		}) | Out-Null
+	}
+	$centerStraight = [string]$stairShapes[0].baseShape
+	Add-Check $Result 'S24b stairs: a lone stair is straight (baseline for the neighbour table)' `
+		($centerStraight -eq 'straight') ("lone shape={0}" -f $centerStraight)
+	$moved = @($stairShapes | Where-Object { $_.baseShape -ne 'straight' })
+	Add-Check $Result 'S24b stairs: a perpendicular neighbour moves the base off straight (inner/outer)' `
+		($moved.Count -gt 0) (($stairShapes | ForEach-Object { "$($_.step)=$($_.baseShape)" }) -join ', ')
+	$facts.Add([PSCustomObject]@{
+		kind = 'stairs'; baseFacing = 'east'; base = @(200, 201, -40); variants = @($stairShapes)
+	}) | Out-Null
+
+	try { $null = Invoke-TestCmd $portA (New-SessionCmd 's24b-off-a' 'disconnect') } catch { }
+	try { $null = Invoke-TestCmd $portB (New-SessionCmd 's24b-off-b' 'disconnect') } catch { }
+	Start-Sleep -Seconds 3
+	$files = @(Get-NewTraceFiles $traceDir $watermark)
+	$aTrace = Select-TraceByPattern $files 'minecraft:(use_item_on|set_creative_mode_slot)'
+	$bTrace = if ($aTrace) { @($files | Where-Object { $_.FullName -ne $aTrace.FullName } | Select-Object -First 1) } else { $null }
+	$packetNames = @(
+		'minecraft:use_item_on', 'minecraft:use_item', 'minecraft:set_creative_mode_slot', 'minecraft:set_carried_item',
+		'minecraft:block_update', 'minecraft:block_changed_ack', 'minecraft:light_update', 'minecraft:section_blocks_update',
+		'minecraft:container_set_slot', 'minecraft:container_set_content', 'minecraft:set_held_slot', 'minecraft:set_cursor_item',
+		'minecraft:level_event', 'minecraft:sound'
+	)
+	$wire = New-Object System.Collections.ArrayList
+	foreach ($trace in @($aTrace, $bTrace)) {
+		if ($null -eq $trace) { continue }
+		foreach ($row in @(Read-TraceMatches $trace.FullName $packetNames)) {
+			$wire.Add([PSCustomObject]@{
+				trace = $trace.Name; seq = [int]$row.seq; ms = [double]$row.read_ms
+				state = [string]$row.state; dir = [string]$row.dir; id = [int]$row.id
+				name = [string]$row.name; b64 = [string]$row.b64
+			}) | Out-Null
+		}
+	}
+	$useRows = @($wire | Where-Object { $_.dir -eq 'serverbound' -and $_.name -eq 'minecraft:use_item_on' })
+	$lightRows = @($wire | Where-Object { $_.name -eq 'minecraft:light_update' })
+	$ackRows = @($wire | Where-Object { $_.dir -eq 'clientbound' -and $_.name -eq 'minecraft:block_changed_ack' })
+	Add-Check $Result 'S24b: vanilla trace carries use_item_on placements' ($useRows.Count -gt 0) "count=$($useRows.Count)"
+	Add-Check $Result 'S24b layer: block_changed_ack answers every use_item_on' ($ackRows.Count -ge $useRows.Count) `
+		("use={0} ack={1}" -f $useRows.Count, $ackRows.Count)
+	$script:s24bLightRows = $lightRows
+	Add-Check $Result 'S24b light: light_update occurrences recorded (data only)' $true `
+		("light_update={0}" -f $lightRows.Count)
+
+	$artifact = [PSCustomObject]@{
+		generated = (Get-Date).ToString('o')
+		facts = @($facts)
+		wire = @($wire)
+		lightUpdateCount = $lightRows.Count
+	}
+	$artifactPath = Join-Path $traceDir 's24b-samples.json'
+	$artifact | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $artifactPath -Encoding utf8
+	$script:s7Facts.Add("S24b artifact: $artifactPath")
+}
+
 # --- S15 (РЁР°Рі 20a): duplicate login on one name ---------------------------
 # The scenario opens a second connection with the same player name and
 # records what the first connection receives. The vanilla trace is the
@@ -4070,6 +4396,8 @@ try {
 			's16a' { Invoke-S16a $cfg $result }
 			's16b' { Invoke-S16b $cfg $result }
 			's17' { Invoke-S17 $cfg $result }
+			's24a' { Invoke-S24a $cfg $result }
+			's24b' { Invoke-S24b $cfg $result }
 			default { throw "unknown scenario '$($cfg.id)'" }
 		}
 		Stop-ClientByName $cfg.playerA

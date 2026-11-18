@@ -30,6 +30,8 @@ public class TestClientMod implements ClientModInitializer {
 		input.register(dispatcher);
 		new ObserveCommand(minecraft).register(dispatcher);
 		new SessionCommands(minecraft, ticks).register(dispatcher);
+		// Шаг 24.0a: the creative-menu item-add path (set_creative_mode_slot).
+		new CreativeCommand(minecraft).register(dispatcher);
 		new TeleportCommand(minecraft).register(dispatcher);
 		new ShapeReportCommand(minecraft).register(dispatcher);
 		new HardnessReportCommand(minecraft).register(dispatcher);

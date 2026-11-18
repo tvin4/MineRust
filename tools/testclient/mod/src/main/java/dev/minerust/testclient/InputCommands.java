@@ -49,6 +49,26 @@ final class InputCommands {
 	void register(CommandDispatcher dispatcher) {
 		dispatcher.register("look", args -> CompletableFuture.completedFuture(look(args)));
 		dispatcher.register("key", args -> CompletableFuture.completedFuture(key(args)));
+		dispatcher.register("scroll", args -> CompletableFuture.completedFuture(scroll(args)));
+	}
+
+	/**
+	 * scroll: replays a mouse-wheel tick through the client's own
+	 * {@code MouseHandler.onScroll} (the real wheel path), so a no-screen
+	 * client changes its selected hotbar slot and sends the genuine
+	 * serverbound {@code set_carried_item} (Шаг 24.0e; id 54 in
+	 * reports/packets.json). Args: {@code dy} - wheel ticks (positive scrolls
+	 * the hotbar backwards, i.e. towards higher slot numbers, as GLFW reports
+	 * it). The result carries the slot after the scroll.
+	 */
+	private JsonElement scroll(JsonObject args) throws Exception {
+		LocalPlayerCheck.requireInGame(minecraft);
+		double dy = Json.requireDouble(args, "dy", "scroll needs dy (wheel ticks)");
+		minecraft.mouseHandler.onScroll(minecraft.getWindow().handle(), 0.0, dy);
+		JsonObject out = new JsonObject();
+		out.addProperty("dy", dy);
+		out.addProperty("selectedSlot", minecraft.player.getInventory().getSelectedSlot());
+		return out;
 	}
 
 	/**
