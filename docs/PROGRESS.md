@@ -3226,6 +3226,8 @@ V4 (`2026-11-17_s15-v4-ours-r1`) — расхождение: оба соедин
   worldsave 21 + roundtrip; ignored measurements/kill компилируются).
 - Коммиты: 22a — `5a3dff1`, `c9a95e2`, `4e7d128`; gradual kelp —
   `13669cb`; 22b code/tests — `d7a9014`; основной docs/report — `91c0342`.
+- Push: `main` отправлен в `origin` после чистого gate (диапазон Шага 22
+  включает `5a3dff1..1b6dc67`; push-status note отправляется следом).
 
 ### Блокеры / что не установлено
 
