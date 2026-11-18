@@ -262,8 +262,9 @@ struct ConnectionInputs {
 ///
 /// Ctrl+C everywhere; on Windows also Ctrl+Break and a console-window close
 /// (CTRL_CLOSE_EVENT), so closing the window stops the game thread instead
-/// of being an unclean kill. Each signal is awaited by its own task, so one
-/// failed handler never disturbs the others.
+/// of being an unclean kill. The vanilla console `stop` command on stdin also
+/// stops it. Each signal is awaited by its own task, so one failed handler
+/// never disturbs the others.
 async fn shutdown_signal() {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
     let ctrl_c_tx = tx.clone();
@@ -273,10 +274,41 @@ async fn shutdown_signal() {
     });
     #[cfg(windows)]
     watch_windows_signals(&tx);
+    // Vanilla parity: the console `stop` command ends the server gracefully
+    // (the scenario runner stops the vanilla stand this way). A detached std
+    // thread is used so a blocked stdin read can never hold the runtime's
+    // shutdown or a test process open.
+    let stop_tx = tx.clone();
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        watch_console(stdin.lock(), stop_tx);
+    });
     drop(tx);
     // Every sender is held by a parked task, so this only returns on a
     // signal (or when the runtime shuts down).
     let _ = rx.recv().await;
+}
+
+/// True for the console command that means "shut down", case-insensitively
+/// like the vanilla console (`stop`).
+fn is_stop_command(line: &str) -> bool {
+    line.trim().eq_ignore_ascii_case("stop")
+}
+
+/// Reads console lines and signals `stop` on the first `stop` command. End of
+/// input, a read error, or any other command ends the loop without signalling
+/// (the sender is dropped, which alone must never stop the server).
+fn watch_console<R: std::io::BufRead>(reader: R, stop: tokio::sync::mpsc::Sender<()>) {
+    for line in reader.lines() {
+        match line {
+            Ok(line) if is_stop_command(&line) => {
+                let _ = stop.blocking_send(());
+                return;
+            }
+            Ok(_) => {}
+            Err(_) => return,
+        }
+    }
 }
 
 /// Spawns one waiter per Windows control event that means "stop".
@@ -445,5 +477,34 @@ where
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod console_tests {
+    use super::{is_stop_command, watch_console};
+
+    #[test]
+    fn the_stop_command_is_recognised_case_insensitively_and_trimmed() {
+        assert!(is_stop_command("stop"));
+        assert!(is_stop_command("STOP"));
+        assert!(is_stop_command("  Stop  \r"));
+        assert!(!is_stop_command("stopwatch"));
+        assert!(!is_stop_command("say stop"));
+        assert!(!is_stop_command(""));
+    }
+
+    #[test]
+    fn a_stop_line_signals_shutdown() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        watch_console(std::io::Cursor::new(b"list\nstop\nignored\n".to_vec()), tx);
+        assert_eq!(rx.try_recv(), Ok(()));
+    }
+
+    #[test]
+    fn other_commands_and_end_of_input_do_not_signal_shutdown() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        watch_console(std::io::Cursor::new(b"list\ntps\nstopwatch\n".to_vec()), tx);
+        assert!(rx.try_recv().is_err());
     }
 }
